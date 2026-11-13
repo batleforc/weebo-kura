@@ -1,0 +1,34 @@
+version: "3"
+
+vars:
+  SCOPE: '{{.SCOPE | default "project"}}'
+
+tasks:
+  install:
+    desc: "Link the skills recorded in .claude/wska.toml, installers included; change the selection with 'wska add' or 'wska remove' (usage: task skills:install [SCOPE=project|user])"
+    preconditions:
+      - sh: "command -v wska >/dev/null"
+        msg: "wska is required, run 'task mise:install'"
+    cmds:
+      - wska install --scope {{.SCOPE}} --run-installers
+      - echo "Restart Claude Code to load the freshly linked skills"
+
+  status:
+    desc: "Show what wska linked in the target"
+    cmds:
+      - wska status --scope {{.SCOPE}}
+
+  doctor:
+    desc: "Check every skill has the tools it needs on this machine"
+    cmds:
+      - wska doctor
+
+  list:
+    desc: "List the available wska profiles"
+    cmds:
+      - wska list --profiles
+
+  update:
+    desc: "Pull the latest skills into the wska clone and re-apply .claude/wska.toml"
+    cmds:
+      - wska update --scope {{.SCOPE}}
