@@ -106,6 +106,10 @@ pub struct CommitRequest {
     /// `410 history_rewound` (§6.3). Absent on a first push.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub epoch: Option<Uuid>,
+    /// `config`: the caller's own Obsidian configuration for its device's
+    /// profile (§6.8); absent: the notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

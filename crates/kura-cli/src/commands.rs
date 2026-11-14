@@ -375,6 +375,7 @@ async fn sync_one(
         max_file_size: MAX_FILE,
         dry_run,
         allow_deletions: yes,
+        prefer_remote: false,
     };
     let r = loop {
         match sync(&host, &api.vault(a.id), &mut state, &opts).await {
@@ -477,8 +478,48 @@ async fn sync_one(
             x.last_sync = Some(host.now_ms());
         }
         cfg.save(&ctx.home).map_err(Fail::local)?;
+        code = code.max(sync_config(api, name, &a, &v, device, yes).await?);
     }
     Ok(code)
+}
+
+/// The vault's `.obsidian`, desktop profile, when the vault syncs it and the
+/// folder has one (§6.8). Its own state; a path the categories no longer
+/// cover is forgotten here, never deleted on the user's other devices.
+async fn sync_config(
+    api: &Api,
+    name: &str,
+    a: &Attached,
+    v: &api::VaultView,
+    device: Uuid,
+    yes: bool,
+) -> Result<u8, Fail> {
+    if v.config_sync.is_empty() || !a.path.join(".obsidian").is_dir() {
+        return Ok(0);
+    }
+    let host = FsHost::config(a.path.clone(), v.config_sync.clone());
+    let mut state = LocalState::adopt(host.load_state(), device, a.id);
+    state.entries.retain(|_, k| host.keeps(k.path.as_str()));
+    let opts = Options {
+        params: params(v.chunking)?,
+        max_file_size: MAX_FILE,
+        dry_run: false,
+        allow_deletions: yes,
+        prefer_remote: true,
+    };
+    match sync(&host, &api.vault_config(a.id), &mut state, &opts).await {
+        Ok(r) => {
+            println!(
+                "{name}: configuration pushed {}, pulled {}, removed {}.",
+                r.pushed, r.pulled, r.trashed
+            );
+            Ok(0)
+        }
+        Err(e) => {
+            eprintln!("error: {name}: configuration: {e}");
+            Ok(1)
+        }
+    }
 }
 
 pub async fn status(ctx: &Ctx) -> Result<u8, Fail> {
@@ -508,6 +549,7 @@ pub async fn status(ctx: &Ctx) -> Result<u8, Fail> {
             max_file_size: MAX_FILE,
             dry_run: true,
             allow_deletions: false,
+            prefer_remote: false,
         };
         let r = sync(&host, &api.vault(a.id), &mut state, &opts)
             .await

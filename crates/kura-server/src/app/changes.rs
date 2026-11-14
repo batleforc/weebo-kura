@@ -34,6 +34,8 @@ pub struct ChangesQuery {
     /// the horizon is checked against it, since a pass from 0 crosses the
     /// horizon page by page without having missed anything (absent: `since`).
     pub start: Option<u64>,
+    /// `config`: the caller's own Obsidian configuration (§6.8).
+    pub space: Option<String>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -41,6 +43,8 @@ pub struct ChangesQuery {
 pub struct EntriesQuery {
     /// The last entry id of the previous page.
     pub after: Option<Uuid>,
+    /// `config`: the caller's own Obsidian configuration (§6.8).
+    pub space: Option<String>,
 }
 
 fn query<T>(q: Result<Query<T>, QueryRejection>) -> Result<T, ApiError> {
@@ -60,8 +64,19 @@ async fn open(
     state: &SharedState,
     reader: &Reader,
     v: Uuid,
-) -> Result<(sqlx::Transaction<'static, sqlx::Postgres>, Head, String), ApiError> {
+    space: Option<&str>,
+) -> Result<
+    (
+        sqlx::Transaction<'static, sqlx::Postgres>,
+        Head,
+        String,
+        String,
+    ),
+    ApiError,
+> {
     let ra = reader.access(state, v, VaultRole::Viewer).await?;
+    // The notes, or the caller's own configuration (never a key's, §6.8).
+    let space = super::space::resolve(state, space, &ra.access, reader.device()).await?;
     let mut tx = db::begin_tenant_snapshot(&state.db, ra.access.tenant, &reader.subject()).await?;
     let row = sqlx::query("SELECT epoch, head_seq, horizon_seq FROM vault WHERE id = $1")
         .bind(v)
@@ -72,7 +87,12 @@ async fn open(
         head_seq: row.try_get("head_seq")?,
         horizon_seq: row.try_get("horizon_seq")?,
     };
-    Ok((tx, head, authz::like_prefix(&ra.prefix_key)))
+    Ok((
+        tx,
+        head,
+        authz::like_prefix(&ra.prefix_key),
+        space.namespace,
+    ))
 }
 
 fn response(
@@ -118,7 +138,7 @@ pub async fn get_changes(
 ) -> Result<Json<ChangesResponse>, ApiError> {
     let q = query(q)?;
     let since = i64::try_from(q.since).map_err(|_| ApiError::of(ProblemType::HistoryRewound))?;
-    let (mut tx, head, under) = open(&state, &reader, v).await?;
+    let (mut tx, head, under, ns) = open(&state, &reader, v, q.space.as_deref()).await?;
     // The server lost history this device has seen (§6.3, decision 32).
     if q.epoch.is_some_and(|e| e != head.epoch) || since > head.head_seq {
         return Err(ApiError::of(ProblemType::HistoryRewound));
@@ -139,12 +159,13 @@ pub async fn get_changes(
     }
     let rows = sqlx::query(concat!(
         head_select!(),
-        " WHERE e.vault_id = $1 AND e.last_seq > $2 AND e.path_key LIKE $4 ESCAPE '\\' ORDER BY e.last_seq LIMIT $3"
+        " WHERE e.vault_id = $1 AND e.last_seq > $2 AND e.path_key LIKE $4 ESCAPE '\\' AND e.namespace = $5 ORDER BY e.last_seq LIMIT $3"
     ))
     .bind(v)
     .bind(since)
     .bind(PAGE.saturating_add(1))
     .bind(&under)
+    .bind(&ns)
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -170,15 +191,16 @@ pub async fn get_entries(
     q: Result<Query<EntriesQuery>, QueryRejection>,
 ) -> Result<Json<ChangesResponse>, ApiError> {
     let q = query(q)?;
-    let (mut tx, head, under) = open(&state, &reader, v).await?;
+    let (mut tx, head, under, ns) = open(&state, &reader, v, q.space.as_deref()).await?;
     let rows = sqlx::query(concat!(
         head_select!(),
-        " WHERE e.vault_id = $1 AND NOT e.deleted AND ($2::uuid IS NULL OR e.id > $2) AND e.path_key LIKE $4 ESCAPE '\\' ORDER BY e.id LIMIT $3"
+        " WHERE e.vault_id = $1 AND NOT e.deleted AND ($2::uuid IS NULL OR e.id > $2) AND e.path_key LIKE $4 ESCAPE '\\' AND e.namespace = $5 ORDER BY e.id LIMIT $3"
     ))
     .bind(v)
     .bind(q.after)
     .bind(PAGE.saturating_add(1))
     .bind(&under)
+    .bind(&ns)
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;

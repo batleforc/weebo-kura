@@ -230,6 +230,11 @@ pub struct Options {
     pub dry_run: bool,
     /// The user agreed that a full resync may trash more than the guard allows.
     pub allow_deletions: bool,
+    /// The configuration space (§6.8): pull before pushing, and a local file
+    /// never synced here gives way to the one already on the server (to
+    /// `.trash`), so a new device never overwrites the user's settings with
+    /// its defaults (phase 8 review H1).
+    pub prefer_remote: bool,
 }
 
 /// A full resync asks first above this share of the local files, or this
@@ -284,6 +289,9 @@ async fn run<H: Host, R: Remote>(
     opts: &Options,
     report: &mut Report,
 ) -> Result<(), SyncError> {
+    if opts.prefer_remote && !opts.dry_run {
+        pull(host, remote, state, opts, report).await?;
+    }
     match push(host, remote, state, opts, report).await {
         Ok(()) => {}
         Err(SyncError::Remote(
@@ -571,6 +579,7 @@ async fn push<H: Host, R: Remote>(
             idempotency_key: hex(&host.random()),
             operations: batch.iter().map(|(o, _)| (*o).clone()).collect(),
             epoch: state.epoch,
+            space: None,
         };
         let resp = commit(remote, &req).await?;
         for (&(op, pushed), result) in batch.iter().zip(resp.results) {
@@ -824,6 +833,13 @@ async fn pull<H: Host, R: Remote>(
                 state.cursor = pos;
             }
         }
+        // The last page, nothing held: everything up to the head this page was
+        // read at is applied, so the cursor reaches it. A view that rarely
+        // changes (a prefix, a configuration space) would otherwise stay below
+        // a horizon moved by others' purged deletions, and 410 forever.
+        if page.next.is_none() && !held {
+            state.cursor = state.cursor.max(page.head_seq);
+        }
         // The cursor advances once the page is applied (§6.3).
         host.save(state).await?;
         if page.next.is_none() {
@@ -904,9 +920,14 @@ async fn apply<H: Host, R: Remote>(
     } else if known.as_ref().is_none_or(|k| k.path != item.path)
         && host.stat(&item.path).await?.is_some()
     {
-        // A local file this device never synced: never written over.
-        report.deferred.push(item.path.clone());
-        return Ok(Applied::Deferred);
+        if !opts.prefer_remote {
+            // A local file this device never synced: never written over.
+            report.deferred.push(item.path.clone());
+            return Ok(Applied::Deferred);
+        }
+        // Configuration: the server's copy is the user's; this one is kept
+        // in `.trash`.
+        host.trash(&item.path).await?;
     }
     let only_moved = match &known {
         Some(k) if k.blob == blob => host.stat(&k.path).await?.is_some(),

@@ -254,14 +254,14 @@ pub async fn search(
              FROM search_doc d CROSS JOIN q
              JOIN entry e ON e.vault_id = d.vault_id AND e.id = d.entry_id
              JOIN revision r ON r.id = e.head_revision
-             WHERE d.vault_id = $1 AND NOT e.deleted AND e.path_key LIKE $3 ESCAPE '\\'
+             WHERE d.vault_id = $1 AND e.namespace = 'notes' AND NOT e.deleted AND e.path_key LIKE $3 ESCAPE '\\'
                AND (d.lex_fr @@ q.fr OR d.lex_en @@ q.en)
              ORDER BY score DESC LIMIT $4
          ),
          names AS (
              SELECT e.id, e.path, r.blob_hash, r.size, (similarity(e.path, $2) / 2)::real AS score
              FROM entry e JOIN revision r ON r.id = e.head_revision
-             WHERE e.vault_id = $1 AND NOT e.deleted AND e.path_key LIKE $3 ESCAPE '\\'
+             WHERE e.vault_id = $1 AND e.namespace = 'notes' AND NOT e.deleted AND e.path_key LIKE $3 ESCAPE '\\'
                AND e.path % $2
              ORDER BY score DESC LIMIT $4
          )

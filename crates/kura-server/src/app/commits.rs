@@ -148,6 +148,7 @@ struct Commit<'a> {
     head_moved: bool,
     /// Above 0 once deleted entries were purged (§6.9).
     horizon_seq: i64,
+    space: &'a super::space::Space,
 }
 
 impl Commit<'_> {
@@ -156,10 +157,11 @@ impl Commit<'_> {
             return Ok(*o);
         }
         let o: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM entry WHERE vault_id = $1 AND namespace = 'notes' AND NOT deleted AND path_key = $2",
+            "SELECT id FROM entry WHERE vault_id = $1 AND namespace = $3 AND NOT deleted AND path_key = $2",
         )
         .bind(self.vault)
         .bind(key)
+        .bind(&self.space.namespace)
         .fetch_optional(&mut **self.tx)
         .await?;
         self.occupancy.insert(key.to_owned(), o);
@@ -236,11 +238,12 @@ impl Commit<'_> {
         );
         let row = sqlx::query(concat!(
             head_select!(),
-            " WHERE e.vault_id = $1 AND NOT e.deleted AND r.blob_hash = $2 AND e.path LIKE $3 ESCAPE '\\' ORDER BY e.last_seq LIMIT 1"
+            " WHERE e.vault_id = $1 AND e.namespace = $4 AND NOT e.deleted AND r.blob_hash = $2 AND e.path LIKE $3 ESCAPE '\\' ORDER BY e.last_seq LIMIT 1"
         ))
         .bind(self.vault)
         .bind(blob.as_bytes().as_slice())
         .bind(like)
+        .bind(&self.space.namespace)
         .fetch_optional(&mut **self.tx)
         .await?;
         row.as_ref().map(head_from_row).transpose()
@@ -339,6 +342,23 @@ pub async fn post_commit(
         ApiError::with_detail(kind, msg)
     })?;
     validate(&req)?;
+    let space = super::space::resolve(
+        &state,
+        req.space.as_deref(),
+        &a,
+        Some((&caller.caller.principal.sub, caller.device)),
+    )
+    .await?;
+    for (i, op) in req.operations.iter().enumerate() {
+        if let Operation::Put { path, .. } = op
+            && !space.allows(path.as_str())
+        {
+            return Err(ApiError::with_detail(
+                ProblemType::InvalidPath,
+                format!("operations[{i}]: {path} is not in a synced configuration category"),
+            ));
+        }
+    }
     // The idempotency hash covers the parsed request, not its whitespace.
     let canonical = serde_json::to_vec(&req).map_err(|e| ApiError::Unavailable(e.to_string()))?;
     let request_hash = ChunkHash::of(&canonical);
@@ -365,6 +385,7 @@ pub async fn post_commit(
         sub,
         req: &req,
         request_hash,
+        space: &space,
     };
     let _timer = state.metrics.commit_duration_seconds.start_timer();
     let deadline = tokio::time::Instant::now()
@@ -372,7 +393,12 @@ pub async fn post_commit(
         .unwrap_or_else(tokio::time::Instant::now);
     let mut attempt = 1;
     loop {
-        let merges = prepare(&cx, deadline).await;
+        // Configuration: the last write wins, nothing is merged (§6.5).
+        let merges = if space.is_config() {
+            HashMap::new()
+        } else {
+            prepare(&cx, deadline).await
+        };
         let retry = attempt < MERGE_ATTEMPTS;
         match decide(&cx, &merges, retry).await? {
             Decided::Done(r) => return Ok(Json(r)),
@@ -390,6 +416,7 @@ struct Cx<'a> {
     sub: &'a str,
     req: &'a CommitRequest,
     request_hash: ChunkHash,
+    space: &'a super::space::Space,
 }
 
 enum Decided {
@@ -476,12 +503,29 @@ async fn decide(
         .iter()
         .map(|o| *o.entry().as_uuid())
         .collect();
+    // An id that lives in another namespace, or another user's
+    // configuration, is never written over (phase 8 review).
+    let homes = sqlx::query_as::<_, (Uuid, String, Option<String>)>(
+        "SELECT id, namespace, owner_sub FROM kura_entry_home($1, $2)",
+    )
+    .bind(v)
+    .bind(&ids)
+    .fetch_all(&mut *tx)
+    .await?;
+    if let Some((id, _, _)) = homes
+        .iter()
+        .find(|(_, ns, owner)| *ns != cx.space.namespace || *owner != cx.space.owner)
+    {
+        let i = ids.iter().position(|x| x == id).unwrap_or_default();
+        return Err(refused(i, "this entry id belongs to another space"));
+    }
     let heads = sqlx::query(concat!(
         head_select!(),
-        " WHERE e.vault_id = $1 AND e.id = ANY($2)"
+        " WHERE e.vault_id = $1 AND e.id = ANY($2) AND e.namespace = $3"
     ))
     .bind(v)
     .bind(&ids)
+    .bind(&cx.space.namespace)
     .fetch_all(&mut *tx)
     .await?
     .iter()
@@ -498,10 +542,11 @@ async fn decide(
         })
         .collect();
     let occupancy: HashMap<String, Option<Uuid>> = sqlx::query(
-        "SELECT path_key, id FROM entry WHERE vault_id = $1 AND namespace = 'notes' AND NOT deleted AND path_key = ANY($2)",
+        "SELECT path_key, id FROM entry WHERE vault_id = $1 AND namespace = $3 AND NOT deleted AND path_key = ANY($2)",
     )
     .bind(v)
     .bind(&keys)
+    .bind(&cx.space.namespace)
     .fetch_all(&mut *tx)
     .await?
     .iter()
@@ -528,6 +573,7 @@ async fn decide(
         allow_retry,
         head_moved: false,
         horizon_seq,
+        space: cx.space,
     };
     let mut results = Vec::with_capacity(req.operations.len());
     for (i, op) in req.operations.iter().enumerate() {
@@ -540,8 +586,10 @@ async fn decide(
     let new_head = c.next_seq.saturating_sub(1);
     let writes = std::mem::take(&mut c.writes);
     drop(c);
-    store(&mut tx, v, a.tenant, cx.device, sub, &writes).await?;
-    enqueue_index(state, &mut tx, v, a, &writes).await?;
+    store(&mut tx, v, a.tenant, cx.device, sub, cx.space, &writes).await?;
+    if !cx.space.is_config() {
+        enqueue_index(state, &mut tx, v, a, &writes).await?;
+    }
     let response = CommitResponse {
         head_seq: u64::try_from(new_head).unwrap_or_default(),
         results,
@@ -725,6 +773,9 @@ async fn apply(
 ) -> Result<OpResult, ApiError> {
     let id = *op.entry().as_uuid();
     let existing = c.heads.get(&id).cloned();
+    if c.space.is_config() {
+        return apply_config(c, i, op, existing).await;
+    }
     // T17: a base must be a revision of this entry in this vault.
     let base = match op {
         Operation::Put { base, .. } => *base,
@@ -857,6 +908,61 @@ async fn apply(
                 head: h.state()?,
                 conflict: Some(conflict.state()?),
             })
+        }
+    }
+}
+
+/// Configuration (§6.5): Obsidian would load a conflict file as a setting,
+/// so the last write wins, with no merge and no suffix; the overwritten
+/// version stays in history. The space is one user's own, so the only writes
+/// it supersedes are theirs.
+async fn apply_config(
+    c: &mut Commit<'_>,
+    i: usize,
+    op: &Operation,
+    existing: Option<Head>,
+) -> Result<OpResult, ApiError> {
+    let id = *op.entry().as_uuid();
+    let accepted = |head: Head| {
+        Ok(OpResult {
+            outcome: Outcome::Accepted,
+            head: head.state()?,
+            conflict: None,
+        })
+    };
+    match op {
+        Operation::Delete { .. } => match existing {
+            Some(h) if h.deleted => accepted(h),
+            Some(h) => {
+                let head = c.write(id, h.path.clone(), true, None, 0, Some(h.revision));
+                accepted(head)
+            }
+            None if c.horizon_seq > 0 => Err(ApiError::of(ProblemType::CursorExpired)),
+            None => Err(refused(i, "no such entry")),
+        },
+        Operation::Put {
+            path, blob, size, ..
+        } => {
+            let size = i64::try_from(*size).map_err(|_| refused(i, "size too large"))?;
+            if let Some(h) = existing
+                .as_ref()
+                .filter(|h| !h.deleted && h.blob == Some(*blob) && h.path == *path)
+            {
+                return accepted(h.clone());
+            }
+            let own = existing.as_ref().map(|h| h.revision);
+            let (target, base) = match c.occupant(&path_key(path)).await? {
+                // A new id on a held path writes onto the entry holding it.
+                Some(o) if o != id && existing.is_none() => (o, Some(c.head(o).await?.revision)),
+                // A rename onto a held path: the holder is deleted.
+                Some(o) if o != id => {
+                    let h = c.head(o).await?;
+                    c.write(o, h.path.clone(), true, None, 0, Some(h.revision));
+                    (id, own)
+                }
+                _ => (id, own),
+            };
+            accepted(c.write(target, path.clone(), false, Some(*blob), size, base))
         }
     }
 }
@@ -1083,6 +1189,7 @@ async fn store(
     tenant: Uuid,
     device: Uuid,
     sub: &str,
+    space: &super::space::Space,
     writes: &[Write],
 ) -> Result<(), ApiError> {
     if writes.is_empty() {
@@ -1101,8 +1208,8 @@ async fn store(
         .collect();
     let sizes: Vec<i64> = writes.iter().map(|w| w.head.size).collect();
     sqlx::query(
-        "INSERT INTO entry (vault_id, tenant_id, id, path, path_key, head_revision, last_seq, deleted)
-         SELECT $1, $2, u.id, u.path, u.key, u.rev, u.seq, u.deleted
+        "INSERT INTO entry (vault_id, tenant_id, id, path, path_key, head_revision, last_seq, deleted, namespace, owner_sub)
+         SELECT $1, $2, u.id, u.path, u.key, u.rev, u.seq, u.deleted, $9, $10
          FROM unnest($3::uuid[], $4::text[], $5::text[], $6::uuid[], $7::bigint[], $8::bool[])
               WITH ORDINALITY AS u(id, path, key, rev, seq, deleted, ord)
          ORDER BY u.ord
@@ -1117,6 +1224,8 @@ async fn store(
     .bind(&revs)
     .bind(&seqs)
     .bind(&deleted)
+    .bind(&space.namespace)
+    .bind(space.owner.as_deref())
     .execute(&mut **tx)
     .await?;
     sqlx::query(
@@ -1271,7 +1380,16 @@ pub async fn restore_revision(
     let p = &caller.caller.principal;
     let a = authz::require_role(&state.db, &snap, p, v, VaultRole::Editor).await?;
     let entry = EntryId::from_uuid(e).ok_or(ApiError::of(ProblemType::NotFound))?;
-    let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
+    // Under the caller's subject: their own configuration entries are
+    // restorable too (phase 8 review H1), nobody else's.
+    let mut tx = db::begin_tenant(&state.db, a.tenant, Some(&p.sub)).await?;
+    let namespace: String =
+        sqlx::query_scalar("SELECT namespace FROM entry WHERE vault_id = $1 AND id = $2")
+            .bind(v)
+            .bind(e)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(ApiError::of(ProblemType::NotFound))?;
     let rev = sqlx::query(
         "SELECT path, blob_hash, size FROM revision WHERE vault_id = $1 AND entry_id = $2 AND id = $3",
     )
@@ -1305,6 +1423,15 @@ pub async fn restore_revision(
         head.path.clone()
     };
     let size = u64::try_from(rev.try_get::<i64, _>("size")?).unwrap_or_default();
+    let space = if namespace == "notes" {
+        super::space::Space::notes()
+    } else {
+        super::space::Space {
+            namespace,
+            owner: Some(p.sub.clone()),
+            categories: a.config.clone(),
+        }
+    };
     let req = CommitRequest {
         idempotency_key: format!("restore-{}", Uuid::new_v4()),
         operations: vec![Operation::Put {
@@ -1315,6 +1442,7 @@ pub async fn restore_revision(
             size,
         }],
         epoch: None,
+        space: space.is_config().then(|| "config".to_owned()),
     };
     let canonical = serde_json::to_vec(&req).map_err(|e| ApiError::Unavailable(e.to_string()))?;
     let cx = Cx {
@@ -1325,6 +1453,7 @@ pub async fn restore_revision(
         sub: &p.sub,
         req: &req,
         request_hash: ChunkHash::of(&canonical),
+        space: &space,
     };
     match decide(&cx, &HashMap::new(), false).await? {
         Decided::Done(r) => {

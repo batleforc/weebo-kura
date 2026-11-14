@@ -4,6 +4,7 @@
 //! panic on input: this crate also runs in WASM inside Obsidian (§6.11).
 
 pub mod chunk;
+pub mod config;
 #[cfg(feature = "merge")]
 pub mod merge;
 pub mod path;

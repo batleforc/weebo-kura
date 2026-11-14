@@ -27,6 +27,13 @@ export interface HostOptions {
   /** Files above this many bytes are listed as unsyncable by the core (§6.8). */
   now: () => number;
   random: () => Uint8Array;
+  /** For the configuration space (§6.8): paths are relative to this folder
+   * (`.obsidian`), only those kept are listed, the state has a name of its
+   * own, and `beforeWrite` runs before any remote file lands. */
+  root?: string;
+  keep?: (path: string) => boolean;
+  stateName?: string;
+  beforeWrite?: (path: string) => Promise<void>;
 }
 
 function parent(path: string): string {
@@ -44,7 +51,12 @@ export class ObsidianHost implements KuraHost {
   constructor(private readonly o: HostOptions) {}
 
   statePath(): string {
-    return `${this.o.pluginDir}/state-${this.o.vault}.json`;
+    return `${this.o.pluginDir}/${this.o.stateName ?? "state"}-${this.o.vault}.json`;
+  }
+
+  /** The adapter's path of a path the core names. */
+  private full(path: string): string {
+    return this.o.root === undefined ? path : `${this.o.root}/${path}`;
   }
 
   async loadState(): Promise<string> {
@@ -53,18 +65,24 @@ export class ObsidianHost implements KuraHost {
   }
 
   private async file(path: string): Promise<KuraFile | null> {
-    const s = await this.o.adapter.stat(path);
+    const s = await this.o.adapter.stat(this.full(path));
     return s?.type === "file" ? { path, size: s.size, mtime: s.mtime } : null;
   }
 
   async list(): Promise<KuraFile[]> {
     const out: KuraFile[] = [];
+    const root = this.o.root;
+    if (root !== undefined && !(await this.o.adapter.exists(root))) return out;
+    // Adapter paths back to the core's, relative to the root.
+    const rel = (p: string): string => {
+      const path = p.replace(/^\/+/, "");
+      return root === undefined ? path : path.slice(root.length + 1);
+    };
     const walk = async (dir: string): Promise<void> => {
       const { files, folders } = await this.o.adapter.list(dir === "" ? "/" : dir);
       for (const f of files) {
-        const path = f.replace(/^\/+/, "");
-        const meta = await this.file(path);
-        if (meta !== null) out.push(meta);
+        const meta = await this.file(rel(f));
+        if (meta !== null && (this.o.keep?.(meta.path) ?? true)) out.push(meta);
       }
       for (const d of folders) {
         const path = d.replace(/^\/+/, "");
@@ -72,12 +90,12 @@ export class ObsidianHost implements KuraHost {
         if (!name.startsWith(".")) await walk(path);
       }
     };
-    await walk("");
+    await walk(root ?? "");
     return out;
   }
 
   async read(path: string): Promise<Uint8Array> {
-    return new Uint8Array(await this.o.adapter.readBinary(path));
+    return new Uint8Array(await this.o.adapter.readBinary(this.full(path)));
   }
 
   async stat(path: string): Promise<KuraFile | null> {
@@ -85,29 +103,33 @@ export class ObsidianHost implements KuraHost {
   }
 
   private async mkdirs(path: string): Promise<void> {
-    const dir = parent(path);
+    const dir = parent(this.full(path));
     if (dir !== "" && !(await this.o.adapter.exists(dir))) await this.o.adapter.mkdir(dir);
   }
 
   async write(path: string, data: Uint8Array): Promise<KuraFile> {
     if (this.o.isOpen(path)) throw new Error(`${path} is open in the editor; written once it is closed`);
+    // Before anything lands: a plugin whose code changes is disabled first (§6.8).
+    await this.o.beforeWrite?.(path);
     await this.mkdirs(path);
     // Through a temporary file in the plugin's folder, then into place.
     const rand = Array.from(this.o.random(), (b) => b.toString(16).padStart(2, "0")).join("");
     const tmp = `${this.o.pluginDir}/tmp-${rand}`;
     await this.o.adapter.writeBinary(tmp, toBuffer(data));
-    if (await this.o.adapter.exists(path)) await this.o.adapter.remove(path);
-    await this.o.adapter.rename(tmp, path);
+    const full = this.full(path);
+    if (await this.o.adapter.exists(full)) await this.o.adapter.remove(full);
+    await this.o.adapter.rename(tmp, full);
     const meta = await this.file(path);
     if (meta === null) throw new Error(`${path} was not written`);
     return meta;
   }
 
   async rename(from: string, to: string): Promise<KuraFile> {
-    if (await this.o.adapter.exists(to)) throw new Error(`${to} already exists`);
+    if (await this.o.adapter.exists(this.full(to))) throw new Error(`${to} already exists`);
     if (this.o.isOpen(from)) throw new Error(`${from} is open in the editor`);
+    await this.o.beforeWrite?.(to);
     await this.mkdirs(to);
-    await this.o.adapter.rename(from, to);
+    await this.o.adapter.rename(this.full(from), this.full(to));
     const meta = await this.file(to);
     if (meta === null) throw new Error(`${to} was not moved`);
     return meta;
@@ -115,7 +137,7 @@ export class ObsidianHost implements KuraHost {
 
   async trash(path: string): Promise<void> {
     // Obsidian's own `.trash`, never unlinked (§6.3).
-    await this.o.adapter.trashLocal(path);
+    await this.o.adapter.trashLocal(this.full(path));
   }
 
   async save(state: string): Promise<void> {

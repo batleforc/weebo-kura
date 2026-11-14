@@ -338,6 +338,9 @@ struct SyncOptions {
     /// The user agreed to a full resync above the deletion guard (§6.3).
     #[serde(default)]
     allow_deletions: bool,
+    /// The configuration space: the server's copy wins on first contact (§6.8).
+    #[serde(default)]
+    prefer_remote: bool,
 }
 
 fn report(r: &Report) -> Value {
@@ -383,6 +386,7 @@ pub async fn sync(
         max_file_size: o.max_file_size,
         dry_run: o.dry_run,
         allow_deletions: o.allow_deletions,
+        prefer_remote: o.prefer_remote,
     };
     let r = kura_core::sync::sync(&HostAdapter(host), &RemoteAdapter(remote), &mut st, &opts).await;
     match r {
@@ -411,4 +415,11 @@ pub async fn sync(
 #[wasm_bindgen(js_name = pathProblem)]
 pub fn path_problem(path: &str) -> Option<String> {
     VaultPath::from_local(path).err().map(|e| e.to_string())
+}
+
+/// Whether a path under `.obsidian` syncs with these categories (§6.8): the
+/// rule the server applies, so the plugin never offers a refused file.
+#[wasm_bindgen(js_name = configSynced)]
+pub fn config_synced(path: &str, categories: Vec<String>) -> bool {
+    kura_core::config::synced(path, &categories)
 }

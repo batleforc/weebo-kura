@@ -659,3 +659,116 @@ async fn the_cli_issues_lists_and_revokes_scoped_tokens() {
         .unwrap();
     assert!(revoked);
 }
+
+/// §6.8 with the CLI: the desktop configuration of `.obsidian` travels
+/// between one user's devices, in its categories only; another member gets
+/// none of it; what stays on a device (enabled plugins, the workspace) never
+/// leaves it.
+#[tokio::test]
+async fn the_cli_syncs_one_users_configuration_only() {
+    let Some(st) = storage(module_path!()).await else {
+        return;
+    };
+    let Some(e) = env_with(module_path!(), Some(st)).await else {
+        return;
+    };
+    let docs = common::app::CONFIG.replace(
+        "  tenantRef: { name: maxime }\n  bindings:",
+        "  tenantRef: { name: maxime }\n  configSync: { categories: [plugins, snippets] }\n  bindings:",
+    );
+    let cfgdir = dir("config-docs");
+    std::fs::write(cfgdir.join("config.yaml"), docs).unwrap();
+    let files = kura_server::reconcile::files::read_dir(&cfgdir).unwrap();
+    kura_server::reconcile::reconcile(&e.t.app, &files, true)
+        .await
+        .unwrap();
+    e.state.set_snapshot(
+        kura_server::reconcile::snapshot::load_if_changed(&e.t.app, None)
+            .await
+            .unwrap()
+            .unwrap(),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = format!("http://{}", listener.local_addr().unwrap());
+    let router = app(e.state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    let issuer = "https://auth.example.org/application/o/kura/".to_owned();
+    let ctx = |home: &str, sub: &str, sid: &str| Ctx {
+        home: dir(home),
+        access_token: Some(e.key.token(sub, sid, &["maxime-members"])),
+    };
+    let (a, a2, other) = (
+        ctx("cfg-home-a", "u1", "ca"),
+        ctx("cfg-home-a2", "u1", "ca2"),
+        ctx("cfg-home-o", "u2", "co"),
+    );
+    for (c, n) in [(&a, "desk"), (&a2, "laptop"), (&other, "theirs")] {
+        let r = commands::login(
+            c,
+            server.clone(),
+            issuer.clone(),
+            "kura-cli".into(),
+            Some(n.into()),
+        )
+        .await;
+        assert_eq!(code(r), 0);
+    }
+    let (fa, fa2, fo) = (dir("cfg-a"), dir("cfg-a2"), dir("cfg-o"));
+    let obs = fa.join(".obsidian");
+    std::fs::create_dir_all(obs.join("plugins/dataview")).unwrap();
+    std::fs::create_dir_all(obs.join("snippets")).unwrap();
+    std::fs::write(obs.join("plugins/dataview/main.js"), "module.exports = {};").unwrap();
+    std::fs::write(obs.join("snippets/wide.css"), ".x{}").unwrap();
+    std::fs::write(obs.join("community-plugins.json"), "[\"dataview\"]").unwrap();
+    std::fs::write(obs.join("workspace.json"), "{}").unwrap();
+    std::fs::write(obs.join("hotkeys.json"), "{}").unwrap();
+    std::fs::write(fa.join("note.md"), "shared\n").unwrap();
+    for f in [&fa2, &fo] {
+        std::fs::create_dir_all(f.join(".obsidian")).unwrap();
+    }
+    assert_eq!(
+        code(commands::attach(&a, "knowledge", fa.clone(), true).await),
+        0
+    );
+    assert_eq!(
+        code(commands::attach(&a2, "knowledge", fa2.clone(), true).await),
+        0
+    );
+    assert_eq!(
+        code(commands::attach(&other, "knowledge", fo.clone(), true).await),
+        0
+    );
+    let got = |f: &std::path::Path, p: &str| f.join(".obsidian").join(p).exists();
+    assert!(got(&fa2, "plugins/dataview/main.js") && got(&fa2, "snippets/wide.css"));
+    for stays in ["community-plugins.json", "workspace.json", "hotkeys.json"] {
+        assert!(!got(&fa2, stays), "{stays} left its device");
+    }
+    for p in ["plugins/dataview/main.js", "snippets/wide.css"] {
+        assert!(!got(&fo, p), "{p} reached another member");
+    }
+    assert!(fo.join("note.md").exists(), "notes are shared as before");
+    // A category dropped: its files are forgotten, never deleted elsewhere.
+    let only_plugins = common::app::CONFIG.replace(
+        "  tenantRef: { name: maxime }\n  bindings:",
+        "  tenantRef: { name: maxime }\n  configSync: { categories: [plugins] }\n  bindings:",
+    );
+    std::fs::write(cfgdir.join("config.yaml"), only_plugins).unwrap();
+    let files = kura_server::reconcile::files::read_dir(&cfgdir).unwrap();
+    kura_server::reconcile::reconcile(&e.t.app, &files, true)
+        .await
+        .unwrap();
+    e.state.set_snapshot(
+        kura_server::reconcile::snapshot::load_if_changed(&e.t.app, None)
+            .await
+            .unwrap()
+            .unwrap(),
+    );
+    assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
+    assert_eq!(code(commands::sync_cmd(&a2, None, false, false).await), 0);
+    assert!(
+        got(&fa2, "snippets/wide.css"),
+        "a dropped category deletes nothing"
+    );
+    let state = std::fs::read_to_string(fa.join(".kura/config-state.json")).unwrap();
+    assert!(!state.contains("snippets/wide.css"), "forgotten here");
+}

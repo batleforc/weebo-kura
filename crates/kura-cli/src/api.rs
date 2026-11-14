@@ -170,6 +170,9 @@ pub struct VaultView {
     pub name: String,
     pub role: String,
     pub chunking: Chunking,
+    /// The `.obsidian` categories that sync (§6.8); empty: none.
+    #[serde(default)]
+    pub config_sync: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -403,7 +406,20 @@ impl Api {
     }
 
     pub fn vault(&self, vault: Uuid) -> VaultRemote<'_> {
-        VaultRemote { api: self, vault }
+        VaultRemote {
+            api: self,
+            vault,
+            space: None,
+        }
+    }
+
+    /// The caller's own Obsidian configuration of the vault (§6.8).
+    pub fn vault_config(&self, vault: Uuid) -> VaultRemote<'_> {
+        VaultRemote {
+            api: self,
+            vault,
+            space: Some("config"),
+        }
     }
 }
 
@@ -411,6 +427,8 @@ impl Api {
 pub struct VaultRemote<'a> {
     api: &'a Api,
     vault: Uuid,
+    /// `config`, or the notes.
+    space: Option<&'static str>,
 }
 
 impl VaultRemote<'_> {
@@ -474,8 +492,10 @@ impl Remote for VaultRemote<'_> {
     }
 
     async fn commit(&self, req: &CommitRequest) -> Result<CommitResponse, RemoteError> {
+        let mut req = req.clone();
+        req.space = self.space.map(str::to_owned);
         self.api
-            .json(self.req(reqwest::Method::POST, "/commits").json(req))
+            .json(self.req(reqwest::Method::POST, "/commits").json(&req))
             .await
     }
 
@@ -490,6 +510,9 @@ impl Remote for VaultRemote<'_> {
             .query(&[("since", since.to_string()), ("start", start.to_string())]);
         if let Some(e) = epoch {
             r = r.query(&[("epoch", e.to_string())]);
+        }
+        if let Some(s) = self.space {
+            r = r.query(&[("space", s)]);
         }
         self.api.json(r).await
     }

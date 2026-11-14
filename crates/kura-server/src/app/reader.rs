@@ -39,6 +39,9 @@ pub struct ReadAccess {
     pub access: VaultAccess,
     /// Folded; empty when the whole vault is visible.
     pub prefix_key: String,
+    /// The signed-in user, whose own configuration is visible (§6.8); none
+    /// for a scoped token.
+    pub subject: Option<String>,
 }
 
 impl ReadAccess {
@@ -56,9 +59,6 @@ impl ReadAccess {
         hash: &kura_core::ChunkHash,
         chunk: bool,
     ) -> Result<bool, ApiError> {
-        if self.prefix_key.is_empty() {
-            return Ok(true);
-        }
         // shortcut: the first 200 revisions naming the content are checked; a
         // chunk shared by more files outside the prefix may be refused (fails
         // closed). Index the content by entry if that ever bites.
@@ -70,7 +70,10 @@ impl ReadAccess {
             "SELECT r.path, e.path AS head FROM revision r JOIN entry e ON e.vault_id = r.vault_id AND e.id = r.entry_id
              WHERE r.vault_id = $1 AND r.blob_hash = $2 LIMIT 200"
         };
-        let mut tx = crate::db::begin_tenant(&state.db, self.access.tenant, None).await?;
+        // Under the caller's subject: another user's configuration is out of
+        // row-level security's sight, so its content is never served (T14).
+        let mut tx =
+            crate::db::begin_tenant(&state.db, self.access.tenant, self.subject.as_deref()).await?;
         let rows = sqlx::query(sql)
             .bind(self.access.vault)
             .bind(hash.as_bytes().as_slice())
@@ -213,6 +216,7 @@ impl Reader {
             Self::Device(d) => Ok(ReadAccess {
                 access: authz::require_role(&state.db, &snap, &d.caller.principal, v, min).await?,
                 prefix_key: String::new(),
+                subject: Some(d.caller.principal.sub.clone()),
             }),
             Self::Key(k) => {
                 if k.vault != v {
@@ -230,8 +234,17 @@ impl Reader {
                 Ok(ReadAccess {
                     access,
                     prefix_key: k.prefix_key.clone(),
+                    subject: None,
                 })
             }
+        }
+    }
+
+    /// A signed-in device: its user and id; `None` for a scoped token.
+    pub fn device(&self) -> Option<(&str, Uuid)> {
+        match self {
+            Self::Device(d) => Some((&d.caller.principal.sub, d.device)),
+            Self::Key(_) => None,
         }
     }
 

@@ -17,6 +17,8 @@ import type { VaultView } from "./remote";
 import { KuraSettingTab } from "./settings";
 import type { Situation } from "./status";
 import { label } from "./status";
+import { PluginGuard, codeHashes, emptyConsent, forget, readConsent } from "./plugins";
+import type { Consent, PluginRegistry } from "./plugins";
 
 export interface Settings {
   server: string;
@@ -28,9 +30,11 @@ export interface Settings {
   deviceName: string;
   /** Per device (§6.8): files above it are listed as unsyncable here. */
   maxFileMiB: number;
+  /** Synced plugins agreed to or refused on this device (decision 34). */
+  consent: Consent;
 }
 
-const DEFAULTS: Settings = { server: "", issuer: "", clientId: "kura-plugin", vault: "", vaultName: "", device: "", deviceName: "", maxFileMiB: 200 };
+const DEFAULTS: Settings = { server: "", issuer: "", clientId: "kura-plugin", vault: "", vaultName: "", device: "", deviceName: "", maxFileMiB: 200, consent: emptyConsent() };
 
 /** Stored settings, field by field: `data.json` is not trusted blindly. */
 function readSettings(data: unknown): Settings {
@@ -49,6 +53,7 @@ function readSettings(data: unknown): Settings {
     device: text("device", DEFAULTS.device),
     deviceName: text("deviceName", DEFAULTS.deviceName),
     maxFileMiB: typeof size === "number" && size > 0 ? size : DEFAULTS.maxFileMiB,
+    consent: readConsent(d.consent),
   };
 }
 
@@ -94,6 +99,80 @@ class CodeModal extends Modal {
 }
 
 /** A full resync would trash many files: the user decides (§6.3). */
+/** Obsidian's plugin switchboard (`app.plugins`, not in the public API),
+ * read defensively: if its shape changes, configuration sync never enables
+ * anything. */
+function registry(app: App): PluginRegistry | null {
+  const plugins: unknown = Reflect.get(app, "plugins");
+  if (!isRecord(plugins)) return null;
+  const enabled = plugins.enabledPlugins;
+  const on = plugins.enablePluginAndSave;
+  const off = plugins.disablePluginAndSave;
+  if (!(enabled instanceof Set) || typeof on !== "function" || typeof off !== "function") return null;
+  const adapter = app.vault.adapter;
+  // What Obsidian loads at its next start, besides what runs now: a plugin
+  // listed there but not loaded is enabled too (phase 8 review M2).
+  const listFile = `${app.vault.configDir}/community-plugins.json`;
+  const listed = async (): Promise<string[]> => {
+    try {
+      const v: unknown = JSON.parse(await adapter.read(listFile));
+      return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+    } catch {
+      return [];
+    }
+  };
+  // Ids compare without regard to case, as the guard folds them.
+  const same = (a: unknown, id: string): boolean => typeof a === "string" && a.toLowerCase() === id;
+  const actual = (id: string, list: string[]): string =>
+    [...enabled].find((x): x is string => same(x, id)) ?? list.find((x) => same(x, id)) ?? id;
+  return {
+    isEnabled: async (id) => [...enabled].some((x) => same(x, id)) || (await listed()).some((x) => same(x, id)),
+    enable: async (id) => {
+      await Promise.resolve(Reflect.apply(on, plugins, [actual(id, await listed())]));
+    },
+    disable: async (id) => {
+      const list = await listed();
+      await Promise.resolve(Reflect.apply(off, plugins, [actual(id, list)]));
+      if (list.some((x) => same(x, id))) await adapter.write(listFile, JSON.stringify(list.filter((x) => !same(x, id))));
+    },
+  };
+}
+
+/** The §4.5 mock: a synced plugin, or a new version of one, runs only on [Enable]. */
+class PluginModal extends Modal {
+  private answer: (yes: boolean) => void = () => undefined;
+  constructor(app: App, private readonly id: string) {
+    super(app);
+  }
+  ask(): Promise<boolean> {
+    return new Promise((resolve) => {
+      this.answer = resolve;
+      this.open();
+    });
+  }
+  override onOpen(): void {
+    this.setTitle("Kura Sync");
+    const manifests: unknown = Reflect.get(Reflect.get(this.app, "plugins") ?? {}, "manifests");
+    const m: unknown = isRecord(manifests) ? manifests[this.id] : null;
+    const name = isRecord(m) && typeof m.name === "string" ? m.name : this.id;
+    const version = isRecord(m) && typeof m.version === "string" ? ` ${m.version}` : "";
+    this.contentEl.createEl("p", { text: `Plugin "${name}"${version} was synced from another of your devices.` });
+    this.contentEl.createEl("p", { text: "It is installed but disabled on this device." });
+    this.contentEl.createEl("p", { text: "Plugins run code with access to this vault." });
+    this.contentEl.createEl("button", { text: "Keep disabled" }).onclick = () => {
+      this.close();
+    };
+    this.contentEl.createEl("button", { text: "Enable", cls: "mod-cta" }).onclick = () => {
+      this.answer(true);
+      this.answer = () => undefined;
+      this.close();
+    };
+  }
+  override onClose(): void {
+    this.answer(false);
+  }
+}
+
 class ConfirmModal extends Modal {
   private answer: (yes: boolean) => void = () => undefined;
   constructor(app: App, private readonly deletions: number, private readonly files: number) {
@@ -157,6 +236,8 @@ export default class KuraPlugin extends Plugin {
     this.registerEvent(this.app.vault.on("delete", touched));
     this.registerEvent(this.app.vault.on("rename", touched));
     // Resume: pull when the app comes back (§6.3).
+    // The configuration is scanned at most every 5 minutes, and on resume (§6.8).
+    this.registerInterval(window.setInterval(() => void this.controller?.sync(), 5 * 60 * 1000));
     this.registerDomEvent(document, "visibilitychange", () => {
       if (document.visibilityState === "visible") void this.controller?.sync();
     });
@@ -244,7 +325,9 @@ export default class KuraPlugin extends Plugin {
         if (vault === null) throw new Error("this vault is not visible to you");
         const c = vault.chunking;
         const options = JSON.stringify({ device: s.device, vault: s.vault, ...c, maxFileSize: s.maxFileMiB * 1024 * 1024, dryRun, allowDeletions });
-        return core.sync(host, api.remote(s.vault), state, options);
+        const notes = await core.sync(host, api.remote(s.vault), state, options);
+        if (!dryRun && vault.configSync.length > 0) await this.syncConfig(core, api, vault.configSync, options);
+        return notes;
       },
       loadState: () => host.loadState(),
       confirmDeletions: (deletions, files) => new ConfirmModal(this.app, deletions, files).ask(),
@@ -271,6 +354,41 @@ export default class KuraPlugin extends Plugin {
     });
     await controller.sync();
     this.notifier.start();
+  }
+
+  /** `.obsidian` for this device's profile (§6.8): its own state, its
+   * synced categories only; received plugins wait for agreement. */
+  private async syncConfig(core: Core, api: Api, categories: string[], options: string): Promise<void> {
+    const plugins = registry(this.app);
+    if (plugins === null) return;
+    const s = this.config;
+    const guard = new PluginGuard(plugins, s.consent, () => this.saveSettings(), (id) => new PluginModal(this.app, id).ask());
+    // Never this plugin's own folder, whatever it is named (phase 8 review M4).
+    const own = (this.manifest.dir ?? "").slice(this.app.vault.configDir.length + 1).toLowerCase();
+    const keep = (p: string): boolean =>
+      core.configSynced(p, categories) && (own === "" || !p.toLowerCase().startsWith(`${own}/`));
+    const host = new ObsidianHost({
+      adapter: this.app.vault.adapter,
+      pluginDir: this.manifest.dir ?? `${this.app.vault.configDir}/plugins/weebo-kura`,
+      vault: s.vault,
+      isOpen: () => false,
+      now: () => Date.now(),
+      random: random16,
+      root: this.app.vault.configDir,
+      keep,
+      stateName: "config-state",
+      beforeWrite: (p) => guard.beforeWrite(p),
+    });
+    try {
+      // A path the categories no longer cover is forgotten here, never
+      // deleted on the user's other devices.
+      const raw = await host.loadState();
+      const state = forget(raw, keep);
+      await core.sync(host, api.remote(s.vault, "config"), state, options);
+      await guard.review(codeHashes(await host.loadState()));
+    } catch (e) {
+      new Notice(`Kura: the configuration did not sync: ${String(e)}`);
+    }
   }
 
   async signIn(): Promise<void> {

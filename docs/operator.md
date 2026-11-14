@@ -146,6 +146,23 @@ to `owner`/`admin`), when revoked, or at expiry; rows are purged 30 days
 after expiry. Each use is an audit event `scoped_token_used`; a refused
 address is an `authz_denied` event with `address_not_allowed`.
 
+### Obsidian configuration
+
+With `configSync: { categories: [plugins, snippets, themes, hotkeys] }` on
+a vault, each user's `.obsidian` syncs per device profile (`desktop`,
+`mobile`, from the device's registration), never between members, never to
+a scoped token, never into search (decision 34). Only those categories
+travel: plugin folders, snippets, themes, `hotkeys.json`; never
+`community-plugins.json` (what is enabled), the workspace, or the Kura
+plugin itself. The last write wins, with no conflict file; earlier versions
+stay in history and `kura restore` brings one back. A new device takes the
+server's copy of a file it also has (its own goes to `.trash`). A plugin
+received from another device, or a new version of one, is written disabled
+and enabled only when the user agrees on that device; that agreement is
+kept on the device. Plugin settings (`data.json`) and CSS apply without
+asking. `kura sync` syncs the desktop profile of a vault folder that has
+`.obsidian`.
+
 ### Search
 
 Off unless the tenant sets `search: { enabled: true }` (decision 39): the

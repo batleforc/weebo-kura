@@ -37,6 +37,8 @@ pub struct Vault {
     /// Send back with `changes?since=` (§6.3).
     pub epoch: Uuid,
     pub head_seq: u64,
+    /// The Obsidian configuration categories that sync (§6.8); empty: none.
+    pub config_sync: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
@@ -61,6 +63,12 @@ impl From<&VaultAccess> for Vault {
                 max: a.chunking.max.bytes(),
             },
             epoch: a.epoch,
+            config_sync: a
+                .config
+                .iter()
+                .filter_map(|c| serde_json::to_value(c).ok())
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect(),
             head_seq: u64::try_from(a.head_seq).unwrap_or_default(),
         }
     }

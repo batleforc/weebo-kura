@@ -849,6 +849,15 @@
             }
           },
           {
+            "name": "space",
+            "in": "query",
+            "description": "`config`: the caller's own Obsidian configuration (§6.8).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "X-Kura-Device",
             "in": "header",
             "description": "This device",
@@ -1246,6 +1255,15 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "space",
+            "in": "query",
+            "description": "`config`: the caller's own Obsidian configuration (§6.8).",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           },
           {
@@ -2064,6 +2082,13 @@
               "$ref": "#/components/schemas/Operation"
             },
             "description": "At most 1,000."
+          },
+          "space": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`config`: the caller's own Obsidian configuration for its device's\nprofile (§6.8); absent: the notes."
           }
         },
         "additionalProperties": false
@@ -2678,12 +2703,20 @@
           "managedBy",
           "chunking",
           "epoch",
-          "headSeq"
+          "headSeq",
+          "configSync"
         ],
         "properties": {
           "chunking": {
             "$ref": "#/components/schemas/ChunkingView",
             "description": "FastCDC parameters in bytes; clients never use a compiled-in value (§6.4)."
+          },
+          "configSync": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The Obsidian configuration categories that sync (§6.8); empty: none."
           },
           "epoch": {
             "type": "string",

@@ -16,6 +16,11 @@ const TRASH_DIR: &str = ".trash";
 
 pub struct FsHost {
     root: PathBuf,
+    /// Where `.kura` (the state, never synced) lives: the vault folder.
+    home: PathBuf,
+    state_name: &'static str,
+    /// For the configuration (§6.8): the categories that sync; `None` for notes.
+    keep: Option<Vec<String>>,
 }
 
 fn err(context: &str, e: impl std::fmt::Display) -> HostError {
@@ -32,11 +37,36 @@ fn mtime(m: &std::fs::Metadata) -> i64 {
 
 impl FsHost {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            home: root.clone(),
+            root,
+            state_name: "state.json",
+            keep: None,
+        }
+    }
+
+    /// The vault's `.obsidian`, its synced categories only, with a state of
+    /// its own: one state per space, or each would see the other's entries
+    /// as deleted (§6.8).
+    pub fn config(vault: PathBuf, categories: Vec<String>) -> Self {
+        Self {
+            root: vault.join(".obsidian"),
+            home: vault,
+            state_name: "config-state.json",
+            keep: Some(categories),
+        }
+    }
+
+    /// Whether this host would list `path`: a known entry it would not is
+    /// forgotten before a sync, never pushed as a deletion.
+    pub fn keeps(&self, path: &str) -> bool {
+        self.keep
+            .as_ref()
+            .is_none_or(|c| kura_core::config::synced(path, c))
     }
 
     pub fn state_file(&self) -> PathBuf {
-        self.root.join(STATE_DIR).join("state.json")
+        self.home.join(STATE_DIR).join(self.state_name)
     }
 
     pub fn load_state(&self) -> Option<LocalState> {
@@ -145,7 +175,11 @@ impl FsHost {
 impl Host for FsHost {
     async fn list(&self) -> Result<Vec<FileMeta>, HostError> {
         let mut out = Vec::new();
+        if self.keep.is_some() && std::fs::symlink_metadata(&self.root).is_err() {
+            return Ok(out);
+        }
         self.walk(&self.root, "", &mut out)?;
+        out.retain(|f| self.keeps(&f.path));
         Ok(out)
     }
 
@@ -198,8 +232,14 @@ impl Host for FsHost {
 
     async fn save(&self, state: &LocalState) -> Result<(), HostError> {
         let bytes = serde_json::to_vec(state).map_err(|e| err("saving state", e))?;
-        let dir = self.ensure_dir([STATE_DIR])?;
-        self.replace(&dir.join("state.json"), &bytes)
+        // Never through a link, as every other write (T14).
+        let dir = self.home.join(STATE_DIR);
+        match std::fs::symlink_metadata(&dir) {
+            Ok(m) if m.is_dir() => {}
+            Ok(_) => return Err(HostError(format!("{}: not a folder", dir.display()))),
+            Err(_) => std::fs::create_dir(&dir).map_err(|e| err("creating a folder", e))?,
+        }
+        self.replace(&dir.join(self.state_name), &bytes)
     }
 
     fn now_ms(&self) -> u64 {

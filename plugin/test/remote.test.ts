@@ -40,8 +40,14 @@ describe("the API client", () => {
   });
 
   it("parses vaults, tickets and the events URL", async () => {
-    const vaults = [{ id: "v1", name: "notes", role: "editor", chunking: { min: 1, avg: 2, max: 3 } }, { id: 5 }, { id: "v2", name: "x", role: "viewer", chunking: { min: "a" } }];
-    expect(await api(() => Promise.resolve(json(200, vaults))).a.vaults()).toEqual([vaults[0]]);
+    const vaults = [
+      { id: "v1", name: "notes", role: "editor", chunking: { min: 1, avg: 2, max: 3 }, configSync: ["plugins", 7] },
+      { id: 5 },
+      { id: "v2", name: "x", role: "viewer", chunking: { min: "a" } },
+    ];
+    expect(await api(() => Promise.resolve(json(200, vaults))).a.vaults()).toEqual([
+      { id: "v1", name: "notes", role: "editor", chunking: { min: 1, avg: 2, max: 3 }, configSync: ["plugins"] },
+    ]);
     expect(await api(() => Promise.resolve(json(200, { x: 1 }))).a.vaults()).toEqual([]);
     expect(await api(() => Promise.resolve(json(200, { ticket: "abc" }))).a.ticket("v1")).toBe("abc");
     await expect(api(() => Promise.resolve(json(200, {}))).a.ticket("v1")).rejects.toThrow(/no ticket/);

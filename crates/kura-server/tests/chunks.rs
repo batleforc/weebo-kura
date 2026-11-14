@@ -51,6 +51,22 @@ async fn put(
     )
 }
 
+/// Commits a file with this manifest: content is served once an entry names
+/// it (phase 8: never by address alone).
+async fn commit_blob(e: &Env, tok: &str, d: &str, v: &str, blob: &str, size: u64) {
+    let op = json!({ "op": "put", "entry": uuid::Uuid::now_v7(), "path": format!("{blob}.md"), "blob": blob, "size": size });
+    let (st, b) = e
+        .call(
+            "POST",
+            &format!("/v1/vaults/{v}/commits"),
+            tok,
+            Some(d),
+            Some(json!({ "idempotencyKey": uuid::Uuid::new_v4().to_string(), "operations": [op] })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK, "{b}");
+}
+
 /// Raw objects stored under the vault's prefix.
 async fn objects(s: &Storage, v: &str) -> Vec<Vec<u8>> {
     let prefix = object_store::path::Path::from(v);
@@ -116,7 +132,20 @@ async fn bucket_object_is_not_plaintext() {
         !key.contains(&hash),
         "the object key does not reveal the content hash"
     );
-    // And it reads back decrypted, immutable.
+    // And it reads back decrypted, immutable, once a file names it.
+    let size = note.len() as u64;
+    let blob = blob_hash(size, &[ChunkHash::of(&note)]).to_string();
+    let (st, _) = e
+        .call(
+            "PUT",
+            &format!("/v1/vaults/{v}/blobs/{blob}"),
+            &tok,
+            Some(&d),
+            Some(json!({ "size": size, "chunks": [hash] })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::NO_CONTENT);
+    commit_blob(&e, &tok, &d, &v, &blob, size).await;
     let (status, b) = e
         .call(
             "GET",
@@ -233,6 +262,7 @@ async fn upload_resumes_from_missing_chunks_and_manifests_check_out() {
         )
         .await;
     assert_eq!(s2, StatusCode::NO_CONTENT);
+    commit_blob(&e, &tok, &d, &v, &bh, size).await;
     let (s3, got) = e
         .call(
             "GET",

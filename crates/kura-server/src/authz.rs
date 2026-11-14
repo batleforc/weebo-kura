@@ -95,6 +95,16 @@ pub struct VaultAccess {
     pub chunking: kura_api::Chunking,
     pub epoch: Uuid,
     pub head_seq: i64,
+    /// The `configSync` categories; empty: `.obsidian` does not sync (§6.8).
+    pub config: Vec<kura_api::spec::ConfigCategory>,
+}
+
+fn config_of(row: &sqlx::postgres::PgRow) -> Result<Vec<kura_api::spec::ConfigCategory>, ApiError> {
+    let raw: Option<serde_json::Value> = row.try_get("config_sync")?;
+    Ok(raw
+        .and_then(|v| serde_json::from_value::<kura_api::spec::ConfigSync>(v).ok())
+        .map(|c| c.categories)
+        .unwrap_or_default())
 }
 
 pub fn parse_role(s: &str) -> Option<VaultRole> {
@@ -130,7 +140,7 @@ pub async fn vault_access_in(
         .map(|m| m.role);
     let mut tx = db::begin_tenant(pool, tenant, Some(&p.sub)).await?;
     let Some(row) = sqlx::query(
-        "SELECT namespace, name, managed_by, chunking_params, epoch, head_seq FROM vault WHERE id = $1 AND disabled_at IS NULL",
+        "SELECT namespace, name, managed_by, chunking_params, epoch, head_seq, config_sync FROM vault WHERE id = $1 AND disabled_at IS NULL",
     )
     .bind(vault)
     .fetch_optional(&mut *tx)
@@ -179,6 +189,7 @@ pub async fn vault_access_in(
             .map_err(|e| ApiError::Unavailable(format!("stored chunking refused: {e}")))?,
         epoch: row.try_get("epoch")?,
         head_seq: row.try_get("head_seq")?,
+        config: config_of(&row)?,
     }))
 }
 
@@ -387,7 +398,7 @@ pub async fn key_access(
     };
     let mut tx = db::begin_tenant(pool, tenant, None).await?;
     let row = sqlx::query(
-        "SELECT namespace, name, managed_by, chunking_params, epoch, head_seq FROM vault WHERE id = $1 AND disabled_at IS NULL",
+        "SELECT namespace, name, managed_by, chunking_params, epoch, head_seq, config_sync FROM vault WHERE id = $1 AND disabled_at IS NULL",
     )
     .bind(vault)
     .fetch_optional(&mut *tx)
@@ -408,5 +419,6 @@ pub async fn key_access(
             .map_err(|e| ApiError::Unavailable(format!("stored chunking refused: {e}")))?,
         epoch: row.try_get("epoch")?,
         head_seq: row.try_get("head_seq")?,
+        config: config_of(&row)?,
     }))
 }

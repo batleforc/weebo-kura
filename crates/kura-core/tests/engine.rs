@@ -106,6 +106,8 @@ struct Scripted {
     reply: Option<CommitResponse>,
     /// Restored from a backup: a cursor from another epoch than nil is 410.
     rewound: bool,
+    /// The vault's head, above every item served (changes elsewhere).
+    head: u64,
 }
 
 impl Remote for Scripted {
@@ -180,7 +182,13 @@ impl Remote for Scripted {
         };
         Ok(ChangesResponse {
             epoch: Uuid::nil(),
-            head_seq: 1,
+            head_seq: self
+                .serve
+                .iter()
+                .map(|(s, _)| s.seq)
+                .max()
+                .unwrap_or(0)
+                .max(self.head),
             next: (n < all.len())
                 .then(|| all.get(n - 1).map(|i| i.seq.to_string()))
                 .flatten(),
@@ -195,6 +203,7 @@ fn opts(dry_run: bool) -> Options {
         max_file_size: 100,
         dry_run,
         allow_deletions: false,
+        prefer_remote: false,
     }
 }
 
@@ -578,4 +587,40 @@ async fn a_refused_resend_keeps_the_local_version() {
     assert_eq!(host.files.borrow()["n.md"], b"mine, lost by the server");
     assert!(s.entries.is_empty(), "forgotten, not resent forever");
     assert_eq!(r.trashed, 0);
+}
+
+/// A view that saw nothing new still reaches the head it was read at: a
+/// configuration space or a prefix must not stay below the horizon that
+/// others' purged deletions move (phase 8 review).
+#[tokio::test]
+async fn a_quiet_view_moves_its_cursor_to_the_head() {
+    let host = Mem::default();
+    let remote = Scripted {
+        head: 50,
+        ..Scripted::default()
+    };
+    let mut s = state();
+    sync(&host, &remote, &mut s, &opts(false)).await.unwrap();
+    assert_eq!(s.cursor, 50);
+}
+
+/// Phase 8 review H1: in the configuration space a new device's local copy
+/// of a file the server already holds gives way, instead of being pushed
+/// over the user's settings.
+#[tokio::test]
+async fn the_configuration_takes_the_servers_copy_on_first_contact() {
+    let host = Mem::default();
+    host.files
+        .borrow_mut()
+        .insert("hotkeys.json".into(), b"{\"defaults\": true}".to_vec());
+    let remote = Scripted {
+        serve: vec![served("hotkeys.json", b"{\"mine\": true}")],
+        ..Scripted::default()
+    };
+    let mut s = state();
+    let mut o = opts(false);
+    o.prefer_remote = true;
+    let r = sync(&host, &remote, &mut s, &o).await.unwrap();
+    assert_eq!(host.files.borrow()["hotkeys.json"], b"{\"mine\": true}");
+    assert_eq!((r.pulled, r.pushed), (1, 0), "{r:?}");
 }

@@ -461,6 +461,7 @@ pub mod devices;
 pub mod events;
 pub mod reader;
 pub mod search;
+pub mod space;
 pub mod tokens;
 pub mod vaults;
 

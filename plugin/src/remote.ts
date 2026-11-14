@@ -23,6 +23,8 @@ export interface VaultView {
   name: string;
   role: string;
   chunking: { min: number; avg: number; max: number };
+  /** The `.obsidian` categories that sync (§6.8); empty: none. */
+  configSync: string[];
 }
 
 /** A refusal as the core expects it: `{status, kind, detail}`. */
@@ -90,7 +92,8 @@ export class Api {
       if (!isRecord(x) || typeof x.id !== "string" || typeof x.name !== "string" || typeof x.role !== "string" || !isRecord(x.chunking)) return [];
       const { min, avg, max } = x.chunking;
       if (typeof min !== "number" || typeof avg !== "number" || typeof max !== "number") return [];
-      return [{ id: x.id, name: x.name, role: x.role, chunking: { min, avg, max } }];
+      const configSync = Array.isArray(x.configSync) ? x.configSync.filter((c): c is string => typeof c === "string") : [];
+      return [{ id: x.id, name: x.name, role: x.role, chunking: { min, avg, max }, configSync }];
     });
   }
 
@@ -112,9 +115,11 @@ export class Api {
     return `${base}/v1/vaults/${vault}/events?ticket=${encodeURIComponent(ticket)}`;
   }
 
-  /** The core's view of one vault. */
-  remote(vault: string): KuraRemote {
+  /** The core's view of one vault: its notes, or with `config` the user's
+   * own Obsidian configuration for this device's profile (§6.8). */
+  remote(vault: string, space?: "config"): KuraRemote {
     const v = `/vaults/${vault}`;
+    const inSpace = space === undefined ? "" : `&space=${space}`;
     return {
       missing: async (hashes) => {
         const r = await this.json(`${v}/chunks/missing`, { method: "POST", json: { hashes } });
@@ -134,9 +139,10 @@ export class Api {
         }
         throw new Error("unexpected manifest");
       },
-      commit: (request) => this.json(`${v}/commits`, { method: "POST", json: request }),
+      commit: (request) =>
+        this.json(`${v}/commits`, { method: "POST", json: isRecord(request) && space !== undefined ? { ...request, space } : request }),
       changes: (since, epoch, start) =>
-        this.json(`${v}/changes?since=${String(since)}&start=${String(start)}${epoch === null ? "" : `&epoch=${epoch}`}`, { method: "GET" }),
+        this.json(`${v}/changes?since=${String(since)}&start=${String(start)}${epoch === null ? "" : `&epoch=${epoch}`}${inSpace}`, { method: "GET" }),
     };
   }
 }
