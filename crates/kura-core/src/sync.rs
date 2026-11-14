@@ -204,6 +204,8 @@ pub trait Remote {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Report {
     pub pushed: usize,
+    /// Bytes of the files `pushed` counts (what a dry run would upload, §4.5).
+    pub pushed_bytes: u64,
     pub pulled: usize,
     pub trashed: usize,
     /// Conflict files created by this run, as named on the server.
@@ -565,6 +567,10 @@ async fn push<H: Host, R: Remote>(
     let ops = deletes;
     // Counted before any upload, so a refusal can say how many files it kept.
     report.pushed = ops.len();
+    report.pushed_bytes = ops
+        .iter()
+        .filter_map(|(_, p)| p.as_ref().map(|p| p.size))
+        .fold(0u64, u64::saturating_add);
     if opts.dry_run || ops.is_empty() {
         return Ok(());
     }

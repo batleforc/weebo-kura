@@ -296,6 +296,7 @@ kura token list notes          # never shows a secret
 kura token revoke notes <id>
 kura history notes a.md        # the file's revisions, newest first
 kura restore notes a.md <rev>  # that revision's content becomes a new revision, then syncs
+kura verify notes              # the server holds exactly this folder's notes (exit 0), else lists what differs
 ```
 
 A full resync follows a `410`: `cursor_expired` (the device was away longer
@@ -313,6 +314,21 @@ are in `$KURA_CLI_HOME`, else `~/.config/kura`: `config.json` and
 replaces the sign-in for scripts and tests. The sync state of a folder is
 `<folder>/.kura/state.json`; dot-folders (`.obsidian`, `.trash`, `.kura`)
 never sync as notes; deleted files go to `<folder>/.trash`.
+
+### Migrating from Notion (§13, phase 9)
+
+1. Export the Notion workspace (Markdown & CSV, subpages included) and
+   convert it with Obsidian's importer into an empty folder.
+2. From the export date, Notion is read-only: remove its members' edit rights.
+3. `kura attach notes <folder>` and answer **no**: it prints what would be
+   pushed (files and bytes) and every name that cannot sync, with its rule,
+   and changes nothing. Rename those and run it again until none is listed.
+   Once attached, `kura sync notes --dry-run` gives the same check (exit 4
+   while a name cannot sync).
+4. `kura sync notes` pushes; `kura verify notes` must print `Equal.` (same
+   file count, bytes and content as the folder).
+5. Attach every other device (`kura attach`, the plugin); keep Notion
+   readable for one month of use, then close it.
 
 ## 10. The Obsidian plugin
 

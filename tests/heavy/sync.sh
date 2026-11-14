@@ -6,6 +6,7 @@
 # 11 (a dot-path note is refused by the server and reaches no device).
 # Phase 4: 1 (a change reaches a watching device within 5 s). Phase 5: 6 (a
 # device past the horizon resyncs, and a note deleted meanwhile is gone).
+# Phase 9: `kura verify`, the migration check of §13.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -53,6 +54,8 @@ for d in a b; do
   grep -rqs "bob version" "$work/$d" --include='*.md' || fail "7: $d lost bob's text"
 done
 pass "7: conflicted, both versions on both devices"
+as alice verify notes >"$work/verify.log" || fail "§13: the server and alice's folder differ: $(cat "$work/verify.log")"
+pass "§13: kura verify finds the folder equal to the server"
 
 # 1. A change reaches a watching device within 5 s, through the socket.
 as bob watch notes >"$work/watch.log" 2>&1 &

@@ -56,6 +56,8 @@ enum Command {
     Watch { vault: Option<String> },
     /// The state of every attached vault.
     Status,
+    /// Check that the server holds exactly this folder's notes (migration, §13).
+    Verify { vault: String },
     /// The revisions of a file, newest first.
     History { vault: String, path: String },
     /// Bring back a revision of a file as its new version.
@@ -112,6 +114,7 @@ async fn main() -> ExitCode {
             commands::watch(ctx, vault.as_deref(), stop).await
         }
         Command::Status => commands::status(ctx).await,
+        Command::Verify { vault } => commands::verify(ctx, &vault).await,
         Command::History { vault, path } => commands::history(ctx, &vault, &path).await,
         Command::Restore {
             vault,

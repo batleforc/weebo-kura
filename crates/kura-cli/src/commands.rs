@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use kura_core::sync::{Host as _, Known, LocalState, Options, RemoteError, Stamp, sync};
-use kura_core::{ChunkHash, ChunkParams, VaultPath, blob_hash, chunks};
+use kura_core::wire::EntryState;
+use kura_core::{ChunkHash, ChunkParams, PathError, VaultPath, blob_hash, chunks};
 use uuid::Uuid;
 
 use crate::api::{self, Api, oidc};
@@ -203,6 +204,96 @@ fn params(c: api::Chunking) -> Result<ChunkParams, Fail> {
         .map_err(|e| Fail(1, format!("the server's chunking parameters: {e}")))
 }
 
+/// The server's live notes, by path, every page.
+async fn remote_entries(api: &Api, vault: Uuid) -> Result<HashMap<VaultPath, EntryState>, Fail> {
+    let mut remote = HashMap::new();
+    let mut after: Option<String> = None;
+    loop {
+        let page = api.entries(vault, after.as_deref()).await?;
+        for it in page.items {
+            remote.insert(it.path.clone(), it);
+        }
+        match page.next {
+            // A page that does not move the keyset forward would loop forever.
+            Some(n) if after.as_deref() != Some(n.as_str()) => after = Some(n),
+            Some(_) => return Err(Fail(1, "the server's entry pages do not advance".into())),
+            None => return Ok(remote),
+        }
+    }
+}
+
+/// A folder against the server's notes, by content (attach, verify).
+#[derive(Default)]
+struct Diff {
+    /// Same path, same content.
+    matched: Vec<(EntryState, Stamp)>,
+    /// Syncable here, absent on the server.
+    only_here: Vec<String>,
+    /// Same path, other content.
+    differ: Vec<String>,
+    /// Names that cannot sync (§6.8), with the rule they break.
+    unsyncable: Vec<(String, String)>,
+    /// Bytes of `only_here` and `differ`: what a sync would upload.
+    push_bytes: u64,
+    only_server: usize,
+    /// The folder's syncable files and their bytes.
+    files: usize,
+    bytes: u64,
+}
+
+async fn diff(
+    host: &FsHost,
+    remote: &HashMap<VaultPath, EntryState>,
+    p: ChunkParams,
+) -> Result<Diff, Fail> {
+    let mut d = Diff::default();
+    let mut seen = std::collections::HashSet::new();
+    for f in host.list().await.map_err(Fail::local)? {
+        let path = match VaultPath::from_local(&f.path) {
+            Ok(path) => path,
+            // Dot-folders (.obsidian, .trash, .git) are not notes (decision 28).
+            Err(PathError::Hidden) => continue,
+            Err(e) => {
+                d.unsyncable.push((f.path, e.to_string()));
+                continue;
+            }
+        };
+        d.files = d.files.saturating_add(1);
+        d.bytes = d.bytes.saturating_add(f.size);
+        let Some(it) = remote.get(&path) else {
+            d.only_here.push(path.to_string());
+            d.push_bytes = d.push_bytes.saturating_add(f.size);
+            continue;
+        };
+        seen.insert(path.clone());
+        let data = host.read(&path).await.map_err(Fail::local)?;
+        if it.blob == Some(blob_of(&data, p)) {
+            d.matched.push((it.clone(), Stamp::from(&f)));
+        } else {
+            d.differ.push(path.to_string());
+            d.push_bytes = d.push_bytes.saturating_add(f.size);
+        }
+    }
+    d.only_server = remote.len().saturating_sub(seen.len());
+    Ok(d)
+}
+
+/// Bytes for people: `1.2 GiB`.
+fn human(bytes: u64) -> String {
+    let mut v = bytes as f64;
+    for unit in ["B", "KiB", "MiB", "GiB"] {
+        if v < 1024.0 {
+            return if unit == "B" {
+                format!("{bytes} B")
+            } else {
+                format!("{v:.1} {unit}")
+            };
+        }
+        v /= 1024.0;
+    }
+    format!("{v:.1} TiB")
+}
+
 fn blob_of(data: &[u8], p: ChunkParams) -> ChunkHash {
     let hashes: Vec<ChunkHash> = chunks(data, p).iter().map(|c| c.hash).collect();
     blob_hash(data.len() as u64, &hashes)
@@ -221,64 +312,51 @@ pub async fn attach(ctx: &Ctx, vault: &str, folder: PathBuf, yes: bool) -> Resul
     std::fs::create_dir_all(&folder).map_err(Fail::local)?;
     let folder = folder.canonicalize().map_err(Fail::local)?;
     let host = FsHost::new(folder.clone());
-    // The server's entries, by path.
-    let mut remote = HashMap::new();
-    let mut after: Option<String> = None;
-    loop {
-        let page = api.entries(v.id, after.as_deref()).await?;
-        for it in page.items {
-            remote.insert(it.path.clone(), it);
-        }
-        match page.next {
-            // A page that does not move the keyset forward would loop forever.
-            Some(n) if after.as_deref() != Some(n.as_str()) => after = Some(n),
-            Some(_) => return Err(Fail(1, "the server's entry pages do not advance".into())),
-            None => break,
-        }
-    }
+    let remote = remote_entries(&api, v.id).await?;
     let device = cfg
         .device
         .ok_or_else(|| Fail(2, "no device: run `kura login`".into()))?;
     let mut state = LocalState::adopt(host.load_state(), device, v.id);
-    let (mut matched, mut only_here, mut differ) = (0usize, 0usize, 0usize);
-    let mut seen = std::collections::HashSet::new();
-    for f in host.list().await.map_err(Fail::local)? {
-        let Ok(path) = VaultPath::from_local(&f.path) else {
-            continue;
-        };
-        let Some(it) = remote.get(&path) else {
-            only_here = only_here.saturating_add(1);
-            continue;
-        };
-        seen.insert(path.clone());
-        let data = host.read(&path).await.map_err(Fail::local)?;
-        // Same content: known as that entry, nothing moves. Other content is
-        // pushed as new, so the server keeps both as a conflict file.
-        match it.blob {
-            Some(b) if b == blob_of(&data, p) => {
-                matched = matched.saturating_add(1);
-                state.entries.insert(
-                    it.entry,
-                    Known {
-                        path,
-                        revision: it.revision,
-                        blob: b,
-                        size: it.size,
-                        stamp: Some(Stamp::from(&f)),
-                        resend: false,
-                    },
-                );
-            }
-            _ => differ = differ.saturating_add(1),
+    let d = diff(&host, &remote, p).await?;
+    let (matched, only_here, differ, only_server) = (
+        d.matched.len(),
+        d.only_here.len(),
+        d.differ.len(),
+        d.only_server,
+    );
+    // Same content: known as that entry, nothing moves. Other content is
+    // pushed as new, so the server keeps both as a conflict file.
+    for (it, stamp) in d.matched {
+        if let Some(blob) = it.blob {
+            state.entries.insert(
+                it.entry,
+                Known {
+                    path: it.path,
+                    revision: it.revision,
+                    blob,
+                    size: it.size,
+                    stamp: Some(stamp),
+                    resend: false,
+                },
+            );
         }
     }
-    let only_server = remote.len().saturating_sub(seen.len());
     println!("Attach {} to {vault}:", folder.display());
     println!("  {matched:>6} files match the server");
-    println!("  {only_here:>6} only here, will be pushed");
+    println!(
+        "  {only_here:>6} only here, will be pushed ({})",
+        human(d.push_bytes)
+    );
     println!("  {only_server:>6} only on the server, will be downloaded");
     if differ > 0 {
         println!("  {differ:>6} differ from the server, both kept (a conflict file each)");
+    }
+    // The migration check of §13: what cannot sync is named before anything moves.
+    if !d.unsyncable.is_empty() {
+        println!("Unsyncable ({}), left here:", d.unsyncable.len());
+        for (p, why) in &d.unsyncable {
+            println!("  {p}    {why}");
+        }
     }
     if !yes && !confirm("Continue?") {
         println!("Nothing changed.");
@@ -427,7 +505,11 @@ async fn sync_one(
     }
     let mut code = 0u8;
     if dry_run {
-        println!("{name}: would push {} files.", r.pushed);
+        println!(
+            "{name}: would push {} files, {}.",
+            r.pushed,
+            human(r.pushed_bytes)
+        );
     }
     if let Some(e) = &r.refused {
         eprintln!("error: {name}: push refused, your role is {} ({e})", v.role);
@@ -827,6 +909,60 @@ fn entry_of(cfg: &Config, vault: &str, path: &str) -> Result<(Uuid, Uuid), Fail>
 }
 
 /// `kura history <vault> <path>`: the file's revisions, newest first (§6.9).
+/// `kura verify <vault>`: the server holds exactly the folder's notes, file
+/// for file, by content; the check that ends a migration (§13). Exit 0 when
+/// equal, 1 otherwise.
+pub async fn verify(ctx: &Ctx, vault: &str) -> Result<u8, Fail> {
+    let mut cfg = config(ctx)?;
+    let a = cfg
+        .vaults
+        .get(vault)
+        .cloned()
+        .ok_or_else(|| Fail(3, format!("{vault} is not attached here")))?;
+    let api = session(ctx, &mut cfg).await?;
+    let v = api
+        .vaults()
+        .await?
+        .into_iter()
+        .find(|x| x.id == a.id)
+        .ok_or_else(|| Fail(3, format!("no vault {vault} visible to you")))?;
+    let remote = remote_entries(&api, a.id).await?;
+    let server_bytes = remote
+        .values()
+        .map(|e| e.size)
+        .fold(0u64, u64::saturating_add);
+    let d = diff(&FsHost::new(a.path.clone()), &remote, params(v.chunking)?).await?;
+    println!(
+        "{vault}: server {} files, {} bytes ({}); folder {} files, {} bytes ({}).",
+        remote.len(),
+        server_bytes,
+        human(server_bytes),
+        d.files,
+        d.bytes,
+        human(d.bytes)
+    );
+    for (what, paths) in [
+        ("only here", &d.only_here),
+        ("differ from the server", &d.differ),
+    ] {
+        for p in paths {
+            println!("  {what}: {p}");
+        }
+    }
+    for (p, why) in &d.unsyncable {
+        println!("  cannot sync: {p}    {why}");
+    }
+    if d.only_server > 0 {
+        println!("  {} files only on the server", d.only_server);
+    }
+    let equal = d.only_here.is_empty()
+        && d.differ.is_empty()
+        && d.unsyncable.is_empty()
+        && d.only_server == 0;
+    println!("{}", if equal { "Equal." } else { "Not equal." });
+    Ok(if equal { 0 } else { 1 })
+}
+
 pub async fn history(ctx: &Ctx, vault: &str, path: &str) -> Result<u8, Fail> {
     let mut cfg = config(ctx)?;
     let (id, entry) = entry_of(&cfg, vault, path)?;
@@ -1070,5 +1206,13 @@ mod tests {
             .unwrap_or_else(|f| panic!("{}", f.1)),
         );
         assert_eq!(a, blob_hash(1, &[ChunkHash::of(b"x")]));
+    }
+
+    #[test]
+    fn bytes_for_people() {
+        assert_eq!(human(512), "512 B");
+        assert_eq!(human(1536), "1.5 KiB");
+        assert_eq!(human(1_288_490_189), "1.2 GiB");
+        assert_eq!(human(3 << 40), "3.0 TiB");
     }
 }

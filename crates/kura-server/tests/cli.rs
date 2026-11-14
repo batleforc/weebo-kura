@@ -148,6 +148,16 @@ async fn the_cli_syncs_two_devices_and_maps_exit_codes() {
     );
     assert_eq!(code(commands::status(&a).await), 0);
     assert_eq!(code(commands::devices(&a, None).await), 0);
+    // §13: the migration check counts the name that cannot sync, then passes
+    // once the folder and the server hold the same notes.
+    assert_eq!(code(commands::verify(&a, "knowledge").await), 1);
+    std::fs::remove_file(fa.join("Q3: budget.md")).unwrap();
+    assert_eq!(code(commands::verify(&a, "knowledge").await), 0);
+    std::fs::write(fa.join("late.md"), "not pushed").unwrap();
+    assert_eq!(code(commands::verify(&a, "knowledge").await), 1);
+    assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
+    assert_eq!(code(commands::verify(&a, "knowledge").await), 0);
+    assert_eq!(code(commands::verify(&a, "other").await), 3);
 
     // Revoking phone-b from its own owner's other session is refused by name
     // (u1 cannot see u2's devices); u2 revokes it, then it must sign in (2).

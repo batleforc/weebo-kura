@@ -247,7 +247,7 @@ async fn unsyncable_and_dot_files_are_reported_or_skipped() {
     let r = sync(&host, &remote, &mut state(), &opts(true))
         .await
         .unwrap();
-    assert_eq!(r.pushed, 1, "only ok.md");
+    assert_eq!((r.pushed, r.pushed_bytes), (1, 1), "only ok.md");
     let names: Vec<&str> = r.unsyncable.iter().map(|(p, _)| p.as_str()).collect();
     assert_eq!(names, ["Q3: budget.md", "big.bin"]);
     assert_eq!(remote.calls.get(), 0, "a dry run sends nothing");
