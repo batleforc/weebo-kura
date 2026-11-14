@@ -34,7 +34,6 @@ backend = "github:batleforc/weebo-skillsagent"
 
 [tools."github:batleforc/weebo-skillsagent"."platforms.linux-x64"]
 checksum = "sha256:7c0fb8877a01ae299266cadf98278d4c08e55b225559dacb92c831711a3056b5"
-checksum_source = "mise-versions"
 url = "https://github.com/batleforc/weebo-skillsagent/releases/download/v0.17.0/wska-x86_64-unknown-linux-musl.tar.gz"
 url_api = "https://api.github.com/repos/batleforc/weebo-skillsagent/releases/assets/673155386"
 
@@ -58,12 +57,12 @@ url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/453012752"
 provenance = "github-attestations"
 
 [[tools.node]]
-version = "26.13.0"
+version = "24.22.3"
 backend = "core:node"
 
 [tools.node."platforms.linux-x64"]
-checksum = "sha256:5848553868b402d3fabb5b09270649977780a390f832155721025a08b5104455"
-url = "https://nodejs.org/dist/v26.13.0/node-v26.13.0-linux-x64.tar.gz"
+checksum = "sha256:061ec3e3062115705b56b51fa9cc330ab50d34b6969387d4e4b1a50c6809acc2"
+url = "https://nodejs.org/dist/v24.22.3/node-v24.22.3-linux-x64.tar.gz"
 
 [[tools."pipx:desloppify"]]
 version = "1.0"
@@ -79,7 +78,6 @@ backend = "aqua:rtk-ai/rtk"
 
 [tools.rtk."platforms.linux-x64"]
 checksum = "sha256:9454ad1b9489daa57ab0a9f4ebe2faaf4dc82b8a0f26c9e5135151abd7c9378d"
-checksum_source = "mise-versions"
 url = "https://github.com/rtk-ai/rtk/releases/download/v1.1.0/rtk-x86_64-unknown-linux-musl.tar.gz"
 url_api = "https://api.github.com/repos/rtk-ai/rtk/releases/assets/675762778"
 
@@ -93,7 +91,6 @@ backend = "aqua:koalaman/shellcheck"
 
 [tools.shellcheck."platforms.linux-x64"]
 checksum = "sha256:8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
-checksum_source = "mise-versions"
 url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz"
 url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056942"
 
