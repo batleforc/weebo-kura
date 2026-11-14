@@ -37,6 +37,8 @@ pub mod close {
     pub const TICKET_FOR_OTHER_VAULT: u16 = 4004;
     pub const TOKEN_EXPIRED: u16 = 4001;
     pub const DEVICE_REVOKED: u16 = 4002;
+    /// The caller no longer reads the vault (plan V4).
+    pub const ACCESS_REVOKED: u16 = 4005;
     pub const TOO_MANY_SOCKETS: u16 = 4008;
     pub const SLOW_CONSUMER: u16 = 4009;
 }
@@ -107,8 +109,8 @@ pub async fn create_ticket(
     let ttl = i64::try_from(TICKET_TTL.as_secs()).unwrap_or(30);
     let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
     sqlx::query(
-        "INSERT INTO ws_ticket (ticket_hash, tenant_id, vault_id, device_id, token_expires_at, expires_at)
-         VALUES ($1, $2, $3, $4, $5, now() + make_interval(secs => $6))",
+        "INSERT INTO ws_ticket (ticket_hash, tenant_id, vault_id, device_id, token_expires_at, expires_at, claims)
+         VALUES ($1, $2, $3, $4, $5, now() + make_interval(secs => $6), $7)",
     )
     .bind(hash(&secret))
     .bind(a.tenant)
@@ -116,6 +118,7 @@ pub async fn create_ticket(
     .bind(caller.device)
     .bind(token_expires)
     .bind(ttl)
+    .bind(sqlx::types::Json(&p.claims))
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -132,7 +135,7 @@ pub async fn create_ticket(
     tag = "sync",
     params(("v" = Uuid, Path, description = "Vault id"), EventsQuery),
     responses(
-        (status = 101, description = "WebSocket: JSON `change`, `pull` and `ping` notices; closed 4003 for a used, expired or unknown ticket, 4004 for another vault's, 4001 when the token behind it expires, 4002 on revocation, 4008 past 4 sockets, 4009 when too slow"),
+        (status = 101, description = "WebSocket: JSON `change`, `pull` and `ping` notices; closed 4003 for a used, expired or unknown ticket, 4004 for another vault's, 4001 when the token behind it expires, 4002 on revocation, 4005 when the caller no longer reads the vault, 4008 past 4 sockets, 4009 when too slow"),
         (status = 400, description = "No ticket", body = Problem, content_type = "application/problem+json"),
         (status = 429, description = "Over 60 attempts a minute from this address", body = Problem, content_type = "application/problem+json"),
     ),
@@ -159,12 +162,13 @@ pub async fn events(
         q.map_err(|e| ApiError::with_detail(ProblemType::InvalidRequest, e.body_text()))?;
     // Consumed before the upgrade: whatever happens next, a second use finds nothing.
     let ticket = match URL_SAFE_NO_PAD.decode(q.ticket.as_bytes()) {
-        Ok(t) if t.len() == 32 => sqlx::query("SELECT tenant_id, vault_id, device_id, token_expires_at FROM kura_ws_ticket_consume($1)")
+        Ok(t) if t.len() == 32 => sqlx::query("SELECT tenant_id, vault_id, device_id, token_expires_at, claims FROM kura_ws_ticket_consume($1)")
             .bind(hash(&t))
             .fetch_optional(&state.db)
             .await?
             .map(|r| -> Result<_, sqlx::Error> {
-                Ok((r.try_get::<Uuid, _>("vault_id")?, r.try_get::<Uuid, _>("device_id")?, r.try_get::<time::OffsetDateTime, _>("token_expires_at")?))
+                let claims: sqlx::types::Json<serde_json::Map<String, serde_json::Value>> = r.try_get("claims")?;
+                Ok((r.try_get::<Uuid, _>("vault_id")?, r.try_get::<Uuid, _>("device_id")?, r.try_get::<time::OffsetDateTime, _>("token_expires_at")?, claims.0))
             })
             .transpose()?,
         _ => None,
@@ -198,9 +202,18 @@ async fn serve(
     mut socket: WebSocket,
     state: SharedState,
     v: Uuid,
-    ticket: Option<(Uuid, Uuid, time::OffsetDateTime)>,
+    ticket: Option<(
+        Uuid,
+        Uuid,
+        time::OffsetDateTime,
+        serde_json::Map<String, serde_json::Value>,
+    )>,
 ) {
-    let Some((vault, device, token_expires)) = ticket else {
+    let Some((vault, device, token_expires, claims)) = ticket else {
+        return shut(socket, close::TICKET_USED, "ticket_used").await;
+    };
+    // The token's claims, to re-check the role on every ping; a ticket without them is spent.
+    let Some(principal) = crate::auth::Principal::from_claims(claims) else {
         return shut(socket, close::TICKET_USED, "ticket_used").await;
     };
     if vault != v {
@@ -240,6 +253,15 @@ async fn serve(
                 let active: Option<bool> = sqlx::query_scalar("SELECT kura_device_active($1)").bind(device).fetch_one(&state.db).await.ok().flatten();
                 if active == Some(false) {
                     return shut(socket, close::DEVICE_REVOKED, "device_revoked").await;
+                }
+                // The role, as the next request would see it: a binding or a
+                // mapping removed, or the vault gone, closes the socket (plan V4).
+                // A failing dependency keeps it open, as above.
+                if let Some(snap) = state.snapshot()
+                    && let Err(crate::problem::ApiError::Problem(..)) =
+                        authz::require_role(&state.db, &snap, &principal, v, VaultRole::Viewer).await
+                {
+                    return shut(socket, close::ACCESS_REVOKED, "access_revoked").await;
                 }
                 let head: Option<i64> = sqlx::query_scalar("SELECT kura_vault_head($1)").bind(v).fetch_one(&state.db).await.ok().flatten();
                 let n = Notice::Ping { head_seq: head.and_then(|h| u64::try_from(h).ok()).unwrap_or_default() };

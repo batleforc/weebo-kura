@@ -1513,7 +1513,7 @@
         ],
         "responses": {
           "101": {
-            "description": "WebSocket: JSON `change`, `pull` and `ping` notices; closed 4003 for a used, expired or unknown ticket, 4004 for another vault's, 4001 when the token behind it expires, 4002 on revocation, 4008 past 4 sockets, 4009 when too slow"
+            "description": "WebSocket: JSON `change`, `pull` and `ping` notices; closed 4003 for a used, expired or unknown ticket, 4004 for another vault's, 4001 when the token behind it expires, 4002 on revocation, 4005 when the caller no longer reads the vault, 4008 past 4 sockets, 4009 when too slow"
           },
           "400": {
             "description": "No ticket",

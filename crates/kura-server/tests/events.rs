@@ -248,6 +248,38 @@ async fn sockets_close_at_token_expiry_on_revocation_and_past_four() {
     s.stop.cancel();
 }
 
+/// Plan V4: an open socket re-checks the vault role on every ping (the first
+/// at once), so a caller who lost access stops hearing about the vault.
+#[tokio::test]
+async fn a_socket_closes_when_its_caller_loses_the_vault() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    // Still a reader: the socket stays open and serves its notices.
+    let t = s.ticket(&s.d).await;
+    let mut kept = s.open(&s.addr, &s.v, &t).await;
+    // The groups that granted the role are gone from the ticket's claims, as
+    // when the mapping or binding behind them no longer matches.
+    let t = s.ticket(&s.d).await;
+    sqlx::query("UPDATE ws_ticket SET claims = jsonb_set(claims, '{groups}', '[]')")
+        .execute(&s.e.t.owner)
+        .await
+        .unwrap();
+    let mut ws = s.open(&s.addr, &s.v, &t).await;
+    assert_eq!(next(&mut ws).await, Err(4005));
+    // A ticket with no claims at all is spent.
+    let t = s.ticket(&s.d).await;
+    sqlx::query("UPDATE ws_ticket SET claims = '{}'")
+        .execute(&s.e.t.owner)
+        .await
+        .unwrap();
+    let mut empty = s.open(&s.addr, &s.v, &t).await;
+    assert_eq!(next(&mut empty).await, Err(4003));
+    s.commit("kept.md").await;
+    assert_eq!(next(&mut kept).await.unwrap()["type"], "change");
+    s.stop.cancel();
+}
+
 /// A commit served by one replica reaches a socket held by another, through
 /// PostgreSQL's `NOTIFY`, never through the replicas themselves.
 #[tokio::test]
