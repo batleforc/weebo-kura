@@ -1,0 +1,8 @@
+weebo-kura
+Copyright 2026 Maxime (batleforc)
+
+This product is licensed under the Apache License, Version 2.0 (LICENSE.md).
+
+It depends on weebo-operator-kit (https://github.com/batleforc/weebo-operator-kit),
+licensed under the MIT License, and on third-party crates whose licences are
+checked by `task deny` against the allow-list in deny.toml.

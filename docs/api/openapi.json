@@ -1,0 +1,1347 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "kura",
+    "description": "weebo-kura sync backend (RFC 0001)",
+    "contact": {
+      "name": "weebo-kura",
+      "url": "https://github.com/batleforc/weebo-kura"
+    },
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": [
+          "probes"
+        ],
+        "summary": "Liveness: the process answers.",
+        "operationId": "healthz",
+        "responses": {
+          "200": {
+            "description": "The process is alive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "probes"
+        ],
+        "summary": "Readiness: configuration loaded and port bound; never a shared dependency (§10.2).",
+        "operationId": "readyz",
+        "responses": {
+          "200": {
+            "description": "Configuration loaded, serving",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeStatus"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No valid configuration yet",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/status": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Status of the reconciled configuration.",
+        "operationId": "admin_status",
+        "parameters": [
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configuration status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a platform admin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/devices": {
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "List devices: your own, and those of the tenants you administer.",
+        "operationId": "list_devices",
+        "parameters": [
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Devices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Device"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid token or device",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Register this device.",
+        "operationId": "register_device",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterDevice"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Registered; send its id in X-Kura-Device",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Device"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid token, or a session whose device was revoked",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of any tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Already 20 live devices",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over 10 registrations a minute",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/devices/{d}": {
+      "delete": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Revoke a device: yours, or one of a tenant you administer.",
+        "operationId": "revoke_device",
+        "parameters": [
+          {
+            "name": "d",
+            "in": "path",
+            "description": "Device id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "401": {
+            "description": "Invalid token or device",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such device you may revoke",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults": {
+      "get": {
+        "tags": [
+          "vaults"
+        ],
+        "summary": "The vaults you can read.",
+        "operationId": "list_vaults",
+        "parameters": [
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Readable vaults",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Vault"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid token or device",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "vaults"
+        ],
+        "summary": "Create an API-managed vault (tenant admin).",
+        "operationId": "create_vault",
+        "parameters": [
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVault"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Vault"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid name, or the name is taken",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a tenant admin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}": {
+      "delete": {
+        "tags": [
+          "vaults"
+        ],
+        "summary": "Delete an API-managed vault (tenant admin): disabled now, purged after 30 days.",
+        "operationId": "delete_vault",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Disabled, deletion scheduled"
+          },
+          "403": {
+            "description": "Not a tenant admin, or declared in configuration",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/bindings/{b}": {
+      "put": {
+        "tags": [
+          "vaults"
+        ],
+        "summary": "Bind a role on a vault (vault manager or tenant admin, §6.2).",
+        "operationId": "put_binding",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "b",
+            "in": "path",
+            "description": "claim:<value> or user:<sub>",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutBinding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Bound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BindingView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed to grant this",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "vaults"
+        ],
+        "summary": "Remove an API-managed binding (vault manager or tenant admin).",
+        "operationId": "delete_binding",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "b",
+            "in": "path",
+            "description": "claim:<value> or user:<sub>",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "403": {
+            "description": "Not allowed to remove this",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault or binding",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/blobs/{hash}": {
+      "get": {
+        "tags": [
+          "chunks"
+        ],
+        "summary": "A file version's manifest.",
+        "operationId": "get_blob",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "Blob hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The manifest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobManifest"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault or blob",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "chunks"
+        ],
+        "summary": "Store a file version's manifest; every chunk must already be present.",
+        "operationId": "put_blob",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "kura_core::blob_hash of the manifest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlobManifest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored, or already present"
+          },
+          "413": {
+            "description": "Over the tenant's maxFileSize",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Hash mismatch, a chunk missing, or sizes that disagree",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/chunks/missing": {
+      "post": {
+        "tags": [
+          "chunks"
+        ],
+        "summary": "Which of these chunks the vault lacks; present ones are kept from garbage collection.",
+        "operationId": "missing_chunks",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MissingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Missing hashes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MissingResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/chunks/{hash}": {
+      "get": {
+        "tags": [
+          "chunks"
+        ],
+        "summary": "Download one chunk, decrypted.",
+        "operationId": "get_chunk",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "BLAKE3 of the plaintext, lowercase hex",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The chunk's plaintext",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault or chunk",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "chunks"
+        ],
+        "summary": "Upload one chunk; its BLAKE3 must be its address.",
+        "operationId": "put_chunk",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "BLAKE3 of the plaintext, lowercase hex",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "At most 4 MiB",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored, or already present"
+          },
+          "413": {
+            "description": "Over 4 MiB",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Hash mismatch, or quota exceeded",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AdminStatus": {
+        "type": "object",
+        "required": [
+          "objects",
+          "rejection"
+        ],
+        "properties": {
+          "generation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the stored files, hex; absent before the first reconciliation."
+          },
+          "objects": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "One entry per declared or removed object, `Ready` condition first."
+          },
+          "rejection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "This replica's last rejected change, `file#index path: message`."
+          },
+          "writerVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "writtenAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          }
+        }
+      },
+      "BindingView": {
+        "type": "object",
+        "required": [
+          "subject",
+          "role",
+          "managedBy"
+        ],
+        "properties": {
+          "managedBy": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string",
+            "description": "`claim:<value>` or `user:<sub>`."
+          }
+        }
+      },
+      "BlobManifest": {
+        "type": "object",
+        "required": [
+          "size",
+          "chunks"
+        ],
+        "properties": {
+          "chunks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ordered chunk hashes."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "File size in bytes.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateVault": {
+        "type": "object",
+        "required": [
+          "tenant",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "An RFC 1123 label, unique in the tenant."
+          },
+          "tenant": {
+            "type": "string",
+            "description": "The tenant's slug."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Device": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "profile",
+          "createdAt",
+          "lastSeen",
+          "revoked"
+        ],
+        "properties": {
+          "createdAt": {
+            "type": "string",
+            "description": "RFC 3339."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "lastSeen": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The owner's subject, shown only to a tenant admin for others' devices."
+          },
+          "profile": {
+            "type": "string"
+          },
+          "revoked": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MissingRequest": {
+        "type": "object",
+        "required": [
+          "hashes"
+        ],
+        "properties": {
+          "hashes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Chunk hashes, 64 lowercase hex characters each, at most 1,000."
+          }
+        },
+        "additionalProperties": false
+      },
+      "MissingResponse": {
+        "type": "object",
+        "required": [
+          "missing"
+        ],
+        "properties": {
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The requested hashes the vault does not hold, in request order."
+          }
+        }
+      },
+      "ProbeStatus": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "description": "The RFC 9457 body.",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "Relative URI under `/v1/problems/`, stable across releases."
+          }
+        }
+      },
+      "Profile": {
+        "type": "string",
+        "enum": [
+          "desktop",
+          "mobile"
+        ]
+      },
+      "PutBinding": {
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "`viewer`, `editor` or `manager`, at most your own role.",
+            "example": "editor"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RegisterDevice": {
+        "type": "object",
+        "required": [
+          "name",
+          "profile"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Shown in device lists, 1 to 64 characters."
+          },
+          "profile": {
+            "$ref": "#/components/schemas/Profile"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Vault": {
+        "type": "object",
+        "required": [
+          "id",
+          "tenant",
+          "namespace",
+          "name",
+          "role",
+          "managedBy"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "managedBy": {
+            "type": "string",
+            "description": "`config` (read-only here) or `api`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "description": "Your effective role: `viewer`, `editor` or `manager`."
+          },
+          "tenant": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearer_token": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "OIDC access token from Authentik, verified per RFC8725: pinned algorithms, issuer, audience, expiry and the `scope` claim"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "probes",
+      "description": "Process health, no data"
+    },
+    {
+      "name": "admin",
+      "description": "Platform administration"
+    },
+    {
+      "name": "devices",
+      "description": "Device registration and revocation"
+    },
+    {
+      "name": "vaults",
+      "description": "Vaults and their role bindings"
+    },
+    {
+      "name": "chunks",
+      "description": "Encrypted chunks and file manifests"
+    }
+  ]
+}

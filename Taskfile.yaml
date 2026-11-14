@@ -4,6 +4,12 @@ includes:
   mise: ./.tasks/mise.yaml
   skills: ./.tasks/skills.yaml
   template: ./.tasks/template.yaml
+  rust: { taskfile: ./.tasks/rust.yaml, flatten: true }
+  test: { taskfile: ./.tasks/test.yaml, flatten: true }
+  coverage: { taskfile: ./.tasks/coverage.yaml, flatten: true }
+  security: { taskfile: ./.tasks/security.yaml, flatten: true }
+  api: { taskfile: ./.tasks/api.yaml, flatten: true }
+  dev: { taskfile: ./.tasks/dev.yaml, flatten: true }
 
 tasks:
   init:
@@ -53,18 +59,17 @@ tasks:
       - task mise:lock:gen
 
   recu:
-    desc: "Recuring job like regenerating Swagger spec"
+    desc: "Regenerate tracked artefacts (run by the pre-commit hook)"
     cmds:
-      - echo "Your future spec generating cmd"
+      - task: dump-spec
+      # Re-staged by the pre-commit hook only when already staged.
+      - git add docs/api/openapi.json
 
   lint:
-    desc: "Linting your project to apply good practice"
+    desc: "Lint the whole project: clippy, rustfmt, fuzz targets compile, shell scripts (run by the pre-commit hook)"
     cmds:
-      # Add the project linters here, something like cargo fmt && cargo clippy
+      - task: rust:lint
+      - task: fuzz:check
+      - task: openapi:lint
       - shellcheck .hooks/*.sh
 
-  audit:
-    desc: "Check dependencies and Containerfile for CVE"
-    cmds:
-      # Add the stack scanners here, something like cargo audit or pnpm audit
-      - trivy fs --scanners vuln,misconfig --severity HIGH,CRITICAL --exit-code 1 .

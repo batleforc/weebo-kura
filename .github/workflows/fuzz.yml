@@ -1,0 +1,27 @@
+name: fuzz
+
+# Tier 2 of weebo-testing's fuzz layer: every target, 60 s, nightly. Tier 1
+# (every target compiles) runs in ci.yml through `task lint` (fuzz:check).
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - name: Pinned nightly for cargo fuzz
+        run: rustup toolchain install "$(mise exec -- printenv KURA_FUZZ_TOOLCHAIN)" --profile minimal --component rust-src
+      - name: Run every target
+        run: |
+          failed=""
+          for target in $(cargo fuzz list --fuzz-dir fuzz); do
+            task fuzz TARGET="$target" MAX_TIME=60 || failed="$failed $target"
+          done
+          if [ -n "$failed" ]; then echo "failing targets:$failed"; exit 1; fi

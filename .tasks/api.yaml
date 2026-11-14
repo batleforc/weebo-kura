@@ -1,0 +1,20 @@
+# The API contract (weebo-api-contract): the spec is generated from the handlers,
+# committed, and checked for drift. No TS client: decision 37.
+version: "3"
+
+tasks:
+  dump-spec:
+    desc: Dump the OpenAPI document generated from the handlers to docs/api/openapi.json
+    cmds:
+      - cargo run -q -p kura-server -- dump-spec > docs/api/openapi.json
+
+  openapi:lint:
+    desc: "Lint docs/api/openapi.json with Spectral (OAS + OWASP API Top 10, ruleset in .spectral.yaml); fails on any warning"
+    cmds:
+      - spectral lint docs/api/openapi.json --fail-severity=warn {{.CLI_ARGS}}
+
+  openapi:check:
+    desc: Fail when the committed docs/api/openapi.json is older than the handlers (the drift gate CI runs)
+    cmds:
+      - task: dump-spec
+      - git diff --exit-code -- docs/api/openapi.json

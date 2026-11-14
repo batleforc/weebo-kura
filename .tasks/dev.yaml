@@ -1,0 +1,64 @@
+# Local services for the integration tests (plan P3). Outside Eclipse Che only:
+# in a CDE they are devfile sidecars. Same image as CI's service container.
+version: "3"
+
+vars:
+  PG_CONTAINER: kura-dev-postgres
+  PG_PORT: '{{.PG_PORT | default "55433"}}'
+  PG_IMAGE: docker.io/library/postgres:18-alpine
+  VAULT_CONTAINER: kura-dev-vault
+  VAULT_PORT: '{{.VAULT_PORT | default "58200"}}'
+  VAULT_IMAGE: docker.io/hashicorp/vault:latest
+  S3_CONTAINER: kura-dev-s3
+  S3_PORT: '{{.S3_PORT | default "59000"}}'
+  # RustFS: S3-compatible, Apache-2.0; MinIO no longer publishes images.
+  S3_IMAGE: docker.io/rustfs/rustfs:latest
+
+tasks:
+  dev:up:
+    desc: "Start PostgreSQL for the integration tests on localhost:55433, then export KURA_TEST_DATABASE_URL as printed (usage: task dev:up [PG_PORT=55433])"
+    status:
+      - podman container exists {{.PG_CONTAINER}}
+    cmds:
+      # A throwaway superuser password: the container listens on localhost only.
+      - podman run -d --name {{.PG_CONTAINER}} -p 127.0.0.1:{{.PG_PORT}}:5432 -e POSTGRES_PASSWORD=kura-dev {{.PG_IMAGE}}
+      - |
+        for _ in $(seq 30); do
+          podman exec {{.PG_CONTAINER}} pg_isready -U postgres >/dev/null 2>&1 && break
+          sleep 1
+        done
+      - echo "export KURA_TEST_DATABASE_URL=postgres://postgres:kura-dev@127.0.0.1:{{.PG_PORT}}/postgres"
+
+  dev:vault:
+    desc: "Start Vault in dev mode on localhost:58200 (root token kura-dev, in memory) for the Vault tests (usage: task dev:vault [VAULT_PORT=58200])"
+    status:
+      - podman container exists {{.VAULT_CONTAINER}}
+    cmds:
+      - podman run -d --name {{.VAULT_CONTAINER}} -p 127.0.0.1:{{.VAULT_PORT}}:8200 --cap-add IPC_LOCK -e VAULT_DEV_ROOT_TOKEN_ID=kura-dev {{.VAULT_IMAGE}}
+      - echo "export KURA_TEST_VAULT_ADDR=http://127.0.0.1:{{.VAULT_PORT}} KURA_TEST_VAULT_TOKEN=kura-dev"
+
+  dev:s3:
+    desc: "Start an S3-compatible store on localhost:59000 with the bucket kura-test (keys kura-dev / kura-dev-secret) for the chunk tests (usage: task dev:s3 [S3_PORT=59000])"
+    status:
+      - podman container exists {{.S3_CONTAINER}}
+    cmds:
+      - podman run -d --name {{.S3_CONTAINER}} -p 127.0.0.1:{{.S3_PORT}}:9000 -e RUSTFS_ACCESS_KEY=kura-dev -e RUSTFS_SECRET_KEY=kura-dev-secret {{.S3_IMAGE}}
+      # A top-level directory of the data volume is a bucket.
+      - podman exec {{.S3_CONTAINER}} mkdir -p /data/kura-test
+      - echo "export KURA_TEST_S3_ENDPOINT=http://127.0.0.1:{{.S3_PORT}}"
+
+  dev:down:
+    desc: Stop and remove the local PostgreSQL, Vault and S3 containers (their data goes with them)
+    cmds:
+      - podman rm -f {{.PG_CONTAINER}} {{.VAULT_CONTAINER}} {{.S3_CONTAINER}}
+
+  test:db:
+    desc: Run the tests with the local PostgreSQL, Vault and S3 of dev:up, dev:vault and dev:s3, so nothing skips
+    deps: [dev:up, dev:vault, dev:s3]
+    env:
+      KURA_TEST_DATABASE_URL: postgres://postgres:kura-dev@127.0.0.1:{{.PG_PORT}}/postgres
+      KURA_TEST_VAULT_ADDR: http://127.0.0.1:{{.VAULT_PORT}}
+      KURA_TEST_VAULT_TOKEN: kura-dev
+      KURA_TEST_S3_ENDPOINT: http://127.0.0.1:{{.S3_PORT}}
+    cmds:
+      - cargo test --workspace

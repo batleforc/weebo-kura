@@ -1,7 +1,8 @@
 [tools]
 cocogitto = "latest"
 node = "lts"
-rust = "latest"
+# Exact pin (plan PR 1.1): the toolchain is only pinned here, no rust-toolchain.toml.
+rust = { version = "1.100.0", components = "rust-src,rustfmt,llvm-tools,clippy", profile = "default" }
 task = "latest"
 gitleaks = "latest"
 jq = "latest"
@@ -14,3 +15,18 @@ uv = "latest"
 "pipx:graphifyy" = "latest"
 "github:batleforc/weebo-skillsagent" = "0.17.0"
 cargo-binstall = "latest"
+# task audit
+cargo-deny = "latest"
+"aqua:rustsec/rustsec/cargo-audit" = "latest"
+# task coverage-check
+"aqua:taiki-e/cargo-llvm-cov" = "latest"
+# migrations (PR 1.4); only the postgres driver is needed
+"cargo:sqlx-cli" = { version = "latest", features = "postgres,rustls", default-features = "false" }
+# task fuzz / fuzz:check
+"cargo:cargo-fuzz" = "latest"
+# OpenAPI lint (weebo-api-contract)
+spectral = "latest"
+
+[env]
+# Nightly only for `cargo fuzz`, pinned by date so a fuzz run is reproducible.
+KURA_FUZZ_TOOLCHAIN = "nightly-2026-11-01"

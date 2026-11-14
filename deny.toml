@@ -1,0 +1,81 @@
+# cargo-deny — supply-chain gate, run by `task deny` (part of `task audit`) and CI.
+# From the weebo-security template (batlehub@20879e5), with the kit's git source.
+
+[graph]
+# all-features keeps optional code in the graph; no target filter.
+all-features = true
+
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+# No suppressions. An entry here carries the advisory id, why it does not
+# apply, who checked, the date and the upstream issue that retires it.
+ignore = []
+
+[bans]
+# Every duplicate is accounted for in `skip`, naming the crate that holds the
+# older line. Security outranks tidiness: an upgrade closing an advisory stands
+# and its skip lands in the same commit.
+multiple-versions = "deny"
+skip = [
+    # The RustCrypto 0.10 line, held by sqlx-core 0.9 (sha2 0.10); the kit and
+    # sqlx-postgres are on 0.11.
+    { name = "sha2", version = "0.10" },
+    { name = "digest", version = "0.10" },
+    { name = "block-buffer", version = "0.10" },
+    { name = "crypto-common", version = "0.1" },
+    { name = "cpufeatures", version = "0.2" },
+    # Held by ring 0.17 (rustls).
+    { name = "getrandom", version = "0.2" },
+    { name = "windows-sys", version = "0.52" },
+    # Held by hashlink 0.11 (sqlx-core).
+    { name = "hashbrown", version = "0.16" },
+    # base64 0.22, held by jsonwebtoken 12 and sqlx-core; hyper-util is on 0.23.
+    { name = "base64", version = "0.22" },
+    # tower-http 0.6, held by reqwest 0.13; the server is on 0.7.
+    { name = "tower-http", version = "0.6" },
+    # untrusted 0.7, held by ring (sqlx's rustls); aws-lc-rs is on 0.9.
+    { name = "untrusted", version = "0.7" },
+    # Held by rustify 0.7 / rustify_derive 0.5 (vaultrs 0.8, the kit's Vault client).
+    { name = "thiserror", version = "1" },
+    { name = "thiserror-impl", version = "1" },
+    { name = "synstructure", version = "0.12" },
+    { name = "syn", version = "1" },
+    # syn 2, held by most proc-macros (jiff-static, serde_derive…); syn 3 by displaydoc.
+    { name = "syn", version = "2" },
+]
+# Workspace crates depend on each other through versionless paths.
+wildcards = "allow"
+deny = [
+    # RUSTSEC-2026-0459 (C SQLite CVE-2026-119375): kept out by the empty
+    # patches/sqlx-sqlite stub; this ban fails the build if it ever comes back.
+    { name = "libsqlite3-sys" },
+]
+
+[licenses]
+# Permissive allow-list compatible with Apache-2.0 (RFC 0001 §11). Anything
+# else, notably GPL/AGPL/LGPL, fails the check.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "BSL-1.0",
+    "Unlicense",
+    "MIT-0",
+]
+confidence-threshold = 0.8
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# weebo-operator-kit, pinned by tag in Cargo.toml (RFC 0001 §4.1, decision 49).
+allow-git = ["https://github.com/batleforc/weebo-operator-kit"]

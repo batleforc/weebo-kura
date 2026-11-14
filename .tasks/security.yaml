@@ -1,0 +1,35 @@
+version: "3"
+
+tasks:
+  audit:
+    desc: "Check dependencies and the image for CVEs: cargo audit, cargo deny, Trivy (image only with IMAGE=<ref>)"
+    cmds:
+      - task: audit:rust
+      - task: deny
+      - task: audit:fs
+      - task: audit:image
+
+  audit:rust:
+    desc: RUSTSEC advisories in Cargo.lock (cargo audit)
+    cmds:
+      - cargo audit --deny warnings
+
+  deny:
+    desc: Advisories, licences, bans and sources of the dependency graph (cargo deny, deny.toml)
+    cmds:
+      - cargo deny check
+
+  audit:fs:
+    desc: Trivy on the repository (vulnerable lockfiles, Containerfile misconfigurations)
+    cmds:
+      - trivy fs --scanners vuln,misconfig --severity HIGH,CRITICAL --exit-code 1 .
+
+  audit:image:
+    desc: "Trivy on a built image, fixable HIGH/CRITICAL only (usage: task audit:image IMAGE=<ref>)"
+    cmds:
+      - |
+        if [ -z "{{.IMAGE}}" ]; then
+          echo "SKIPPED: audit:image — IMAGE unset (CI's image job is the gate)" >&2
+          exit 0
+        fi
+        trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "{{.IMAGE}}"

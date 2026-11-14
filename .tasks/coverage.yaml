@@ -1,0 +1,29 @@
+version: "3"
+
+vars:
+  # main.rs is process wiring only; everything it calls lives in lib.rs and is tested there.
+  COVERAGE_EXCLUDE: 'crates/kura-server/src/main\.rs'
+
+tasks:
+  cov:collect:
+    internal: true
+    cmds:
+      # Set KURA_TEST_DATABASE_URL (task dev:up) or the PostgreSQL tests skip and the number is not the real one.
+      - cargo llvm-cov clean --workspace
+      - cargo llvm-cov --no-report --workspace
+
+  coverage:
+    desc: Write the HTML coverage report to coverage/html and lcov.info (export KURA_TEST_DATABASE_URL first)
+    cmds:
+      - task: cov:collect
+      - cargo llvm-cov report --ignore-filename-regex '{{.COVERAGE_EXCLUDE}}' --html --output-dir coverage
+      - cargo llvm-cov report --ignore-filename-regex '{{.COVERAGE_EXCLUDE}}' --lcov --output-path lcov.info
+
+  coverage-check:
+    desc: Fail when the line coverage of kura-api, kura-core or kura-server is under 80% (export KURA_TEST_DATABASE_URL first)
+    # One gate per crate (plan PR 1.10).
+    cmds:
+      - task: cov:collect
+      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(server|core)/' --fail-under-lines 80
+      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(server|api)/' --fail-under-lines 80
+      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(api|core)/|{{.COVERAGE_EXCLUDE}}' --fail-under-lines 80

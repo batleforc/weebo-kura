@@ -1,0 +1,31 @@
+# Its own workspace: the fuzz build carries the parsers and nothing that needs a network.
+[workspace]
+
+[package]
+name = "kura-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+kura-api = { path = "../crates/kura-api" }
+kura-core = { path = "../crates/kura-core" }
+arbitrary = "1"
+serde_norway = "0.9"
+
+# One [[bin]] per target; `cargo fuzz list` and the CI loop read them from here.
+[[bin]]
+name = "fuzz_config_document"
+path = "fuzz_targets/fuzz_config_document.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_chunking"
+path = "fuzz_targets/fuzz_chunking.rs"
+test = false
+doc = false

@@ -3,11 +3,16 @@
 Every project keeps its documentation here, either as plain markdown or as a
 [fumadocs](https://fumadocs.dev/) static site (ask the project owner which one they want).
 
+## Guides
+
+- [Operating kura-server](operator.md): `server.yaml`, tenants and vaults, PostgreSQL, Authentik (phase 1).
+- [API reference](api/openapi.json): the OpenAPI document generated from the handlers (`task dump-spec`).
+
 ## RFCs
 
 | # | Title | Status | Settles |
 | --- | --- | --- | --- |
-| [0001](RFC/rfc0001-init-project.md) | weebo-kura: self-hosted sync backend for Obsidian vaults | Accepted | How vaults sync across devices through a self-hosted, multi-tenant backend authenticated by OIDC |
+| [0001](RFC/rfc0001-init-project.md) | weebo-kura: self-hosted sync backend for Obsidian vaults | Accepted ([implementation plan](RFC/rfc0001-implementation-plan.md)) | How vaults sync across devices through a self-hosted, multi-tenant backend authenticated by OIDC |
 
 ### Planned
 

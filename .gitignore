@@ -39,3 +39,12 @@ graphify-out/cache/
 /.claude/skills/weebo-testing
 /.claude/skills/wska
 # <<< wska links in .claude/
+
+# Coverage output (task coverage)
+coverage/
+lcov.info
+
+# cargo-fuzz output; CI caches the corpus instead
+fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/

@@ -27,4 +27,50 @@ jobs:
           done
       - run: gitleaks git --redact --verbose
       - run: task lint
+      - run: task openapi:check
       - run: task audit
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      # Integration tests skip loudly without it; CI never skips (weebo-testing).
+      postgres:
+        image: docker.io/library/postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: kura-ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      vault:
+        image: docker.io/hashicorp/vault:latest
+        env:
+          VAULT_DEV_ROOT_TOKEN_ID: kura-ci
+          SKIP_SETCAP: "true"
+        ports: ["8200:8200"]
+      s3:
+        image: docker.io/rustfs/rustfs:latest
+        env:
+          RUSTFS_ACCESS_KEY: kura-dev
+          RUSTFS_SECRET_KEY: kura-dev-secret
+        ports: ["9000:9000"]
+    env:
+      KURA_TEST_DATABASE_URL: postgres://postgres:kura-ci@localhost:5432/postgres
+      KURA_TEST_VAULT_ADDR: http://localhost:8200
+      KURA_TEST_VAULT_TOKEN: kura-ci
+      KURA_TEST_S3_ENDPOINT: http://localhost:9000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - name: Test bucket
+        run: docker exec ${{ job.services.s3.id }} mkdir -p /data/kura-test
+      - run: task test
+      - run: task coverage-check
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - run: docker build -f Containerfile -t kura-server:ci .
+      - run: task audit:image IMAGE=kura-server:ci

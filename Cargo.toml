@@ -1,0 +1,115 @@
+# Started from .example/Cargo.toml (small target/, deps declared once) with the
+# lint table of weebo-operator-kit v0.31.0 (weebo-good-practice).
+
+[workspace]
+resolver = "3"
+members = ["crates/kura-api", "crates/kura-core", "crates/kura-server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+repository = "https://github.com/batleforc/weebo-kura"
+
+[workspace.dependencies]
+kura-api = { path = "crates/kura-api" }
+kura-core = { path = "crates/kura-core" }
+# weebo-operator-kit, pinned by tag (RFC 0001 §4.1, decision 49; plan P1).
+weebo-kit-api = { git = "https://github.com/batleforc/weebo-operator-kit", tag = "v0.31.0" }
+weebo-kit-domain = { git = "https://github.com/batleforc/weebo-operator-kit", tag = "v0.31.0" }
+# The kit's version, with the Kubernetes version it leaves to the application (plan P2).
+k8s-openapi = { version = "0.28", features = ["v1_36"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# YAML: the kit's own choice (serde_yaml is unmaintained), plan D6.
+serde_norway = "0.9"
+# Field path in configuration errors (RFC 0001 §4.3), plan D6.
+serde_path_to_error = "0.1"
+thiserror = "2"
+anyhow = "1"
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "signal", "io-util"] }
+tokio-util = "0.7"
+tower = "0.5"
+tower-http = { version = "0.7", features = ["trace", "cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+utoipa = { version = "6", features = ["axum_extras", "uuid"] }
+utoipa-axum = "0.3"
+utoipa-scalar = { version = "0.4", features = ["axum"] }
+prometheus = { version = "0.14", default-features = false }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "macros", "migrate", "uuid", "json", "time"] }
+uuid = { version = "1", features = ["serde"] }
+sha2 = "0.11"
+# Token verification (§6.2). aws-lc-rs, not rust_crypto: the latter pulls `rsa`
+# (RUSTSEC-2023-0071), and reqwest's rustls already uses aws-lc-rs.
+jsonwebtoken = { version = "12", default-features = false, features = ["aws_lc_rs"] }
+# Chunk addressing and content-defined chunking (§6.4).
+blake3 = { version = "1", default-features = false, features = ["std"] }
+fastcdc = { version = "5", default-features = false }
+# Chunk encryption (§6.6): AES-256-GCM from aws-lc-rs, already linked by
+# jsonwebtoken and rustls, instead of the `aes-gcm` crate (plan D38).
+aws-lc-rs = "1"
+zeroize = "1"
+# Transit returns base64; the version jsonwebtoken and sqlx already link.
+base64 = "0.22"
+# Chunk storage on any S3-compatible store (§8), no local filesystem backend.
+object_store = { version = "0.14", default-features = false, features = ["aws"] }
+bytes = "1"
+# Vault: Kubernetes auth, KV credentials, Transit (§6.6); the kit's version.
+vaultrs = { version = "0.8", default-features = false, features = ["rustls"] }
+# Outbound HTTP to Authentik (discovery, JWKS, userinfo), rustls only.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+time = { version = "0.3", features = ["serde", "formatting"] }
+# CIDR parsing for trustedProxies (plan P4).
+ipnet = { version = "2", features = ["serde"] }
+
+# Keeps SQLite out of Cargo.lock (plan E1): see patches/sqlx-sqlite/Cargo.toml.
+[patch.crates-io]
+sqlx-sqlite = { path = "patches/sqlx-sqlite" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"                      # LANG-UNSAFE; "deny", not "forbid": #[expect(unsafe_code, reason)] must stay possible for FFI
+unsafe_op_in_unsafe_fn = "deny"
+let_underscore_drop = "warn"
+
+[workspace.lints.clippy]
+# Panics (LANG-LIMIT-PANIC, LANG-ARRINDEXING). Tests are exempt via clippy.toml.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+# Integer overflow (LANG-ARITH): checked_/saturating_/wrapping_ instead of bare operators.
+arithmetic_side_effects = "deny"
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+cast_possible_wrap = "deny"
+# Errors are handled, never dropped.
+let_underscore_must_use = "deny"
+let_underscore_future = "deny"
+mem_forget = "deny"
+# Every escape hatch carries its justification, and dies with the code it excused.
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+undocumented_unsafe_blocks = "deny"
+dbg_macro = "deny"
+wildcard_imports = "deny"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+# Most of target/ is debug info nobody reads; overflow checks stay on.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.test]
+debug = false

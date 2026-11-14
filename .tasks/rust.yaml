@@ -1,0 +1,31 @@
+# Flattened into the root Taskfile: each name here is the name users type.
+version: "3"
+
+tasks:
+  build:
+    desc: Build the entire workspace
+    cmds:
+      - cargo build --workspace
+
+  check:
+    desc: Type-check the entire workspace without building
+    cmds:
+      - cargo check --workspace --all-targets
+
+  rust:lint:
+    desc: Run clippy (warnings are errors) and the format check across the workspace
+    cmds:
+      - cargo clippy --workspace --all-targets -- -D warnings
+      - cargo fmt --all --check
+
+  fmt:
+    desc: Format all Rust source files
+    cmds:
+      - cargo fmt --all
+
+  clean:stale:
+    desc: "Drop build artefacts not touched since yesterday (cargo sweep), then show the size of target/"
+    # Cargo never removes an artefact whose hash changed; a dependency bump leaves the old one behind.
+    cmds:
+      - cargo sweep --time 1
+      - "du -sh target || true"

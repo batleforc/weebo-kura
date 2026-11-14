@@ -1,0 +1,30 @@
+version: "3"
+
+tasks:
+  test:
+    desc: "Run every unit and integration test (tests needing PostgreSQL skip loudly unless KURA_TEST_DATABASE_URL is set, see task dev:up)"
+    cmds:
+      - cargo test --workspace
+
+  fuzz:
+    desc: "Fuzz one target on the pinned nightly (usage: task fuzz TARGET=fuzz_config_document [MAX_TIME=30])"
+    vars:
+      MAX_TIME: '{{.MAX_TIME | default "30"}}'
+      # Pinned in mise.toml [env]; read through mise so it works outside an activated shell.
+      NIGHTLY:
+        sh: mise exec -- printenv KURA_FUZZ_TOOLCHAIN
+    requires:
+      vars: [TARGET]
+    env:
+      # LeakSanitizer cannot start under a restricted ptrace_scope and reports a false crash.
+      ASAN_OPTIONS: detect_leaks=0
+    cmds:
+      - |
+        cargo +{{.NIGHTLY}} fuzz run --target "$(rustc +{{.NIGHTLY}} -vV | sed -n 's/^host: //p')" {{.TARGET}} -- -max_total_time={{.MAX_TIME}} $( [ -f fuzz/dicts/{{.TARGET}}.dict ] && echo -dict=fuzz/dicts/{{.TARGET}}.dict )
+
+  fuzz:check:
+    desc: Check that every fuzz target compiles (stable toolchain, the per-PR gate)
+    status:
+      - test ! -f fuzz/Cargo.toml
+    cmds:
+      - cargo check --manifest-path fuzz/Cargo.toml --bins
