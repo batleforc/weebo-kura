@@ -1,0 +1,30 @@
+# Migrations run as the database owner after the first install (the
+# CloudNativePG cluster and its owner Secret exist only then; the server
+# waits, refusing an older schema) and before every upgrade (§13).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kura.name" . }}-migrate-{{ .Release.Revision }}
+  labels: {{- include "kura.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels: {{- include "kura.jobLabels" (dict "root" . "component" "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: migrate
+          image: {{ include "kura.image" . }}
+          args: [migrate]
+          env:
+            - name: KURA_DATABASE_URL
+              valueFrom: {{- include "kura.ownerUrl" . | nindent 16 }}
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 256Mi } }
+          securityContext: {{- include "kura.securityContext" . | nindent 12 }}

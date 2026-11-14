@@ -63,6 +63,8 @@ async fn two_replicas_creating_one_data_key_keep_one() {
     };
     let tenant = t.tenant("a").await;
     let id = t.vault(tenant, "a", "notes").await;
+    let metrics = kura_server::metrics::Metrics::new().unwrap();
+    v.measure(metrics.vault_call_duration_seconds.clone());
     let (r1, r2) = (DataKeys::new(v.clone()), DataKeys::new(v.clone()));
     let (k1, k2) = tokio::join!(
         r1.get(&t.app, tenant, "a", id),
@@ -93,4 +95,10 @@ async fn two_replicas_creating_one_data_key_keep_one() {
         data
     );
     assert_eq!(r3.cached_keys(), 1);
+    // Every Transit call is timed (§10.1): two data keys made, then unwraps.
+    let calls = metrics
+        .vault_call_duration_seconds
+        .with_label_values(&["ok"])
+        .get_sample_count();
+    assert!(calls >= 3, "{calls}");
 }

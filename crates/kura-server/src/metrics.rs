@@ -6,7 +6,10 @@ use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::get;
-use prometheus::{Encoder, IntCounter, IntCounterVec, IntGauge, Opts, Registry, TextEncoder};
+use prometheus::{
+    Encoder, Gauge, GaugeVec, Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec,
+    IntGauge, Opts, Registry, TextEncoder,
+};
 
 #[derive(Clone)]
 pub struct Metrics {
@@ -34,6 +37,32 @@ pub struct Metrics {
     pub tenants_awaiting_key_destruction: IntGauge,
     /// Vaults whose maintenance failed in a pass (§6.9).
     pub maintenance_failures_total: IntCounter,
+    /// Commit handling time, lock wait and merges included (§10.3 budget).
+    pub commit_duration_seconds: Histogram,
+    /// Round trip of this replica's own heartbeat through `NOTIFY` (§10.1).
+    pub notify_lag_seconds: Gauge,
+    /// `pg_notification_queue_usage()`, from 0 to 1 (§10.2).
+    pub notify_queue_usage: Gauge,
+    /// Open notification sockets on this replica.
+    pub ws_connections: IntGauge,
+    /// Vault (Transit) calls, by `outcome`: `ok` or `error`.
+    pub vault_call_duration_seconds: HistogramVec,
+    /// `410` answers sent, by `outcome`: `cursor_expired`, `history_rewound`.
+    pub resync_total: IntCounterVec,
+    /// Encrypted bytes stored, by `tenant`.
+    pub chunk_bytes_stored: GaugeVec,
+    /// Bytes of current files over bytes stored, by `tenant`.
+    pub dedup_ratio: GaugeVec,
+    /// Bytes stored over the quota, by `tenant` (absent without a quota).
+    pub quota_used_ratio: GaugeVec,
+    /// `503` answers from a failed dependency; the log line names it.
+    pub unavailable_total: IntCounter,
+    /// Tenants and vaults removed with `Delete`, in their grace period.
+    pub deletions_scheduled: IntGauge,
+    /// When the last bucket copy finished (0: never), for its alert.
+    pub backup_last_success_timestamp_seconds: Gauge,
+    /// When the storage gauges were last refreshed, so stale ones alert.
+    pub storage_refreshed_timestamp_seconds: Gauge,
 }
 
 impl Metrics {
@@ -84,6 +113,66 @@ impl Metrics {
             "Vaults whose maintenance failed in a pass",
         )?;
         registry.register(Box::new(maintenance_failures_total.clone()))?;
+        let commit_duration_seconds = Histogram::with_opts(
+            HistogramOpts::new("commit_duration_seconds", "Commit handling time")
+                .buckets(vec![0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1.0, 2.5, 5.0]),
+        )?;
+        registry.register(Box::new(commit_duration_seconds.clone()))?;
+        let notify_lag_seconds = Gauge::new(
+            "notify_lag_seconds",
+            "Round trip of this replica's heartbeat through NOTIFY",
+        )?;
+        registry.register(Box::new(notify_lag_seconds.clone()))?;
+        let notify_queue_usage = Gauge::new(
+            "notify_queue_usage",
+            "pg_notification_queue_usage(), from 0 to 1",
+        )?;
+        registry.register(Box::new(notify_queue_usage.clone()))?;
+        let ws_connections = IntGauge::new("ws_connections", "Open notification sockets")?;
+        registry.register(Box::new(ws_connections.clone()))?;
+        let vault_call_duration_seconds = HistogramVec::new(
+            HistogramOpts::new("vault_call_duration_seconds", "Vault Transit calls"),
+            &["outcome"],
+        )?;
+        registry.register(Box::new(vault_call_duration_seconds.clone()))?;
+        let resync_total = IntCounterVec::new(
+            Opts::new("resync_total", "410 answers sent, by problem type"),
+            &["outcome"],
+        )?;
+        registry.register(Box::new(resync_total.clone()))?;
+        let chunk_bytes_stored = GaugeVec::new(
+            Opts::new("chunk_bytes_stored", "Encrypted bytes stored"),
+            &["tenant"],
+        )?;
+        registry.register(Box::new(chunk_bytes_stored.clone()))?;
+        let dedup_ratio = GaugeVec::new(
+            Opts::new("dedup_ratio", "Bytes of current files over bytes stored"),
+            &["tenant"],
+        )?;
+        registry.register(Box::new(dedup_ratio.clone()))?;
+        let quota_used_ratio = GaugeVec::new(
+            Opts::new("quota_used_ratio", "Bytes stored over the quota"),
+            &["tenant"],
+        )?;
+        registry.register(Box::new(quota_used_ratio.clone()))?;
+        let unavailable_total =
+            IntCounter::new("unavailable_total", "503 answers from a failed dependency")?;
+        registry.register(Box::new(unavailable_total.clone()))?;
+        let deletions_scheduled = IntGauge::new(
+            "deletions_scheduled",
+            "Tenants and vaults removed with Delete, in their grace period",
+        )?;
+        registry.register(Box::new(deletions_scheduled.clone()))?;
+        let backup_last_success_timestamp_seconds = Gauge::new(
+            "backup_last_success_timestamp_seconds",
+            "When the last bucket copy finished, unix seconds; 0 if never",
+        )?;
+        registry.register(Box::new(backup_last_success_timestamp_seconds.clone()))?;
+        let storage_refreshed_timestamp_seconds = Gauge::new(
+            "storage_refreshed_timestamp_seconds",
+            "When the storage gauges were last refreshed, unix seconds",
+        )?;
+        registry.register(Box::new(storage_refreshed_timestamp_seconds.clone()))?;
         Ok(Self {
             registry,
             ready,
@@ -97,8 +186,88 @@ impl Metrics {
             maintenance_deleted_total,
             tenants_awaiting_key_destruction,
             maintenance_failures_total,
+            commit_duration_seconds,
+            notify_lag_seconds,
+            notify_queue_usage,
+            ws_connections,
+            vault_call_duration_seconds,
+            resync_total,
+            chunk_bytes_stored,
+            dedup_ratio,
+            quota_used_ratio,
+            unavailable_total,
+            deletions_scheduled,
+            backup_last_success_timestamp_seconds,
+            storage_refreshed_timestamp_seconds,
         })
     }
+}
+
+/// Refreshes the storage gauges per tenant once a minute, until `shutdown`.
+pub async fn refresh_storage(
+    pool: sqlx::PgPool,
+    metrics: Metrics,
+    shutdown: tokio_util::sync::CancellationToken,
+) {
+    loop {
+        if let Err(e) = storage_once(&pool, &metrics).await {
+            tracing::warn!(error = %e, "storage metrics not refreshed");
+        }
+        tokio::select! {
+            () = shutdown.cancelled() => return,
+            () = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}
+        }
+    }
+}
+
+/// One refresh of `chunk_bytes_stored`, `dedup_ratio`, `quota_used_ratio`,
+/// `deletions_scheduled` and `tenants_awaiting_key_destruction`.
+pub async fn storage_once(pool: &sqlx::PgPool, m: &Metrics) -> Result<(), sqlx::Error> {
+    use sqlx::Row as _;
+    let rows = sqlx::query("SELECT slug, stored, logical, quota FROM kura_tenant_storage()")
+        .fetch_all(pool)
+        .await?;
+    let (scheduled, awaiting, backup): (i64, i64, Option<time::OffsetDateTime>) =
+        sqlx::query_as(
+            "SELECT kura_deletions_scheduled(), kura_tenants_awaiting_key_destruction(), kura_backup_last()",
+        )
+        .fetch_one(pool)
+        .await?;
+    m.deletions_scheduled.set(scheduled);
+    m.tenants_awaiting_key_destruction.set(awaiting);
+    #[expect(clippy::cast_precision_loss, reason = "unix seconds in a float gauge")]
+    m.backup_last_success_timestamp_seconds
+        .set(backup.map_or(0.0, |t| t.unix_timestamp() as f64));
+    for gauge in [&m.chunk_bytes_stored, &m.dedup_ratio, &m.quota_used_ratio] {
+        gauge.reset();
+    }
+    for r in &rows {
+        let slug: String = r.try_get("slug")?;
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "ratios of byte counts; a float is the metric's type"
+        )]
+        let (stored, logical, quota) = (
+            r.try_get::<i64, _>("stored")? as f64,
+            r.try_get::<i64, _>("logical")? as f64,
+            r.try_get::<Option<i64>, _>("quota")?.map(|q| q as f64),
+        );
+        m.chunk_bytes_stored.with_label_values(&[&slug]).set(stored);
+        if stored > 0.0 {
+            m.dedup_ratio
+                .with_label_values(&[&slug])
+                .set(logical / stored);
+        }
+        if let Some(q) = quota.filter(|q| *q > 0.0) {
+            m.quota_used_ratio
+                .with_label_values(&[&slug])
+                .set(stored / q);
+        }
+    }
+    #[expect(clippy::cast_precision_loss, reason = "unix seconds in a float gauge")]
+    m.storage_refreshed_timestamp_seconds
+        .set(time::OffsetDateTime::now_utc().unix_timestamp() as f64);
+    Ok(())
 }
 
 async fn render(State(metrics): State<Metrics>) -> impl IntoResponse {

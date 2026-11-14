@@ -1,0 +1,11 @@
+# Its own group, appended to the PrometheusRule unless backupsWaived
+# (templates/prometheusrule.yaml); unit-tested with the others.
+groups:
+  - name: kura-backup
+    rules:
+      - alert: KuraBackupMissing
+        expr: time() - max(kura_backup_last_success_timestamp_seconds) > 36 * 3600
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: No bucket copy has completed for 36 hours (kura-server backup); restores would lose recent content.

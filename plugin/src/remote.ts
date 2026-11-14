@@ -135,7 +135,8 @@ export class Api {
         throw new Error("unexpected manifest");
       },
       commit: (request) => this.json(`${v}/commits`, { method: "POST", json: request }),
-      changes: (since, epoch) => this.json(`${v}/changes?since=${String(since)}${epoch === null ? "" : `&epoch=${epoch}`}`, { method: "GET" }),
+      changes: (since, epoch, start) =>
+        this.json(`${v}/changes?since=${String(since)}&start=${String(start)}${epoch === null ? "" : `&epoch=${epoch}`}`, { method: "GET" }),
     };
   }
 }

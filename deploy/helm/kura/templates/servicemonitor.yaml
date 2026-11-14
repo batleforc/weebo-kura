@@ -1,0 +1,12 @@
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "kura.name" . }}
+  labels: {{- include "kura.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: { kura.weebo.io/metrics: "true", app.kubernetes.io/instance: {{ .Release.Name }} }
+  endpoints:
+    - { port: metrics, interval: {{ .Values.monitoring.serviceMonitor.interval }} }
+{{- end }}

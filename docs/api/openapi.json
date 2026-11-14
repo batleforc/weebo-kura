@@ -838,6 +838,17 @@
             }
           },
           {
+            "name": "start",
+            "in": "query",
+            "description": "The cursor this pass began from, when `since` is a later page of it:\nthe horizon is checked against it, since a pass from 0 crosses the\nhorizon page by page without having missed anything (absent: `since`).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
             "name": "X-Kura-Device",
             "in": "header",
             "description": "This device",

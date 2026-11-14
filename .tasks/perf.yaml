@@ -1,0 +1,64 @@
+# k6 load and soak on the dev stack (weebo-testing k6 reference; RFC 0001
+# §10.3). Start it first: task dev:stack, then task dev:run.
+version: "3"
+
+vars:
+  RESULTS: perf/results
+
+tasks:
+  perf:run:commit:
+    desc: "k6 01: one-note commits from 5 devices for PERF_DURATION (1m); p95 under 200 ms enforced (§10.3)"
+    cmds:
+      - perf/run.sh perf/k6/scenarios/01_commit.js
+
+  perf:run:pull:
+    desc: "k6 02: pulls near the head from 5 devices for PERF_DURATION (1m); p95 under 100 ms enforced"
+    cmds:
+      - perf/run.sh perf/k6/scenarios/02_pull.js
+
+  perf:run:resync:
+    desc: "k6 03: 5 devices answered 410 at once, each listing the whole vault; p95 under 5 s enforced (§10.3)"
+    cmds:
+      - perf/run.sh perf/k6/scenarios/03_resync.js
+
+  perf:run:all:
+    desc: Run every k6 scenario in sequence; threshold violations are reported but do not stop the suite
+    cmds:
+      - for: { var: SCENARIOS }
+        cmd: perf/run.sh {{.ITEM}} --no-thresholds
+    vars:
+      SCENARIOS:
+        sh: ls perf/k6/scenarios/*.js
+
+  perf:attach:
+    desc: "Decision 42: time a new device's first attach of a 10,000-note vault with the real CLI (usage: task perf:attach [NOTES=10000])"
+    cmds:
+      - perf/attach.sh {{.NOTES | default "10000"}}
+
+  perf:soak:
+    desc: "Soak: the commit scenario for SOAK (30m) with the server's memory sampled; fails if it grows over 25% after warm-up"
+    cmds:
+      - perf/soak.sh {{.SOAK | default "30m"}}
+
+  perf:report:compare:
+    desc: "Compare each scenario's p95 with a baseline dir — BASE=perf/results/<release> (MARGIN=25 %, FAIL=1 to exit non-zero on a regression)"
+    requires:
+      vars: [BASE]
+    vars:
+      MARGIN: '{{.MARGIN | default "25"}}'
+      FAIL: '{{.FAIL | default "0"}}'
+    cmds:
+      - |
+        regressed=0
+        for cur in {{.RESULTS}}/0*.json; do
+          base="{{.BASE}}/$(basename "$cur")"
+          [ -f "$base" ] || { echo "NEW   $(basename "$cur") (no baseline)"; continue; }
+          read -r b c <<<"$(jq -rn --slurpfile b "$base" --slurpfile c "$cur" \
+            '[$b[0], $c[0]] | map(.metrics.http_req_duration["p(95)"]) | @tsv')"
+          if awk -v b="$b" -v c="$c" -v m="{{.MARGIN}}" 'BEGIN{exit !(c > b*(1+m/100))}'; then
+            echo "SLOWER $(basename "$cur") p95 ${b}ms -> ${c}ms"; regressed=1
+          else
+            echo "OK    $(basename "$cur") p95 ${b}ms -> ${c}ms"
+          fi
+        done
+        [ "{{.FAIL}}" != "1" ] || [ "$regressed" = 0 ]

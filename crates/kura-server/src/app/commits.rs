@@ -367,6 +367,7 @@ pub async fn post_commit(
         req: &req,
         request_hash,
     };
+    let _timer = state.metrics.commit_duration_seconds.start_timer();
     let deadline = tokio::time::Instant::now()
         .checked_add(MERGE_BUDGET)
         .unwrap_or_else(tokio::time::Instant::now);

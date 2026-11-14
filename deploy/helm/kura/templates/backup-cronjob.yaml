@@ -1,0 +1,34 @@
+{{- if .Values.backup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "kura.name" . }}-backup
+  labels: {{- include "kura.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels: {{- include "kura.jobLabels" (dict "root" . "component" "backup") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          # The same identity as the server: it reads the database and the
+          # bucket from Vault.
+          serviceAccountName: {{ .Values.serviceAccount.name }}
+          containers:
+            - name: backup
+              image: {{ include "kura.image" . }}
+              args: [backup, --config, /etc/kura/server/server.yaml]
+              envFrom:
+                - secretRef: { name: {{ .Values.backup.targetSecret }} }
+              resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 256Mi } }
+              securityContext: {{- include "kura.securityContext" . | nindent 16 }}
+              volumeMounts:
+                - { name: server, mountPath: /etc/kura/server, readOnly: true }
+          volumes:
+            - name: server
+              configMap: { name: {{ include "kura.name" . }}-server }
+{{- end }}

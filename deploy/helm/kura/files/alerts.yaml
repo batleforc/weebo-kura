@@ -1,0 +1,84 @@
+# The alerts of RFC 0001 §10.1, as a PrometheusRule spec. Unit-tested by
+# `task alerts:test` (deploy/alerts/tests.yaml); files/backup-alerts.yaml
+# is appended unless backups are waived. index_queue_depth arrives with
+# search (phase 7).
+groups:
+  - name: kura
+    rules:
+      - alert: KuraUnready
+        expr: max(kura_ready) == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: No kura-server replica has a configuration loaded.
+      - alert: KuraDown
+        expr: absent(kura_ready)
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: No kura-server replica is scraped.
+      - alert: KuraDependencyFailing
+        expr: sum(rate(kura_unavailable_total[2m])) > 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: Requests fail with 503 on a dependency (PostgreSQL, object storage, Vault or Authentik); the warn logs name it.
+      - alert: KuraVaultFailing
+        expr: sum(increase(kura_vault_call_duration_seconds_count{outcome="error"}[10m])) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: Vault Transit calls fail; vaults without a cached key answer 503.
+      - alert: KuraNotifyLag
+        expr: max(kura_notify_lag_seconds) > 30
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: Notifications reach replicas more than 30 s late.
+      - alert: KuraNotifyQueueFilling
+        expr: max(kura_notify_queue_usage) > 0.5
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: PostgreSQL's NOTIFY queue is over half full; commits fail when it is full.
+      - alert: KuraChunkCorrupt
+        expr: increase(kura_chunk_corrupt_total[10m]) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: A stored chunk failed its check on read.
+      - alert: KuraConfigRejected
+        expr: increase(kura_config_rejected_total[10m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: A configuration change was refused; the previous one stays in force.
+      - alert: KuraDeletionScheduled
+        expr: max(kura_deletions_scheduled) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: A tenant or vault removed with Delete will be purged after its 30-day grace period.
+      - alert: KuraTenantAwaitingKeyDestruction
+        expr: max(kura_tenants_awaiting_key_destruction) > 0
+        labels: { severity: info }
+        annotations:
+          summary: A purged tenant's Transit key awaits an operator.
+      - alert: KuraVaultEpochChanged
+        expr: increase(kura_vault_epoch_changes_total[15m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: Vault epochs changed (promotion or restore); every device resyncs.
+      - alert: KuraTenantQuotaHigh
+        expr: max by (tenant) (kura_quota_used_ratio) > 0.9
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Tenant {{ $labels.tenant }} is above 90% of its quota."
+      - alert: KuraStorageMetricsStale
+        expr: time() - max(kura_storage_refreshed_timestamp_seconds) > 600
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: Storage and quota metrics have not been refreshed for 10 minutes; quota alerts act on stale data.
+      - alert: KuraMaintenanceFailing
+        expr: increase(kura_maintenance_failures_total[2h]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: Retention, garbage collection or a purge failed on a vault; see the warn logs.

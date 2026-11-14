@@ -392,3 +392,51 @@ async fn history_and_restore() {
         .await;
     assert_eq!(st, StatusCode::NOT_FOUND);
 }
+
+/// A pass from 0 crosses the horizon page by page: its later pages carry
+/// `start=0` and are served; only a pass that began below the horizon is 410
+/// (found when a 10,000-note vault with purged deletions would not attach).
+#[tokio::test]
+async fn a_pass_from_zero_pages_past_the_horizon() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    let (h, size) = s.blob("one of many").await;
+    let ops: Vec<Value> = (0..1001)
+        .map(|i| json!({ "op": "put", "entry": eid(), "path": format!("n/{i}.md"), "blob": h, "size": size }))
+        .collect();
+    let (st, b) = s.commit(json!(ops[..1000]), None).await;
+    assert_eq!(st, StatusCode::OK, "{b}");
+    let (st, b) = s.commit(json!(ops[1000..]), None).await;
+    assert_eq!(st, StatusCode::OK, "{b}");
+    let last = s.put(&eid(), "gone.md", "doomed", None).await;
+    s.delete(
+        last["entry"].as_str().unwrap(),
+        last["revision"].as_str().unwrap(),
+    )
+    .await;
+    s.sql("UPDATE revision SET created_at = now() - interval '100 days' WHERE path = 'gone.md'")
+        .await;
+    assert_eq!(s.pass().await.entries, 1);
+    let (_, p1) = s.changes("since=0").await;
+    let next = p1["next"].as_str().unwrap().to_owned();
+    assert_eq!(next, "1000");
+    let (st, b) = s.changes(&format!("since={next}")).await;
+    assert_eq!(
+        (st, problem(&b)),
+        (StatusCode::GONE, "/v1/problems/cursor_expired"),
+        "a cursor of 1000 alone is stale"
+    );
+    let (st, p2) = s.changes(&format!("since={next}&start=0")).await;
+    assert_eq!(st, StatusCode::OK, "{p2}");
+    let (st, b) = s.changes(&format!("since={next}&start=5")).await;
+    assert_eq!(
+        (st, problem(&b)),
+        (StatusCode::GONE, "/v1/problems/cursor_expired")
+    );
+    let (st, b) = s.changes("since=3&start=9").await;
+    assert_eq!(
+        (st, problem(&b)),
+        (StatusCode::BAD_REQUEST, "/v1/problems/invalid_request")
+    );
+}

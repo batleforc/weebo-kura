@@ -192,6 +192,22 @@ async fn upload_resumes_from_missing_chunks_and_manifests_check_out() {
         json!([hb.to_string()]),
         "only what is missing is re-sent"
     );
+    // A full batch of 1,000 hashes (about 67 KB) fits the route's body limit;
+    // the 64 KiB default refused it with 413 (found by perf/attach.sh).
+    let many: Vec<String> = (0..1000u32)
+        .map(|i| ChunkHash::of(&i.to_le_bytes()).to_string())
+        .collect();
+    let (st, r) = e
+        .call(
+            "POST",
+            &format!("/v1/vaults/{v}/chunks/missing"),
+            &tok,
+            Some(&d),
+            Some(json!({ "hashes": many })),
+        )
+        .await;
+    assert_eq!(st.as_u16(), 200, "{r}");
+    assert_eq!(r["missing"].as_array().unwrap().len(), 1000);
     // A manifest naming a missing chunk is refused; complete, it is stored.
     let size = (a.len() + b.len()) as u64;
     let bh = blob_hash(size, &[ha, hb]).to_string();

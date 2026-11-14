@@ -1,0 +1,14 @@
+{{- if .Values.monitoring.prometheusRule.enabled }}
+# The alerts of §10.1, from files/alerts.yaml, which `task alerts:test`
+# unit-tests with promtool.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "kura.name" . }}
+  labels: {{- include "kura.labels" . | nindent 4 }}
+spec:
+  {{- .Files.Get "files/alerts.yaml" | nindent 2 }}
+  {{- if not .Values.backupsWaived }}
+    {{- (.Files.Get "files/backup-alerts.yaml" | fromYaml).groups | toYaml | nindent 4 }}
+  {{- end }}
+{{- end }}

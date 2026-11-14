@@ -190,10 +190,13 @@ pub trait Remote {
     ) -> Result<(), RemoteError>;
     async fn get_blob(&self, hash: &ChunkHash) -> Result<(u64, Vec<ChunkHash>), RemoteError>;
     async fn commit(&self, req: &CommitRequest) -> Result<CommitResponse, RemoteError>;
+    /// `start` is the cursor the pass began from (`since` for its first
+    /// page): the server checks its horizon against it.
     async fn changes(
         &self,
         since: u64,
         epoch: Option<Uuid>,
+        start: u64,
     ) -> Result<ChangesResponse, RemoteError>;
 }
 
@@ -320,7 +323,7 @@ async fn resync<H: Host, R: Remote>(
     let mut server: HashMap<EntryId, EntryState> = HashMap::new();
     let mut pos = 0;
     let epoch = loop {
-        let page = remote.changes(pos, None).await?;
+        let page = remote.changes(pos, None, 0).await?;
         let before = pos;
         for item in page.items {
             pos = pos.max(item.seq);
@@ -797,9 +800,10 @@ async fn pull<H: Host, R: Remote>(
     // the next run fetches it again, while later pages still arrive (review
     // 3.6 S2, S3).
     let mut pos = state.cursor;
+    let start = state.cursor;
     let mut held = false;
     loop {
-        let page = remote.changes(pos, state.epoch).await?;
+        let page = remote.changes(pos, state.epoch, start).await?;
         state.epoch = Some(page.epoch);
         let before = pos;
         for item in &page.items {

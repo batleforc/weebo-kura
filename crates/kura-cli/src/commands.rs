@@ -102,8 +102,14 @@ async fn session(ctx: &Ctx, cfg: &mut Config) -> Result<Api, Fail> {
     let mut api = Api {
         http,
         server: cfg.server.clone(),
-        token,
+        token: api::Token::new(token),
         device: cfg.device,
+        // A script's fixed token is never renewed.
+        renew: ctx.access_token.is_none().then(|| api::Renew {
+            issuer: cfg.issuer.clone(),
+            client_id: cfg.client_id.clone(),
+            home: ctx.home.clone(),
+        }),
     };
     // A device purged after 180 days idle is re-registered silently (§4.4).
     match api.vaults().await {
@@ -163,8 +169,9 @@ pub async fn login(
     let api = Api {
         http,
         server: server.clone(),
-        token,
+        token: api::Token::new(token),
         device: None,
+        renew: None,
     };
     let device = match api.register(&name, "desktop").await {
         Ok(d) => d,

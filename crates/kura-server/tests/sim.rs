@@ -268,10 +268,15 @@ impl Remote for AppRemote<'_> {
         &self,
         since: u64,
         epoch: Option<Uuid>,
+        start: u64,
     ) -> Result<ChangesResponse, RemoteError> {
         let e = epoch.map(|e| format!("&epoch={e}")).unwrap_or_default();
-        self.json("GET", &format!("/changes?since={since}{e}"), None)
-            .await
+        self.json(
+            "GET",
+            &format!("/changes?since={since}&start={start}{e}"),
+            None,
+        )
+        .await
     }
 }
 

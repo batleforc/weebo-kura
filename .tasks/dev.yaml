@@ -114,6 +114,7 @@ tasks:
               -e AUTHENTIK_POSTGRESQL__USER=authentik -e AUTHENTIK_POSTGRESQL__PASSWORD=authentik \
               -e AUTHENTIK_BOOTSTRAP_EMAIL=admin@kura.local \
               -e AUTHENTIK_ERROR_REPORTING__ENABLED=false -e AUTHENTIK_DISABLE_UPDATE_CHECK=true \
+              -e AUTHENTIK_THROTTLE__PROVIDERS__OAUTH2__DEVICE=1000/hour \
               -v ./dev/authentik/blueprints:/blueprints/kura:ro,Z -v ./dev/certs/localhost.pem:/certs/localhost.pem:ro,Z -v ./dev/certs/localhost.key:/certs/localhost.key:ro,Z \
               {{.AK_IMAGE}} {{.ITEM}}
           fi
@@ -163,14 +164,14 @@ tasks:
       - task: dev:seed
 
   dev:run:
-    desc: "Run kura-server against the local stack (task dev:stack first): API on 127.0.0.1:58080, metrics on 127.0.0.1:59090"
+    desc: "Run kura-server against the local stack (task dev:stack first): API on 127.0.0.1:58080, metrics on 127.0.0.1:59090 (RELEASE=1 for an optimised build, as the perf tasks want)"
     env:
       KURA_VAULT_TOKEN: kura-dev
       KURA_CONFIG_DIR: dev/config
       # Trust the local CA for the https issuer.
       SSL_CERT_FILE: dev/certs/ca.pem
     cmds:
-      - cargo run -p kura-server -- --config dev/server.yaml
+      - cargo run {{if .RELEASE}}--release{{end}} -p kura-server -- --config dev/server.yaml
 
   dev:maintain:
     desc: "Run one maintenance pass now against the local stack (retention, garbage collection, the Delete purge), outside the off-peak window"
@@ -179,6 +180,11 @@ tasks:
       SSL_CERT_FILE: dev/certs/ca.pem
     cmds:
       - cargo run -q -p kura-server -- maintain --config dev/server.yaml
+
+  dev:drill:
+    desc: "The restore drill on the local stack: back up PostgreSQL and the bucket, lose the objects, restore both, regenerate the epochs, decrypt a sample of chunks"
+    cmds:
+      - dev/drill.sh
 
   dev:token:
     desc: "Print an access token for a dev user from the local Authentik, by the device code flow with no browser (usage: task dev:token [AS=alice], alice, bob or carol)"

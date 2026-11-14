@@ -38,7 +38,7 @@ export interface KuraRemote {
   putBlob(hash: string, size: number, chunks: string[]): Promise<void>;
   getBlob(hash: string): Promise<{ size: number; chunks: string[] }>;
   commit(request: unknown): Promise<unknown>;
-  changes(since: number, epoch: string | null): Promise<unknown>;
+  changes(since: number, epoch: string | null, start: number): Promise<unknown>;
 }
 "#;
 
@@ -89,6 +89,7 @@ extern "C" {
         this: &JsRemote,
         since: f64,
         epoch: Option<String>,
+        start: f64,
     ) -> Result<JsValue, JsValue>;
 }
 
@@ -309,13 +310,14 @@ impl Remote for RemoteAdapter {
         &self,
         since: u64,
         epoch: Option<Uuid>,
+        start: u64,
     ) -> Result<ChangesResponse, RemoteError> {
         #[expect(clippy::cast_precision_loss, reason = "seq values are below 2^53")]
-        let since = since as f64;
+        let (since, start) = (since as f64, start as f64);
         decode(
             &self
                 .0
-                .changes(since, epoch.map(|e| e.to_string()))
+                .changes(since, epoch.map(|e| e.to_string()), start)
                 .await
                 .map_err(remote_err)?,
         )

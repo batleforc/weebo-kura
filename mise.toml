@@ -31,6 +31,11 @@ spectral = "latest"
 pnpm = "latest"
 "cargo:wasm-bindgen-cli" = "0.2.130"
 "aqua:WebAssembly/binaryen" = "latest"
+# Phase 6: the Helm chart (lint, render, schema check), alert unit tests, load tests.
+helm = "latest"
+kubeconform = "latest"
+"aqua:prometheus/prometheus" = "latest"
+k6 = "latest"
 
 [env]
 # Nightly only for `cargo fuzz`, pinned by date so a fuzz run is reproducible.

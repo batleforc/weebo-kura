@@ -538,3 +538,61 @@ async fn a_rewound_server_gets_everything_back() {
         "nothing trashed"
     );
 }
+
+/// §6.2 "refresh once, then sign in", within one run: an access token that
+/// expires during a long command (found by perf/attach.sh at 10,000 notes)
+/// is renewed from the stored refresh token, rotated, and the request sent
+/// again; a fixed `KURA_ACCESS_TOKEN` is never renewed.
+#[tokio::test]
+async fn an_expired_access_token_is_renewed_mid_run() {
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::routing::get;
+    use kura_cli::api::{Api, Renew, Token};
+
+    // A server accepting only the renewed token.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = format!("http://{}", listener.local_addr().unwrap());
+    let router = axum::Router::new().route(
+        "/v1/devices",
+        get(|h: HeaderMap| async move {
+            if h.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bearer renewed") {
+                (StatusCode::OK, axum::Json(serde_json::json!([])))
+            } else {
+                (
+                    StatusCode::UNAUTHORIZED,
+                    axum::Json(
+                        serde_json::json!({ "type": "/v1/problems/invalid_token", "status": 401 }),
+                    ),
+                )
+            }
+        }),
+    );
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    let issuer = fake_issuer("renewed".into()).await;
+    let home = dir("home-renew");
+    kura_cli::config::set_refresh_token(&home, Some("r1")).unwrap();
+    let api = Api {
+        http: kura_cli::api::http().unwrap(),
+        server: server.clone(),
+        token: Token::new("expired".into()),
+        device: None,
+        renew: Some(Renew {
+            issuer,
+            client_id: "kura-cli".into(),
+            home: home.clone(),
+        }),
+    };
+    api.devices().await.unwrap();
+    assert_eq!(api.token.get(), "renewed");
+    assert_eq!(
+        kura_cli::config::refresh_token(&home).unwrap().as_deref(),
+        Some("r2"),
+        "the rotated refresh token is stored"
+    );
+    let fixed = Api {
+        token: Token::new("expired".into()),
+        renew: None,
+        ..api
+    };
+    assert_eq!(fixed.devices().await.unwrap_err().kind(), "invalid_token");
+}

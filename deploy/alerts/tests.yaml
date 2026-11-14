@@ -1,0 +1,126 @@
+# promtool unit tests of the chart's alerts (task alerts:test).
+rule_files: [../helm/kura/files/alerts.yaml, ../helm/kura/files/backup-alerts.yaml]
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - { series: 'kura_ready{pod="a"}', values: '1 0 0 0 0' }
+      - { series: 'kura_ready{pod="b"}', values: '0 0 0 0 0' }
+    alert_rule_test:
+      - { eval_time: 1m, alertname: KuraUnready, exp_alerts: [] }
+      - eval_time: 4m
+        alertname: KuraUnready
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations: { summary: No kura-server replica has a configuration loaded. }
+  - interval: 1m
+    input_series:
+      - { series: 'up{job="other"}', values: '1x10' }
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: KuraDown
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations: { summary: No kura-server replica is scraped. }
+  - interval: 1m
+    input_series:
+      - { series: 'kura_unavailable_total', values: '0 5 10 15 20 25 30' }
+      - { series: 'kura_vault_call_duration_seconds_count{outcome="error"}', values: '0 0 0 0 0 0 1' }
+      - { series: 'kura_vault_call_duration_seconds_count{outcome="ok"}', values: '0 9 18 27 36 45 54' }
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: KuraDependencyFailing
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations: { summary: "Requests fail with 503 on a dependency (PostgreSQL, object storage, Vault or Authentik); the warn logs name it." }
+      - eval_time: 6m
+        alertname: KuraVaultFailing
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations: { summary: "Vault Transit calls fail; vaults without a cached key answer 503." }
+  - interval: 1m
+    input_series:
+      - { series: 'kura_notify_lag_seconds{pod="a"}', values: '0.2 45 45 45 45 45 45 45' }
+      - { series: 'kura_notify_queue_usage{pod="a"}', values: '0 0.6 0.6' }
+    alert_rule_test:
+      - { eval_time: 3m, alertname: KuraNotifyLag, exp_alerts: [] }
+      - eval_time: 7m
+        alertname: KuraNotifyLag
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations: { summary: Notifications reach replicas more than 30 s late. }
+      - eval_time: 2m
+        alertname: KuraNotifyQueueFilling
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations: { summary: "PostgreSQL's NOTIFY queue is over half full; commits fail when it is full." }
+  - interval: 1m
+    input_series:
+      - { series: 'kura_chunk_corrupt_total', values: '0 0 1 1' }
+      - { series: 'kura_config_rejected_total', values: '0 0 0 1' }
+      - { series: 'kura_vault_epoch_changes_total', values: '0 2 2 2' }
+      - { series: 'kura_deletions_scheduled', values: '0 1 1 1' }
+      - { series: 'kura_tenants_awaiting_key_destruction', values: '0 0 0 1' }
+      - { series: 'kura_maintenance_failures_total', values: '0 0 1 1' }
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: KuraChunkCorrupt
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations: { summary: A stored chunk failed its check on read. }
+      - eval_time: 3m
+        alertname: KuraConfigRejected
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations: { summary: A configuration change was refused; the previous one stays in force. }
+      - eval_time: 3m
+        alertname: KuraVaultEpochChanged
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations: { summary: Vault epochs changed (promotion or restore); every device resyncs. }
+      - eval_time: 3m
+        alertname: KuraDeletionScheduled
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations: { summary: A tenant or vault removed with Delete will be purged after its 30-day grace period. }
+      - { eval_time: 2m, alertname: KuraTenantAwaitingKeyDestruction, exp_alerts: [] }
+      - eval_time: 3m
+        alertname: KuraTenantAwaitingKeyDestruction
+        exp_alerts:
+          - exp_labels: { severity: info }
+            exp_annotations: { summary: "A purged tenant's Transit key awaits an operator." }
+      - eval_time: 3m
+        alertname: KuraMaintenanceFailing
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations: { summary: "Retention, garbage collection or a purge failed on a vault; see the warn logs." }
+  - interval: 1m
+    input_series:
+      - { series: 'kura_quota_used_ratio{tenant="maxime",pod="a"}', values: '0.95x20' }
+      - { series: 'kura_quota_used_ratio{tenant="other",pod="a"}', values: '0.5x20' }
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: KuraTenantQuotaHigh
+        exp_alerts:
+          - exp_labels: { severity: warning, tenant: maxime }
+            exp_annotations: { summary: Tenant maxime is above 90% of its quota. }
+  - interval: 1m
+    input_series:
+      - { series: 'kura_storage_refreshed_timestamp_seconds', values: '0x30' }
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: KuraStorageMetricsStale
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations: { summary: "Storage and quota metrics have not been refreshed for 10 minutes; quota alerts act on stale data." }
+  - interval: 1m
+    input_series:
+      # The last copy finished at 1h: missing from 37h on (plus 15m).
+      - { series: 'kura_backup_last_success_timestamp_seconds', values: '3600x2500' }
+    alert_rule_test:
+      - { eval_time: 30h, alertname: KuraBackupMissing, exp_alerts: [] }
+      - eval_time: 40h
+        alertname: KuraBackupMissing
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations: { summary: "No bucket copy has completed for 36 hours (kura-server backup); restores would lose recent content." }

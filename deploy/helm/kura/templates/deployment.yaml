@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kura.name" . }}
+  labels: {{- include "kura.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels: {{- include "kura.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "kura.selector" . | nindent 8 }}
+      annotations:
+        # server.yaml is read at start; the documents are re-read live, so
+        # only the former restarts the pods.
+        checksum/server: {{ toYaml .Values.server | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      securityContext: { fsGroup: 65532 }
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "kura.selector" . | nindent 14 }}
+      # Sockets and running commits drain on SIGTERM (§6.11).
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: kura-server
+          image: {{ include "kura.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [--config, /etc/kura/server/server.yaml]
+          env:
+            - { name: KURA_CONFIG_DIR, value: /etc/kura/config }
+          ports:
+            - { name: api, containerPort: 8080 }
+            - { name: metrics, containerPort: 9090 }
+          livenessProbe:
+            httpGet: { path: /healthz, port: api }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /readyz, port: api }
+            periodSeconds: 5
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext: {{- include "kura.securityContext" . | nindent 12 }}
+          volumeMounts:
+            - { name: server, mountPath: /etc/kura/server, readOnly: true }
+            # Never with subPath: the files must follow the ConfigMap (§6.10).
+            - { name: documents, mountPath: /etc/kura/config, readOnly: true }
+      volumes:
+        - name: server
+          configMap: { name: {{ include "kura.name" . }}-server }
+        - name: documents
+          configMap: { name: {{ include "kura.name" . }}-documents }

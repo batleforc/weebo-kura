@@ -158,6 +158,7 @@ impl Remote for Scripted {
         &self,
         since: u64,
         epoch: Option<Uuid>,
+        _start: u64,
     ) -> Result<ChangesResponse, RemoteError> {
         if self.rewound && epoch.is_some_and(|e| !e.is_nil()) {
             return Err(RemoteError::Problem {

@@ -30,6 +30,10 @@ pub struct ChangesQuery {
     pub since: u64,
     /// The epoch the cursor was read under; a different one answers 410.
     pub epoch: Option<Uuid>,
+    /// The cursor this pass began from, when `since` is a later page of it:
+    /// the horizon is checked against it, since a pass from 0 crosses the
+    /// horizon page by page without having missed anything (absent: `since`).
+    pub start: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -121,7 +125,18 @@ pub async fn get_changes(
     if q.epoch.is_some_and(|e| e != head.epoch) || since > head.head_seq {
         return Err(ApiError::of(ProblemType::HistoryRewound));
     }
-    if since > 0 && since < head.horizon_seq {
+    let start = match q.start {
+        Some(s) if s > q.since => {
+            return Err(ApiError::with_detail(
+                ProblemType::InvalidRequest,
+                "start is after since",
+            ));
+        }
+        Some(s) => i64::try_from(s).unwrap_or(i64::MAX),
+        None => since,
+    };
+    // A client that lies about `start` only misses deletions itself.
+    if start > 0 && start < head.horizon_seq {
         return Err(ApiError::of(ProblemType::CursorExpired));
     }
     let rows = sqlx::query(concat!(

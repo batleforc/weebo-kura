@@ -183,7 +183,9 @@ export class FakeServer {
     }
     if (method === "GET" && path === "/changes") {
       const since = Number(u.searchParams.get("since") ?? "0");
-      if (since > 0 && since < this.horizon) return json(410, { type: "/v1/problems/cursor_expired" });
+      // As the server: the horizon is checked against the pass's start.
+      const start = Number(u.searchParams.get("start") ?? String(since));
+      if (start > 0 && start < this.horizon) return json(410, { type: "/v1/problems/cursor_expired" });
       const items = [...this.entries.values()].filter((e) => e.seq > since).sort((a, b) => a.seq - b.seq);
       return json(200, { epoch: this.epoch, headSeq: this.seq, items });
     }

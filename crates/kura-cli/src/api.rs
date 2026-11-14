@@ -98,13 +98,47 @@ async fn exchange(r: reqwest::RequestBuilder) -> Result<reqwest::Response, Remot
     check(r.send().await.map_err(unreachable)?).await
 }
 
+/// The current access token, replaced when it is renewed.
+#[derive(Clone, Default)]
+pub struct Token(std::sync::Arc<std::sync::Mutex<String>>);
+
+impl Token {
+    pub fn new(t: String) -> Self {
+        Self(std::sync::Arc::new(std::sync::Mutex::new(t)))
+    }
+
+    pub fn get(&self) -> String {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn set(&self, t: String) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = t;
+    }
+}
+
+/// Where a refused access token is renewed from: the stored refresh token
+/// (§6.2: refresh once, then sign in). Absent with `KURA_ACCESS_TOKEN`.
+#[derive(Clone)]
+pub struct Renew {
+    pub issuer: String,
+    pub client_id: String,
+    pub home: std::path::PathBuf,
+}
+
 /// The server, as one signed-in device.
 #[derive(Clone)]
 pub struct Api {
     pub http: reqwest::Client,
     pub server: String,
-    pub token: String,
+    pub token: Token,
     pub device: Option<Uuid>,
+    pub renew: Option<Renew>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -143,7 +177,6 @@ impl Api {
                 method,
                 format!("{}/v1{path}", self.server.trim_end_matches('/')),
             )
-            .bearer_auth(&self.token)
             .header("x-kura-client", CLIENT);
         if let Some(d) = self.device {
             r = r.header("x-kura-device", d.to_string());
@@ -151,11 +184,52 @@ impl Api {
         r
     }
 
+    /// Sends with the current token; an access token that expired during a
+    /// long run (an attach of thousands of files outlives it) is renewed
+    /// once and the request sent again.
+    async fn exchange(&self, r: reqwest::RequestBuilder) -> Result<reqwest::Response, RemoteError> {
+        let again = r.try_clone();
+        match exchange(r.bearer_auth(self.token.get())).await {
+            Err(e) if e.kind() == "invalid_token" && self.renew.is_some() => {
+                let Some(again) = again else { return Err(e) };
+                let fresh = self.renew().await?;
+                exchange(again.bearer_auth(fresh)).await
+            }
+            other => other,
+        }
+    }
+
+    async fn renew(&self) -> Result<String, RemoteError> {
+        let signed_out = |detail: String| RemoteError::Problem {
+            status: 401,
+            kind: "invalid_token".into(),
+            detail: Some(detail),
+        };
+        let Some(rn) = &self.renew else {
+            return Err(signed_out("no refresh token".into()));
+        };
+        let refresh = crate::config::refresh_token(&rn.home)
+            .map_err(signed_out)?
+            .ok_or_else(|| signed_out("no refresh token".into()))?;
+        let d = oidc::discover(&self.http, &rn.issuer)
+            .await
+            .map_err(|e| signed_out(e.to_string()))?;
+        let t = oidc::refresh(&self.http, &d, &rn.client_id, &refresh)
+            .await
+            .map_err(|e| signed_out(e.to_string()))?;
+        // The rotated refresh token is stored before the new access token is used.
+        if let Some(r) = &t.refresh_token {
+            crate::config::set_refresh_token(&rn.home, Some(r)).map_err(signed_out)?;
+        }
+        self.token.set(t.access_token.clone());
+        Ok(t.access_token)
+    }
+
     async fn json<T: DeserializeOwned>(
         &self,
         r: reqwest::RequestBuilder,
     ) -> Result<T, RemoteError> {
-        let r = exchange(r).await?;
+        let r = self.exchange(r).await?;
         let b = body(r, MAX_JSON).await?;
         serde_json::from_slice(&b)
             .map_err(|e| RemoteError::Unavailable(format!("unexpected answer: {e}")))
@@ -178,7 +252,7 @@ impl Api {
 
     pub async fn revoke(&self, id: Uuid) -> Result<(), RemoteError> {
         let r = self.req(reqwest::Method::DELETE, &format!("/devices/{id}"));
-        exchange(r).await.map(drop)
+        self.exchange(r).await.map(drop)
     }
 
     pub async fn entries(
@@ -302,11 +376,14 @@ impl Remote for VaultRemote<'_> {
             .req(reqwest::Method::PUT, &format!("/chunks/{hash}"))
             .header("content-type", "application/octet-stream")
             .body(data.to_vec());
-        exchange(r).await.map(drop)
+        self.api.exchange(r).await.map(drop)
     }
 
     async fn get_chunk(&self, hash: &ChunkHash) -> Result<Vec<u8>, RemoteError> {
-        let r = exchange(self.req(reqwest::Method::GET, &format!("/chunks/{hash}"))).await?;
+        let r = self
+            .api
+            .exchange(self.req(reqwest::Method::GET, &format!("/chunks/{hash}")))
+            .await?;
         body(r, MAX_CHUNK).await
     }
 
@@ -319,7 +396,7 @@ impl Remote for VaultRemote<'_> {
         let r = self
             .req(reqwest::Method::PUT, &format!("/blobs/{hash}"))
             .json(&json!({ "size": size, "chunks": chunks }));
-        exchange(r).await.map(drop)
+        self.api.exchange(r).await.map(drop)
     }
 
     async fn get_blob(&self, hash: &ChunkHash) -> Result<(u64, Vec<ChunkHash>), RemoteError> {
@@ -345,10 +422,11 @@ impl Remote for VaultRemote<'_> {
         &self,
         since: u64,
         epoch: Option<Uuid>,
+        start: u64,
     ) -> Result<ChangesResponse, RemoteError> {
         let mut r = self
             .req(reqwest::Method::GET, "/changes")
-            .query(&[("since", since.to_string())]);
+            .query(&[("since", since.to_string()), ("start", start.to_string())]);
         if let Some(e) = epoch {
             r = r.query(&[("epoch", e.to_string())]);
         }

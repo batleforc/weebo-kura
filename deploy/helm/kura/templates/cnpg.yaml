@@ -1,0 +1,84 @@
+{{- if .Values.cnpg.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.cnpg.name }}-bootstrap
+  labels: {{- include "kura.labels" . | nindent 4 }}
+data:
+  bootstrap-roles.sql: {{ .Files.Get "files/bootstrap-roles.sql" | quote }}
+---
+# Two instances, asynchronous replication, barman WAL archiving and base
+# backups (§10.3, decision 48). The server's LISTEN connection needs no
+# pooler in front: none is created.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ .Values.cnpg.name }}
+  labels: {{- include "kura.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.cnpg.instances }}
+  storage:
+    size: {{ .Values.cnpg.storage.size }}
+    {{- with .Values.cnpg.storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+  bootstrap:
+    initdb:
+      database: kura
+      # The migration owner; its `<name>-app` Secret holds its URL.
+      owner: kura_owner
+      # kura_app and its timeouts (crates/kura-server/sql/bootstrap-roles.sql).
+      postInitApplicationSQLRefs:
+        configMapRefs:
+          - { name: {{ .Values.cnpg.name }}-bootstrap, key: bootstrap-roles.sql }
+  {{- if .Values.cnpg.backup.destinationPath }}
+  backup:
+    retentionPolicy: {{ .Values.cnpg.backup.retention }}
+    barmanObjectStore:
+      destinationPath: {{ .Values.cnpg.backup.destinationPath }}
+      {{- with .Values.cnpg.backup.endpointURL }}
+      endpointURL: {{ . }}
+      {{- end }}
+      s3Credentials:
+        accessKeyId: { name: {{ .Values.cnpg.backup.credentialsSecret }}, key: ACCESS_KEY_ID }
+        secretAccessKey: { name: {{ .Values.cnpg.backup.credentialsSecret }}, key: ACCESS_SECRET_KEY }
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ .Values.cnpg.name }}-daily
+  labels: {{- include "kura.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.cnpg.backup.schedule | quote }}
+  cluster: { name: {{ .Values.cnpg.name }} }
+  {{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+# PostgreSQL admits the server and the migration Job, the operator, the
+# instances' own replication, and Prometheus on the exporter port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.cnpg.name }}
+  labels: {{- include "kura.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { cnpg.io/cluster: {{ .Values.cnpg.name }} }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: kura, app.kubernetes.io/instance: {{ .Release.Name }} }
+        - podSelector:
+            matchLabels: { cnpg.io/cluster: {{ .Values.cnpg.name }} }
+      ports: [{ port: 5432 }]
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.cnpg.operatorNamespace }} }
+      ports: [{ port: 8000 }, { port: 5432 }]
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace }} }
+      ports: [{ port: 9187 }]
+{{- end }}
+{{- end }}

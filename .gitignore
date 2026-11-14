@@ -56,3 +56,4 @@ dev/certs/
 plugin/src/wasm/
 plugin/main.js
 plugin/coverage/
+perf/results/

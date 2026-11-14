@@ -44,6 +44,8 @@ pub struct Hub {
     replica: Uuid,
     /// Cancelled at shutdown, so sockets close and the server can drain.
     pub closing: CancellationToken,
+    /// `kura_ws_connections`, when the hub belongs to a served state.
+    open: Option<prometheus::IntGauge>,
 }
 
 impl Default for Hub {
@@ -53,6 +55,7 @@ impl Default for Hub {
             sockets: Mutex::default(),
             replica: Uuid::new_v4(),
             closing: CancellationToken::new(),
+            open: None,
         }
     }
 }
@@ -65,6 +68,9 @@ pub struct Seat<'a> {
 
 impl Drop for Seat<'_> {
     fn drop(&mut self) {
+        if let Some(g) = &self.hub.open {
+            g.dec();
+        }
         let mut s = self
             .hub
             .sockets
@@ -80,6 +86,14 @@ impl Drop for Seat<'_> {
 }
 
 impl Hub {
+    /// A hub counting its sockets in `open`.
+    pub fn counting(open: prometheus::IntGauge) -> Self {
+        Self {
+            open: Some(open),
+            ..Self::default()
+        }
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.tx.subscribe()
     }
@@ -92,6 +106,9 @@ impl Hub {
             return None;
         }
         *n = n.saturating_add(1);
+        if let Some(g) = &self.open {
+            g.inc();
+        }
         Some(Seat { hub: self, device })
     }
 
@@ -100,12 +117,19 @@ impl Hub {
         drop(self.tx.send(e));
     }
 
-    fn handle(&self, payload: &str, last_beat: &mut tokio::time::Instant) {
+    /// Applies one payload; returns the lag in milliseconds of this
+    /// replica's own heartbeat (`beat:<replica>:<sent at, unix ms>`).
+    fn handle(&self, payload: &str, last_beat: &mut tokio::time::Instant) -> Option<u64> {
         match payload.split_once(':') {
-            Some(("beat", r)) if r == self.replica.to_string() => {
-                *last_beat = tokio::time::Instant::now()
+            Some(("beat", r)) => {
+                let (replica, sent) = r.split_once(':').unwrap_or((r, ""));
+                if replica != self.replica.to_string() {
+                    return None;
+                }
+                *last_beat = tokio::time::Instant::now();
+                let sent: u64 = sent.parse().ok()?;
+                return Some(unix_ms().saturating_sub(sent));
             }
-            Some(("beat", _)) => {}
             Some(("revoked", d)) => {
                 if let Ok(device) = d.parse() {
                     self.publish(Event::Revoked { device });
@@ -118,7 +142,18 @@ impl Hub {
             }
             None => {}
         }
+        None
     }
+}
+
+fn unix_ms() -> u64 {
+    u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or_default()
 }
 
 /// `NOTIFY` a vault's new head, inside the commit's transaction: delivered
@@ -187,17 +222,26 @@ pub async fn listen(
                     return;
                 }
                 _ = beat.tick() => {
+                    // A beat not back yet is lag too: the gauge rises while
+                    // LISTEN stalls instead of keeping its last good value.
+                    let late = last_beat.elapsed().saturating_sub(HEARTBEAT).as_secs_f64();
+                    if late > hub.metrics.notify_lag_seconds.get() {
+                        hub.metrics.notify_lag_seconds.set(late);
+                    }
                     if last_beat.elapsed() > HEARTBEAT.saturating_mul(2) {
                         tracing::warn!("LISTEN heartbeat missed twice, reconnecting");
                         break;
                     }
-                    let sent = sqlx::query("SELECT pg_notify($1, $2), kura_ws_ticket_purge()")
-                        .bind(CHANNEL)
-                        .bind(format!("beat:{}", hub_ref.replica))
-                        .execute(&pool)
-                        .await;
-                    if let Err(e) = sent {
-                        tracing::warn!(error = %e, "heartbeat not sent");
+                    let sent = sqlx::query_scalar::<_, f64>(
+                        "SELECT pg_notification_queue_usage() FROM (SELECT pg_notify($1, $2), kura_ws_ticket_purge()) beat",
+                    )
+                    .bind(CHANNEL)
+                    .bind(format!("beat:{}:{}", hub_ref.replica, unix_ms()))
+                    .fetch_one(&pool)
+                    .await;
+                    match sent {
+                        Ok(usage) => hub.metrics.notify_queue_usage.set(usage),
+                        Err(e) => tracing::warn!(error = %e, "heartbeat not sent"),
                     }
                     // A promotion the pool did not see as a reconnect (§6.3).
                     match crate::db::epoch_check(&pool).await {
@@ -210,7 +254,11 @@ pub async fn listen(
                     }
                 }
                 n = listener.try_recv() => match n {
-                    Ok(Some(n)) => hub_ref.handle(n.payload(), &mut last_beat),
+                    Ok(Some(n)) => {
+                        if let Some(ms) = hub_ref.handle(n.payload(), &mut last_beat) {
+                            hub.metrics.notify_lag_seconds.set(ms as f64 / 1000.0);
+                        }
+                    }
                     // Lost and re-established by sqlx: notifications may be lost.
                     Ok(None) => hub_ref.publish(Event::Pull),
                     Err(e) => {
@@ -248,6 +296,12 @@ mod tests {
         hub.handle(&format!("{v}:42"), &mut beat);
         hub.handle(&format!("revoked:{d}"), &mut beat);
         hub.handle("garbage", &mut beat);
+        let own = format!("beat:{}:{}", hub.replica, unix_ms().saturating_sub(40));
+        assert!(hub.handle(&own, &mut beat).is_some_and(|ms| ms >= 40));
+        assert_eq!(
+            hub.handle(&format!("beat:{}:1", Uuid::new_v4()), &mut beat),
+            None
+        );
         hub.handle("x:y", &mut beat);
         assert_eq!(rx.try_recv().unwrap(), Event::Change { vault: v, seq: 42 });
         assert_eq!(rx.try_recv().unwrap(), Event::Revoked { device: d });

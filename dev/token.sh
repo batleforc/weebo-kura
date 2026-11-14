@@ -11,7 +11,15 @@ ak=${KURA_DEV_AUTHENTIK:-https://localhost:59443}
 here=$(cd "$(dirname "$0")" && pwd)
 c() { curl -sf --cacert "$here/certs/ca.pem" "$@"; }
 
-device=$(c -d client_id=kura-cli -d 'scope=openid profile email offline_access' "$ak/application/o/device/")
+# Authentik answers 429 slow_down to device requests in quick succession
+# (RFC 8628 §3.5): wait and ask again, for up to two minutes; asking more
+# often keeps the throttle on.
+device=""
+for _ in $(seq 6); do
+  device=$(c -d client_id=kura-cli -d 'scope=openid profile email offline_access' "$ak/application/o/device/") && break
+  sleep 20
+done
+[ -n "$device" ] || { echo "token.sh: no device code from $ak" >&2; exit 1; }
 "$here/approve.sh" "$(jq -r .user_code <<<"$device")" "$user" "$password"
 c -d client_id=kura-cli -d grant_type=urn:ietf:params:oauth:grant-type:device_code \
   --data-urlencode device_code="$(jq -r .device_code <<<"$device")" "$ak/application/o/token/" | jq -r .access_token

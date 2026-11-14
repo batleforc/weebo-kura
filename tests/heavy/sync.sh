@@ -25,8 +25,15 @@ as() { # as <who> <kura args…>: runs kura with that user's home and a fresh to
 curl -sf "$server/readyz" >/dev/null || fail "no server on $server: task dev:run"
 cargo build -q -p kura-cli
 declare -A tokens=([alice]=$("$root/dev/token.sh" alice) [bob]=$("$root/dev/token.sh" bob))
-as alice login --server "$server" --issuer "$issuer" --device-name "heavy-a" >/dev/null
-as bob login --server "$server" --issuer "$issuer" --device-name "heavy-b" >/dev/null
+as alice login --server "$server" --issuer "$issuer" --device-name "heavy-a-$$" >/dev/null
+as bob login --server "$server" --issuer "$issuer" --device-name "heavy-b-$$" >/dev/null
+# The devices of this run are revoked at the end: 20 live devices per user (§4.4).
+cleanup() {
+  as alice devices revoke "heavy-a-$$" >/dev/null 2>&1 || true
+  as bob devices revoke "heavy-b-$$" >/dev/null 2>&1 || true
+  rm -rf "$work"
+}
+trap cleanup EXIT
 
 # 7. Two devices edit the same paragraph offline.
 mkdir -p "$work/a" "$work/b"

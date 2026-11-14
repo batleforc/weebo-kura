@@ -96,6 +96,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(metrics: Metrics, db: sqlx::PgPool, verifier: Verifier) -> Self {
+        let hub = crate::notify::Hub::counting(metrics.ws_connections.clone());
         Self {
             ready: AtomicBool::new(false),
             metrics,
@@ -104,7 +105,7 @@ impl AppState {
             limits: crate::limits::RateLimiter::default(),
             http: HttpSettings::default(),
             storage: None,
-            hub: crate::notify::Hub::default(),
+            hub,
             snapshot: RwLock::new(None),
             rejection: Mutex::new(None),
         }
@@ -224,14 +225,22 @@ fn v1_router() -> OpenApiRouter<SharedState> {
         .routes(routes!(vaults::list_vaults, vaults::create_vault))
         .routes(routes!(vaults::delete_vault))
         .routes(routes!(vaults::put_binding, vaults::delete_binding))
-        .routes(routes!(chunks::missing_chunks))
         .routes(routes!(changes::get_changes))
         .routes(routes!(changes::get_entries))
         .routes(routes!(commits::get_revisions))
         .routes(routes!(commits::restore_revision))
         .routes(routes!(events::create_ticket))
         .routes(routes!(events::events))
-        .routes(routes!(chunks::put_blob, chunks::get_blob))
+        .merge(
+            // 1,000 hashes (about 67 KB of JSON) and a large file's manifest
+            // do not fit in 64 KiB either (found by the first-attach run).
+            OpenApiRouter::new()
+                .routes(routes!(chunks::missing_chunks))
+                .routes(routes!(chunks::put_blob, chunks::get_blob))
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    commits::MAX_COMMIT_BYTES,
+                )),
+        )
         .merge(
             // 1,000 operations do not fit in 64 KiB.
             OpenApiRouter::new()
@@ -340,6 +349,17 @@ async fn audit_denials(State(state): State<SharedState>, request: Request, next:
         .and_then(|h| h.to_str().ok())
         .map(str::to_owned);
     let response = next.run(request).await;
+    match response.extensions().get::<ProblemType>() {
+        Some(t @ (ProblemType::CursorExpired | ProblemType::HistoryRewound)) => {
+            state
+                .metrics
+                .resync_total
+                .with_label_values(&[t.name()])
+                .inc();
+        }
+        Some(ProblemType::Unavailable) => state.metrics.unavailable_total.inc(),
+        _ => {}
+    }
     if let Some(t) = response
         .extensions()
         .get::<ProblemType>()

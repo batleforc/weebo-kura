@@ -18,6 +18,8 @@ kura-server migrate                             apply the database migrations, t
 kura-server dump-spec                           print the OpenAPI document
 kura-server maintain [--config …]               one maintenance pass now (§12), then exit
 kura-server reset-epochs                        restore runbook: a new epoch for every vault (§12), as the owner
+kura-server backup [--config …]                 copy new objects to the second bucket under the backup lock (§12)
+kura-server check-chunks --sample N [--config …] decrypt N random chunks, fail on a bad one (§12)
 ```
 
 | Variable | Read by | Value |
@@ -25,6 +27,7 @@ kura-server reset-epochs                        restore runbook: a new epoch for
 | `KURA_DATABASE_URL` | serve, migrate, reset-epochs | PostgreSQL URL. `migrate` always reads it (the owner's credentials). `serve` reads the `kura_app` URL from Vault KV when `vault` is configured; this variable overrides it for local runs |
 | `KURA_VAULT_TOKEN` | serve | Local runs only: a Vault token instead of Kubernetes auth |
 | `KURA_CONFIG_DIR` | serve | The directory of resource documents, mounted from a ConfigMap without `subPath` |
+| `KURA_BACKUP_ENDPOINT`, `_BUCKET`, `_REGION`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY` | backup | The second bucket |
 | `RUST_LOG` | serve | Log filter, `info` by default. Logs are JSON; audit events use the target `audit` |
 
 Ports: the API on `8080`, Prometheus metrics on `9090` (never exposed by the
@@ -210,10 +213,30 @@ revocation. Devices idle 180 days are purged daily; revoked ones are kept.
 | `QuotaBelowUsage` condition | in `GET /v1/admin/status`, a tenant storing more than its quota |
 | `429` with `Retry-After` | per-device rate limits (§4.4), held in each replica's memory |
 | `kura_vault_epoch_changes_total` | epochs regenerated after a promotion or a restore: alert on any (every device resyncs) |
+| `kura_commit_duration_seconds` | commit time; the budget is 200 ms at p95 (§10.3) |
+| `kura_notify_lag_seconds`, `kura_notify_queue_usage` | a replica's heartbeat round trip through `NOTIFY`; `pg_notification_queue_usage()` |
+| `kura_ws_connections` | open notification sockets per replica |
+| `kura_vault_call_duration_seconds{outcome}` | Vault Transit calls |
+| `kura_resync_total{outcome}` | `410` answers: devices running a full resync |
+| `kura_unavailable_total` | `503` answers from a failed dependency; the `warn` log line names it |
+| `kura_chunk_bytes_stored`, `kura_dedup_ratio`, `kura_quota_used_ratio` (by `tenant`) | storage, refreshed every minute |
+| `kura_deletions_scheduled` | tenants and vaults removed with `Delete`, in their grace period |
+| `kura_backup_last_success_timestamp_seconds`, `kura_storage_refreshed_timestamp_seconds` | the last bucket copy; the last storage refresh |
 | `kura_maintenance_failures_total` | vaults whose maintenance failed in a pass (the others went on): alert on a rise |
 | `kura_maintenance_deleted_total{outcome}` | revisions, entries, blobs, chunks, objects, orphans and purged vaults removed by maintenance |
 | `kura_tenants_awaiting_key_destruction` | tenants purged by `Delete` whose Transit key an operator must destroy: alert on any |
 | Log target `audit`, `vault_purged` | a vault purged after its `Delete` grace period |
+
+The chart's PrometheusRule ([`files/alerts.yaml`](../deploy/helm/kura/files/alerts.yaml),
+each alert unit-tested by `task alerts:test`) raises: no replica ready, no
+replica scraped, dependency failures and Vault failures for 2 minutes,
+notification lag above 30 s for 5 minutes, the `NOTIFY` queue over half
+full, a corrupt chunk, a refused configuration, a deletion scheduled with
+`Delete`, a tenant awaiting key destruction, an epoch change, a tenant above
+90% of its quota, stale storage metrics, a failed maintenance pass, and no
+bucket copy for 36 hours. Search's `index_queue_depth`
+comes with search. Logs carry a span per request (method, route template,
+status, duration); there is no trace export yet.
 
 ## 9. The `kura` CLI
 
@@ -267,7 +290,10 @@ Rootless podman, one container at a time, every port on loopback:
 |---|---|
 | `task dev:stack` | PostgreSQL 18 (55433), OpenBao 2.7 dev mode (58200, token `kura-dev`), RustFS (59000), Authentik 2026.8 (https://localhost:59443), then `dev:seed` |
 | `task dev:seed` | OpenBao KV `mv/kura/{database,bucket}`, Transit key `kura-dev`, database `kura`, `kura_app`, migrations |
-| `task dev:run` | `kura-server` with `dev/server.yaml` and `dev/config/` (API 58080, metrics 59090) |
+| `task dev:run [RELEASE=1]` | `kura-server` with `dev/server.yaml` and `dev/config/` (API 58080, metrics 59090); `RELEASE=1` for the perf tasks |
+| `task dev:maintain` | One maintenance pass now |
+| `task dev:drill` | The restore drill of §12 on the local stack |
+| `task perf:run:commit`, `:pull`, `:resync`, `perf:attach`, `perf:soak` | k6 load (§10.3), decision 42's first attach of 10,000 notes, the memory soak |
 | `task dev:token [AS=alice]` | An access token by the device code flow, no browser |
 | `task dev:down` | Removes the containers and the network |
 | `task test:heavy` | The §6.P proof with the real `kura` binary, once `dev:run` serves |
@@ -311,19 +337,81 @@ pause:
 
 `kura-server maintain` runs one pass at once (`task dev:maintain` locally).
 
-**Backups.** PostgreSQL first, then the bucket copy, then Vault's Raft
-snapshot (§10.3). The backup job, connected to the `kura` database
-(advisory locks are per database), holds the PostgreSQL advisory lock
-`7743220896921379691` (`0x6b7572616261636b`) for the whole run, on one
-session, with `pg_advisory_lock`: steps 3 and 4 delete nothing while it is
-held, so the bucket copy has every object the dump names.
+**Backups.** Three parts, all required (§10.3):
 
-**Restore.** Restore all three together, run `kura-server migrate`, then
-`kura-server reset-epochs` as the owner. Every device then gets
-`410 history_rewound` and pushes back what the backup lacked, deleting
-nothing. A failover to a standby needs no step: the new timeline changes the
-epochs by itself (`kura_vault_epoch_changes_total`). A planned switchover
-changes the timeline too, so every device resyncs under `history_rewound`
-then: nothing is deleted, but an edit the old primary had not replicated
-comes back as a conflict file, and a deletion it had not replicated is
-undone.
+1. PostgreSQL: CloudNativePG archives the WAL continuously and takes a base
+   backup daily (`cnpg.backup` in the chart), so it can be recovered to any
+   point in time.
+2. The bucket: `kura-server backup` (the chart's `backup` CronJob, outside
+   the maintenance window) takes the backup lock `7743220896921379691`
+   (`0x6b7572616261636b`, per database: it connects to `kura`), so
+   maintenance deletes no chunk or object meanwhile, records the database
+   time **T**, copies every object the second bucket lacks (keys are unique
+   per upload, so a present key is the same bytes), checks it still holds
+   the lock, writes `backups/<T>.keys` (every key at T) and
+   `backups/<T>.json`, records the run (`kura_backup_last_success_timestamp_seconds`,
+   alert `KuraBackupMissing` after 36 hours), and releases the lock. Any
+   other backup tool must hold the same lock while it copies. The second
+   bucket is never pruned by the tool. To prune it, delete only keys that
+   **no kept** `backups/<T>.keys` lists: never by age, since a chunk keeps
+   its key for as long as a note keeps it.
+3. Vault: a Raft snapshot **after** each bucket copy, kept as long as the
+   restore points it covers; never trim a Transit key version older than
+   the oldest kept base backup.
+
+**Restore** (the drill, `task dev:drill` locally):
+
+1. Restore Vault's first snapshot taken after T: an older one may lack
+   the Transit key of a tenant created before T.
+2. Recover PostgreSQL to **T** of the bucket copy you restore
+   (CloudNativePG `bootstrap.recovery` with `recoveryTarget.targetTime`):
+   every object the database names at T was in that copy.
+3. Copy the second bucket's objects back (`rclone copy` or `mc mirror`).
+4. `kura-server migrate`, then `kura-server reset-epochs`, as the owner.
+5. `kura-server check-chunks --sample 200`, with the owner's
+   `KURA_DATABASE_URL`: decrypts random chunks with their vault's key and
+   checks their address; it fails on any bad one.
+
+Every device then gets `410 history_rewound` and pushes back what the
+backup lacked, deleting nothing. A failover to a standby needs no step: the
+new timeline changes the epochs by itself (`kura_vault_epoch_changes_total`).
+A planned switchover changes the timeline too, so every device resyncs
+under `history_rewound` then: nothing is deleted, but an edit the old
+primary had not replicated comes back as a conflict file, and a deletion it
+had not replicated is undone.
+
+## 13. Installing with Helm
+
+The chart is `deploy/helm/kura` (`task helm:lint` renders and validates it).
+Prerequisites (§13 of the RFC): the CloudNativePG operator and the
+Prometheus operator CRDs, Vault with the KV secrets, a Transit key
+`kura-<tenant>` per tenant and the Kubernetes auth role `kura` bound to the
+ServiceAccount `kura` with [`deploy/vault/kura-server.hcl`](../deploy/vault/kura-server.hcl),
+Authentik as in §6, a DNS name and its TLS Secret.
+
+```bash
+helm install kura deploy/helm/kura -n kura --create-namespace -f my-values.yaml
+```
+
+| Values | What |
+| --- | --- |
+| `server` | `server.yaml` (§3), rendered as is; `listen` is set by the chart |
+| `documents` | the tenant and vault documents, one key per file, re-read live |
+| `ingress.host`, `ingress.tlsSecret` | the API's public name; metrics are never routed |
+| `server.trustedProxies` | the ingress controller's pod CIDR |
+| `cnpg.*` | a two-instance CloudNativePG cluster with barman (`cnpg.backup.destinationPath`), its bootstrap creating `kura_app`; off: set `migrate.databaseUrlSecret` |
+| `backup.*` | the bucket copy CronJob and the Secret naming the second bucket (`KURA_BACKUP_*`) |
+| `monitoring.*` | the ServiceMonitor and the PrometheusRule of §8 |
+
+After the first install (the CloudNativePG cluster and its owner Secret
+exist only then; the server waits, refusing an empty schema) and before
+every upgrade, a hook Job runs `kura-server migrate` with the owner's URL
+(`<cnpg.name>-app`). The chart refuses to render without the PostgreSQL
+and bucket backups unless `backupsWaived: true`. Pods run as UID 65532 with a read-only
+root filesystem, two replicas spread over nodes, a disruption budget of one,
+and NetworkPolicies admitting the API from `networkPolicy.ingressNamespace`,
+metrics from `networkPolicy.monitoringNamespace`, and PostgreSQL only from
+kura's pods, its own instances and the CloudNativePG operator
+(`cnpg.operatorNamespace`). After installing,
+create the `kura_app` login password (CloudNativePG managed role, or
+`ALTER ROLE`) and store its URL in the KV path `vault.secrets.database`.

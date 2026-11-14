@@ -3,6 +3,7 @@
 pub mod app;
 pub mod auth;
 pub mod authz;
+pub mod backup;
 pub mod config;
 pub mod db;
 pub mod limits;
@@ -44,6 +45,11 @@ pub fn background(
             shutdown.clone(),
         )),
         Box::pin(app::devices::purge_loop(state.db.clone(), shutdown.clone())),
+        Box::pin(metrics::refresh_storage(
+            state.db.clone(),
+            state.metrics.clone(),
+            shutdown.clone(),
+        )),
         Box::pin(notify::listen(
             state.db.clone(),
             state.clone(),

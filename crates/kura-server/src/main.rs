@@ -8,7 +8,7 @@ use anyhow::Context as _;
 use kura_server::{app, config::ServerConfig, metrics::Metrics};
 use tokio_util::sync::CancellationToken;
 
-const USAGE: &str = "usage: kura-server [--config <server.yaml>] | kura-server dump-spec | kura-server migrate | kura-server reset-epochs | kura-server maintain [--config <server.yaml>]";
+const USAGE: &str = "usage: kura-server [--config <server.yaml>] | kura-server dump-spec | kura-server migrate | kura-server reset-epochs | kura-server maintain [--config <server.yaml>] | kura-server backup [--config <server.yaml>] | kura-server check-chunks --sample <n> [--config <server.yaml>]";
 
 /// Database URL until phase 2 reads the credentials from Vault KV (plan D15).
 const DATABASE_URL_ENV: &str = "KURA_DATABASE_URL";
@@ -29,6 +29,14 @@ async fn main() -> ExitCode {
         ["reset-epochs"] => reset_epochs().await,
         ["maintain"] => maintain(PathBuf::from("/etc/kura/server.yaml")).await,
         ["maintain", "--config", path] => maintain(PathBuf::from(path)).await,
+        ["backup"] => backup(PathBuf::from("/etc/kura/server.yaml")).await,
+        ["backup", "--config", path] => backup(PathBuf::from(path)).await,
+        ["check-chunks", "--sample", n] => {
+            check_chunks(PathBuf::from("/etc/kura/server.yaml"), n).await
+        }
+        ["check-chunks", "--sample", n, "--config", path] => {
+            check_chunks(PathBuf::from(path), n).await
+        }
         [] => run(PathBuf::from("/etc/kura/server.yaml")).await,
         ["--config", path] => run(PathBuf::from(path)).await,
         _ => Err(anyhow::anyhow!(USAGE)),
@@ -82,10 +90,13 @@ async fn connect(
 )> {
     // Credentials from Vault KV when `vault` is configured (decision 48);
     // KURA_DATABASE_URL overrides it for local runs.
+    let metrics = Metrics::new()?;
     let vault = match &config.vault {
-        Some(v) => Some(std::sync::Arc::new(
-            kura_server::vault::Vault::connect(v).await?,
-        )),
+        Some(v) => {
+            let v = kura_server::vault::Vault::connect(v).await?;
+            v.measure(metrics.vault_call_duration_seconds.clone());
+            Some(std::sync::Arc::new(v))
+        }
         None => None,
     };
     let url = match (std::env::var(DATABASE_URL_ENV).ok(), &vault) {
@@ -95,7 +106,6 @@ async fn connect(
             anyhow::bail!("set {DATABASE_URL_ENV}, or configure `vault` in server.yaml")
         }
     };
-    let metrics = Metrics::new()?;
     let pool =
         kura_server::db::connect(&url, 16, Some(metrics.vault_epoch_changes_total.clone())).await?;
     kura_server::db::check_schema(&pool).await?;
@@ -145,6 +155,42 @@ async fn maintain(config_path: PathBuf) -> anyhow::Result<()> {
         Some(r) => println!("{r:?}"),
         None => println!("another maintenance pass is running"),
     }
+    Ok(())
+}
+
+/// The bucket half of a backup (§10.3): every new object copied to the
+/// bucket named by `KURA_BACKUP_*`, under the backup lock. Prints the point
+/// in time to recover PostgreSQL to.
+async fn backup(config_path: PathBuf) -> anyhow::Result<()> {
+    let config = ServerConfig::load(&config_path)?;
+    let var = |n: &str| std::env::var(n).with_context(|| format!("{n} is not set"));
+    let target = kura_server::store::s3(&kura_server::vault::BucketSecret {
+        endpoint: var("KURA_BACKUP_ENDPOINT")?,
+        bucket: var("KURA_BACKUP_BUCKET")?,
+        region: var("KURA_BACKUP_REGION").unwrap_or_else(|_| "us-east-1".into()),
+        access_key_id: var("KURA_BACKUP_ACCESS_KEY_ID")?,
+        secret_access_key: var("KURA_BACKUP_SECRET_ACCESS_KEY")?,
+    })?;
+    let (state, _, _) = connect(&config).await?;
+    let r = kura_server::backup::copy(&state, target.as_ref()).await?;
+    println!("{}", serde_json::to_string(&r)?);
+    Ok(())
+}
+
+/// The restore drill's check: decrypts a random sample of chunks; fails if
+/// any does not open or does not match its address. Run with the owner's
+/// `KURA_DATABASE_URL`.
+async fn check_chunks(config_path: PathBuf, n: &str) -> anyhow::Result<()> {
+    let n: u32 = n.parse().context("--sample takes a number")?;
+    let config = ServerConfig::load(&config_path)?;
+    // The sample crosses tenants: the owner's URL, as `reset-epochs`.
+    let owner = std::env::var(DATABASE_URL_ENV)
+        .with_context(|| format!("{DATABASE_URL_ENV} (the owner's URL) is not set"))?;
+    let (state, _, _) = connect(&config).await?;
+    let pool = kura_server::db::connect(&owner, 1, None).await?;
+    let (checked, failed) = kura_server::backup::check_chunks(&state, &pool, n).await?;
+    println!("{checked} chunks checked, {failed} failed");
+    anyhow::ensure!(failed == 0, "{failed} chunks failed their check");
     Ok(())
 }
 

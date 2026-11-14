@@ -1,0 +1,31 @@
+version: "3"
+
+vars:
+  CHART: deploy/helm/kura
+  # CRD schemas (ServiceMonitor, PrometheusRule, CloudNativePG) for kubeconform.
+  CRDS: https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{"{{"}}.Group{{"}}"}}/{{"{{"}}.ResourceKind{{"}}"}}_{{"{{"}}.ResourceAPIVersion{{"}}"}}.json
+
+tasks:
+  helm:lint:
+    desc: "Lint the Helm chart, validate its renders (defaults, then every option on) with kubeconform, and check its copy of bootstrap-roles.sql"
+    cmds:
+      - helm lint --strict {{.CHART}}
+      - |
+        set -e
+        # The defaults refuse to render without backups (§10.3).
+        if helm template kura {{.CHART}} >/dev/null 2>&1; then echo "the chart rendered without backups"; exit 1; fi
+        for opts in "--set cnpg.backup.destinationPath=s3://b/p --set backup.enabled=true" "--set backupsWaived=true" "--set backupsWaived=true --set cnpg.enabled=false --set migrate.databaseUrlSecret.name=db --set ingress.enabled=false --set networkPolicy.enabled=false --set monitoring.serviceMonitor.enabled=false --set monitoring.prometheusRule.enabled=false"; do
+          # shellcheck disable=SC2086
+          helm template kura {{.CHART}} $opts | kubeconform -strict -summary -kubernetes-version 1.34.0 -schema-location default -schema-location '{{.CRDS}}'
+        done
+      # The chart cannot read files outside itself: it keeps a copy, never a different one.
+      - diff -u crates/kura-server/sql/bootstrap-roles.sql {{.CHART}}/files/bootstrap-roles.sql
+
+  alerts:test:
+    desc: "Check the chart's alert rules and run their promtool unit tests; every alert needs a test"
+    cmds:
+      - promtool check rules {{.CHART}}/files/alerts.yaml {{.CHART}}/files/backup-alerts.yaml
+      - cd deploy/alerts && promtool test rules tests.yaml
+      - |
+        missing=$(comm -23 <(grep -hoP '^\s+- alert: \K\w+' {{.CHART}}/files/alerts.yaml {{.CHART}}/files/backup-alerts.yaml | sort -u) <(grep -oP 'alertname: \K\w+' deploy/alerts/tests.yaml | sort -u))
+        [ -z "$missing" ] || { echo "alerts without a test: $missing"; exit 1; }

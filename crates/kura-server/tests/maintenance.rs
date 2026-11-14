@@ -430,3 +430,149 @@ async fn restored_document_cancels_deletion() {
         .unwrap();
     assert_eq!(left, 0);
 }
+
+/// §10.1: the phase 6 metrics move with real traffic (PR 6.1).
+#[tokio::test]
+async fn storage_commit_and_resync_metrics_move() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    let (b, size) = s.put_file(&[7u8; 1000]).await;
+    for path in ["a.md", "copy of a.md"] {
+        s.commit(
+            json!({ "op": "put", "entry": Uuid::now_v7(), "path": path, "blob": b, "size": size }),
+        )
+        .await;
+    }
+    let m = &s.e.state.metrics;
+    assert_eq!(m.commit_duration_seconds.get_sample_count(), 2);
+    kura_server::metrics::storage_once(&s.e.t.app, m)
+        .await
+        .unwrap();
+    let stored = m.chunk_bytes_stored.with_label_values(&["maxime"]).get();
+    assert!(stored >= 1000.0, "{stored}");
+    let dedup = m.dedup_ratio.with_label_values(&["maxime"]).get();
+    assert!(dedup > 1.5, "two files, one stored copy: {dedup}");
+    assert_eq!(m.deletions_scheduled.get(), 0);
+    let quota = m.quota_used_ratio.with_label_values(&["maxime"]).get();
+    assert!(quota > 0.0 && quota < 0.01, "{quota}");
+    let (st, _) =
+        s.e.call(
+            "GET",
+            &format!("/v1/vaults/{}/changes?since=999", s.v),
+            &s.tok,
+            Some(&s.d),
+            None,
+        )
+        .await;
+    assert_eq!(st, StatusCode::GONE);
+    assert_eq!(
+        m.resync_total.with_label_values(&["history_rewound"]).get(),
+        1
+    );
+}
+
+/// §10.3, PR 6.4: the bucket copy runs under the backup lock, copies only
+/// what the second bucket lacks and names the point in time to recover
+/// PostgreSQL to; the drill's check decrypts chunks and catches a bad one.
+#[tokio::test]
+async fn backup_copies_new_objects_and_the_drill_check_catches_corruption() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    let (b, size) = s.put_file(b"backed up").await;
+    s.commit(
+        json!({ "op": "put", "entry": Uuid::now_v7(), "path": "a.md", "blob": b, "size": size }),
+    )
+    .await;
+    s.put_file(b"another file").await;
+    // The second location: the same test bucket under a prefix of its own.
+    let target = object_store::prefix::PrefixStore::new(
+        s.st.objects(),
+        format!("backup-{}", Uuid::new_v4()),
+    );
+    let first = kura_server::backup::copy(&s.e.state, &target)
+        .await
+        .unwrap();
+    assert_eq!((first.objects, first.copied), (2, 2), "{first:?}");
+    let manifest = object_store::path::Path::from(format!("backups/{}.json", first.recover_to));
+    assert!(target.head(&manifest).await.is_ok());
+    let keys = target
+        .get(&object_store::path::Path::from(format!(
+            "backups/{}.keys",
+            first.recover_to
+        )))
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&keys).lines().count(),
+        2,
+        "the key list of T"
+    );
+    let again = kura_server::backup::copy(&s.e.state, &target)
+        .await
+        .unwrap();
+    assert_eq!((again.objects, again.copied), (2, 0), "keys are immutable");
+    // Each completed copy is recorded, for the backup alert.
+    kura_server::metrics::storage_once(&s.e.t.app, &s.e.state.metrics)
+        .await
+        .unwrap();
+    assert!(
+        s.e.state
+            .metrics
+            .backup_last_success_timestamp_seconds
+            .get()
+            > 0.0
+    );
+    // The serving role cannot sample other tenants' chunks.
+    assert!(
+        sqlx::query("SELECT kura_sample_chunks(1)")
+            .execute(&s.e.t.app)
+            .await
+            .is_err()
+    );
+    // A maintenance pass holding the lock: the copy waits, then gives up.
+    let mut held = s.e.t.owner.acquire().await.unwrap();
+    sqlx::query("SELECT pg_advisory_lock_shared($1)")
+        .bind(BACKUP_LOCK)
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    let busy =
+        kura_server::backup::copy_waiting(&s.e.state, &target, std::time::Duration::ZERO).await;
+    assert!(
+        matches!(busy, Err(kura_server::backup::BackupError::Busy(_))),
+        "{busy:?}"
+    );
+    sqlx::query("SELECT pg_advisory_unlock_all()")
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    // The drill's check: every sampled chunk opens, until one is damaged.
+    assert_eq!(
+        kura_server::backup::check_chunks(&s.e.state, &s.e.t.owner, 10)
+            .await
+            .unwrap(),
+        (2, 0)
+    );
+    let key: String = sqlx::query_scalar("SELECT object_key FROM chunk LIMIT 1")
+        .fetch_one(&s.e.t.owner)
+        .await
+        .unwrap();
+    s.st.objects()
+        .put(
+            &object_store::path::Path::from(key.as_str()),
+            b"\x01\x00garbage".to_vec().into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        kura_server::backup::check_chunks(&s.e.state, &s.e.t.owner, 10)
+            .await
+            .unwrap(),
+        (2, 1)
+    );
+}

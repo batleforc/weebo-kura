@@ -1,0 +1,108 @@
+# weebo-kura (RFC 0001). The defaults run two replicas against a
+# CloudNativePG cluster this chart can create, read the database and bucket
+# credentials from Vault, and expose the API through a Traefik ingress.
+
+image:
+  repository: ghcr.io/batleforc/kura-server
+  # Defaults to the chart's appVersion; pin a digest in production.
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+
+replicas: 2
+
+# server.yaml (RFC 0001 §4.1), rendered as is. `vault` is required in a
+# cluster: the database URL and the bucket come from Vault KV (decision 48).
+server:
+  oidc:
+    issuer: https://auth.example.org/
+    discovery: https://auth.example.org/application/o/kura-cli/
+    audiences: [kura-cli, kura-plugin]
+    platformAdmin: { claim: groups, value: kura-platform-admins }
+  # The ingress controller's pod CIDR, so client addresses survive the proxy.
+  trustedProxies: []
+  vault:
+    address: https://vault.vault:8200
+    kubernetesAuth: { mount: kubernetes, role: kura }
+    secrets: { database: mv/data/kura/database, bucket: mv/data/kura/bucket }
+    transit: { mount: transit }
+  maintenance:
+    window: "01:00-05:00"
+
+# The resource documents (KuraTenant, KuraVault), one key per file. They are
+# re-read live: no restart on change (§6.10).
+documents: {}
+  # tenants.yaml: |
+  #   apiVersion: kura.weebo.io/v1alpha1
+  #   kind: KuraTenant
+  #   ...
+
+serviceAccount:
+  # The Kubernetes auth role `kura` in Vault binds this account.
+  name: kura
+
+ingress:
+  enabled: true
+  className: traefik
+  host: kura.example.org
+  tlsSecret: kura-tls
+  annotations: {}
+
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits: { memory: 512Mi }
+
+# The migration Job runs before every install and upgrade, as the database
+# owner (§13). Without cnpg.enabled, name the Secret holding the owner's URL.
+migrate:
+  databaseUrlSecret: { name: "", key: uri }
+
+podDisruptionBudget:
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  # Namespaces allowed to reach the API (the ingress controller's) and the
+  # metrics port (Prometheus').
+  ingressNamespace: traefik
+  monitoringNamespace: monitoring
+
+monitoring:
+  serviceMonitor: { enabled: true, interval: 30s }
+  prometheusRule: { enabled: true }
+
+# A CloudNativePG cluster of two instances with barman backups (§10.3,
+# decision 48). Its `<name>-app` Secret is the owner's URL for migrations.
+cnpg:
+  enabled: true
+  name: kura-db
+  instances: 2
+  storage: { size: 10Gi, storageClass: "" }
+  # Where the CloudNativePG operator runs: its NetworkPolicy lets it in.
+  operatorNamespace: cnpg-system
+  backup:
+    # s3://bucket/path, on a location other than the kura bucket.
+    destinationPath: ""
+    endpointURL: ""
+    # A Secret with ACCESS_KEY_ID and ACCESS_SECRET_KEY.
+    credentialsSecret: kura-db-backup
+    retention: 30d
+    schedule: "0 0 0 * * *"
+
+# §10.3 requires all three backups (PostgreSQL, the bucket, Vault). The
+# chart refuses to render without `cnpg.backup.destinationPath` (when it
+# creates the cluster) and `backup.enabled`, unless this is true: a test
+# install, or backups done by other means (then alert on them yourself).
+backupsWaived: false
+
+# The bucket half of the backup (§6.9, §10.3): `kura-server backup` holds
+# the backup lock, records the time T, copies every new object to a second
+# bucket, then releases the lock. CloudNativePG archives the WAL
+# continuously, so a restore recovers PostgreSQL to T (see the operator
+# guide). Run it outside the maintenance window.
+backup:
+  enabled: false
+  schedule: "30 23 * * *"
+  # A Secret with KURA_BACKUP_ENDPOINT, KURA_BACKUP_BUCKET,
+  # KURA_BACKUP_REGION, KURA_BACKUP_ACCESS_KEY_ID, KURA_BACKUP_SECRET_ACCESS_KEY.
+  targetSecret: kura-backup-target

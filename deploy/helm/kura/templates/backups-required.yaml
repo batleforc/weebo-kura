@@ -1,0 +1,9 @@
+{{- /* §10.3: no install without its backups, unless waived on purpose. */ -}}
+{{- if not .Values.backupsWaived }}
+{{- if not .Values.backup.enabled }}
+{{- fail "backup.enabled is false: the bucket would have no backup (RFC 0001 §10.3). Enable it, or set backupsWaived: true" }}
+{{- end }}
+{{- if and .Values.cnpg.enabled (not .Values.cnpg.backup.destinationPath) }}
+{{- fail "cnpg.backup.destinationPath is empty: PostgreSQL would have no backup (RFC 0001 §10.3). Set it, or set backupsWaived: true" }}
+{{- end }}
+{{- end }}

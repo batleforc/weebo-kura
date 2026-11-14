@@ -98,6 +98,8 @@ pub struct Vault {
     /// A fixed token (local runs, tests); `None`: Kubernetes auth.
     token: Option<String>,
     client: tokio::sync::RwLock<VaultClient>,
+    /// `kura_vault_call_duration_seconds`, once the server registers it.
+    calls: std::sync::OnceLock<prometheus::HistogramVec>,
 }
 
 impl Vault {
@@ -130,6 +132,7 @@ impl Vault {
             config: config.clone(),
             token,
             client: tokio::sync::RwLock::new(client),
+            calls: std::sync::OnceLock::new(),
         };
         vault.login().await?;
         Ok(vault)
@@ -176,6 +179,20 @@ impl Vault {
         self.read(&self.config.secrets.bucket).await
     }
 
+    /// Times every Transit call into `h`, by outcome (§10.1).
+    pub fn measure(&self, h: prometheus::HistogramVec) {
+        drop(self.calls.set(h));
+    }
+
+    fn timed<T, E>(&self, start: std::time::Instant, r: Result<T, E>) -> Result<T, E> {
+        if let Some(h) = self.calls.get() {
+            let outcome = if r.is_ok() { "ok" } else { "error" };
+            h.with_label_values(&[outcome])
+                .observe(start.elapsed().as_secs_f64());
+        }
+        r
+    }
+
     /// A new data key from Transit: `(plaintext, wrapped)`. The server's
     /// policy allows only `datakey`, `decrypt` and `rewrap` (§6.6).
     pub async fn new_data_key(
@@ -184,6 +201,7 @@ impl Vault {
     ) -> Result<(Zeroizing<Vec<u8>>, String), VaultError> {
         use vaultrs::api::transit::requests::DataKeyType;
         let client = self.client.read().await;
+        let start = std::time::Instant::now();
         let r = vaultrs::transit::generate::data_key(
             &*client,
             &self.config.transit.mount,
@@ -191,8 +209,8 @@ impl Vault {
             DataKeyType::Plaintext,
             None,
         )
-        .await
-        .map_err(client_err)?;
+        .await;
+        let r = self.timed(start, r).map_err(client_err)?;
         let plain = r
             .plaintext
             .ok_or_else(|| VaultError::Client("Transit returned no plaintext".into()))?;
@@ -206,6 +224,7 @@ impl Vault {
         wrapped: &str,
     ) -> Result<Zeroizing<Vec<u8>>, VaultError> {
         let client = self.client.read().await;
+        let start = std::time::Instant::now();
         let r = vaultrs::transit::data::decrypt(
             &*client,
             &self.config.transit.mount,
@@ -213,8 +232,8 @@ impl Vault {
             wrapped,
             None,
         )
-        .await
-        .map_err(client_err)?;
+        .await;
+        let r = self.timed(start, r).map_err(client_err)?;
         decode_b64(&r.plaintext)
     }
 }

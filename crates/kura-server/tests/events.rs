@@ -150,6 +150,19 @@ async fn a_commit_reaches_the_socket() {
         next(&mut ws).await,
         Ok(json!({ "type": "change", "seq": 1 }))
     );
+    assert_eq!(s.e.state.metrics.ws_connections.get(), 1);
+    drop(ws);
+    for _ in 0..50 {
+        if s.e.state.metrics.ws_connections.get() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        s.e.state.metrics.ws_connections.get(),
+        0,
+        "the seat is released"
+    );
     s.stop.cancel();
 }
 
