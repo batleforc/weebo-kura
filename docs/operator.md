@@ -177,10 +177,13 @@ refused.
 Each client registers once per install (`POST /v1/devices`, at most 20 live
 per user) and sends the returned id in `X-Kura-Device`. Revoking a device
 (`DELETE /v1/devices/{d}`, by its owner or a tenant admin) refuses it at once,
-and refuses every token of the same Authentik session (`sid`) on any device
-and for any new registration (plan D34); end the session in Authentik to
-invalidate the refresh token itself. A token without `sid` is refused. Devices idle 180
-days are purged daily; revoked ones are kept.
+and refuses every token of the same Authentik session on any device and for
+any new registration (plan D34, D48). The session is the token's `sid`, or,
+for the tokens Authentik issues on a refresh (which carry no `sid`), the
+owner's `auth_time`, the time that session signed in. End the session in
+Authentik to invalidate the refresh token itself. A token with neither claim
+is refused. Two sessions of one user signing in in the same second share a
+revocation. Devices idle 180 days are purged daily; revoked ones are kept.
 
 ## 8. Signals
 

@@ -122,11 +122,9 @@ pub async fn register_device(
         return Err(ApiError::of(ProblemType::InsufficientRole));
     }
     let sub = &caller.principal.sub;
-    let sid = caller
-        .principal
-        .sid
-        .as_deref()
-        .ok_or(ApiError::of(ProblemType::InvalidToken))?;
+    super::device::require_session(&caller.principal)?;
+    let sid = caller.principal.sid.as_deref();
+    let auth_time = caller.principal.auth_time;
     let mut tx = db::begin_subject(&state.db, sub).await?;
     // Serializes the registrations of one user, so the limit holds.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('kura.device:' || $1))")
@@ -134,9 +132,12 @@ pub async fn register_device(
         .execute(&mut *tx)
         .await?;
     let sid_revoked: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM device WHERE session_sid = $1 AND revoked_at IS NOT NULL)",
+        "SELECT EXISTS (SELECT 1 FROM device WHERE revoked_at IS NOT NULL
+                AND (session_sid = $1 OR (user_sub = $3 AND session_auth_time = $2)))",
     )
     .bind(sid)
+    .bind(auth_time)
+    .bind(sub)
     .fetch_one(&mut *tx)
     .await?;
     if sid_revoked {
@@ -153,13 +154,14 @@ pub async fn register_device(
         ));
     }
     let row = sqlx::query(
-        "INSERT INTO device (user_sub, session_sid, name, profile) VALUES ($1, $2, $3, $4)
+        "INSERT INTO device (user_sub, session_sid, session_auth_time, name, profile) VALUES ($1, $2, $5, $3, $4)
          RETURNING id, name, profile, created_at, last_seen, revoked_at",
     )
     .bind(sub)
     .bind(sid)
     .bind(name)
     .bind(body.profile.as_str())
+    .bind(auth_time)
     .fetch_one(&mut *tx)
     .await?;
     let created = device(&row, None)?;

@@ -73,3 +73,28 @@ as alice sync notes >/dev/null
 as bob sync notes >/dev/null
 [ ! -e "$work/b/.obsidian/plugins/x/main.js" ] || fail "11: the plugin reached bob"
 pass "11: dot-path refused by the server (422 invalid_path), not synced by the client"
+
+# D34 with Authentik's refresh: a real sign-in, commands on refreshed tokens
+# (no `sid`, the session's `auth_time`), then revocation refuses them (exit 2).
+home="$work/real"
+SSL_CERT_FILE="$root/dev/certs/ca.pem" KURA_CLI_HOME="$home" "$kura" login --server "$server" --issuer "$issuer" --device-name "heavy-real" >"$work/login" 2>&1 &
+login=$!
+code=""
+for _ in $(seq 20); do
+  code=$(awk 'NF==1 && /^[[:space:]]+[0-9A-Z-]+$/{print $1}' "$work/login")
+  [ -n "$code" ] && break
+  sleep 1
+done
+[ -n "$code" ] || fail "D34: no device code shown: $(cat "$work/login")"
+"$root/dev/approve.sh" "$code" bob
+wait "$login" || fail "D34: login failed: $(cat "$work/login")"
+real() { SSL_CERT_FILE="$root/dev/certs/ca.pem" KURA_CLI_HOME="$home" "$kura" "$@"; }
+real devices >/dev/null || fail "D34: a refreshed token was refused"
+real devices >/dev/null || fail "D34: a second refresh was refused"
+real devices revoke heavy-real >/dev/null
+set +e
+real devices >/dev/null 2>&1
+code=$?
+set -e
+[ "$code" = 2 ] || fail "D34: exit $code after revocation, expected 2"
+pass "D34: real sign-in, refreshed tokens accepted, refused after revocation"

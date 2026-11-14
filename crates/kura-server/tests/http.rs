@@ -91,6 +91,73 @@ async fn revoked_sid_cannot_register() {
     e.register(&fresh, "second").await;
 }
 
+/// D34 with Authentik's refresh: a refreshed token carries no `sid` but keeps
+/// the session's `auth_time`, which then stands for the session.
+#[tokio::test]
+async fn refreshed_token_without_sid_follows_its_session() {
+    let Some(e) = env(module_path!()).await else {
+        return;
+    };
+    let g = &["maxime-members"];
+    let signed_in = e.key.token_with("u1", Some("s-a"), Some(1000), g);
+    let laptop = e.register(&signed_in, "laptop").await;
+    let refreshed = e.key.token_with("u1", None, Some(1000), g);
+    let (s, _) = e
+        .call("GET", "/v1/devices", &refreshed, Some(&laptop), None)
+        .await;
+    assert_eq!(s, StatusCode::OK, "a refreshed token keeps working");
+    let other = e.key.token_with("u1", Some("s-b"), Some(2000), g);
+    let phone = e.register(&other, "phone").await;
+    let (s, _) = e
+        .call(
+            "DELETE",
+            &format!("/v1/devices/{laptop}"),
+            &other,
+            Some(&phone),
+            None,
+        )
+        .await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    // The revoked session, refreshed, is refused on every device and cannot register.
+    let (s, b) = e
+        .call("GET", "/v1/devices", &refreshed, Some(&phone), None)
+        .await;
+    assert_eq!(
+        (s, problem(&b)),
+        (StatusCode::UNAUTHORIZED, "/v1/problems/device_revoked")
+    );
+    let (s, b) = e
+        .call(
+            "POST",
+            "/v1/devices",
+            &refreshed,
+            None,
+            Some(json!({ "name": "evil", "profile": "mobile" })),
+        )
+        .await;
+    assert_eq!(
+        (s, problem(&b)),
+        (StatusCode::UNAUTHORIZED, "/v1/problems/device_revoked")
+    );
+    // The other session, refreshed, still works; a token naming no session does not.
+    let other_refreshed = e.key.token_with("u1", None, Some(2000), g);
+    let (s, _) = e
+        .call("GET", "/v1/devices", &other_refreshed, Some(&phone), None)
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let anonymous = e.key.token_with("u1", None, None, g);
+    let (s, b) = e
+        .call("GET", "/v1/devices", &anonymous, Some(&phone), None)
+        .await;
+    assert_eq!(
+        (s, problem(&b)),
+        (StatusCode::UNAUTHORIZED, "/v1/problems/invalid_token")
+    );
+    // Another user's session that signed in at the same second is not affected.
+    let u2 = e.key.token_with("u2", Some("s-c"), Some(1000), g);
+    e.register(&u2, "u2-laptop").await;
+}
+
 #[tokio::test]
 async fn device_ownership_and_limits() {
     let Some(e) = env(module_path!()).await else {

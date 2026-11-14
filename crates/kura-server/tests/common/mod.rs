@@ -186,15 +186,39 @@ pub mod tokens {
             }
         }
 
-        /// An access token for `sub` in session `sid`, carrying `groups`.
+        /// An access token for `sub` in session `sid`, carrying `groups`; its
+        /// `auth_time` is derived from `sid`, so one session has one.
         pub fn token(&self, sub: &str, sid: &str, groups: &[&str]) -> String {
+            let auth_time = sid
+                .bytes()
+                .fold(1_700_000_000_i64, |a, b| {
+                    a.wrapping_mul(31).wrapping_add(i64::from(b))
+                })
+                .rem_euclid(1 << 31);
+            self.token_with(sub, Some(sid), Some(auth_time), groups)
+        }
+
+        /// The session of a refreshed Authentik token: maybe no `sid`.
+        pub fn token_with(
+            &self,
+            sub: &str,
+            sid: Option<&str>,
+            auth_time: Option<i64>,
+            groups: &[&str],
+        ) -> String {
             let exp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs()
                 .saturating_add(3600);
-            let claims = json!({ "iss": ISSUER, "aud": "kura-cli", "sub": sub, "sid": sid, "exp": exp,
+            let mut claims = json!({ "iss": ISSUER, "aud": "kura-cli", "sub": sub, "exp": exp,
                                  "scope": "openid profile", "groups": groups });
+            if let Some(s) = sid {
+                claims["sid"] = json!(s);
+            }
+            if let Some(t) = auth_time {
+                claims["auth_time"] = json!(t);
+            }
             let mut header = Header::new(Algorithm::EdDSA);
             header.kid = Some("k1".into());
             encode(&header, &claims, &self.encoding).unwrap()

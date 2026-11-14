@@ -25,8 +25,12 @@ impl std::fmt::Debug for BearerToken {
 pub struct Principal {
     /// OIDC `sub`.
     pub sub: String,
-    /// Authentik session id, bound to devices (decision 35).
+    /// Authentik session id, bound to devices (decision 35); absent from
+    /// tokens issued on a refresh.
     pub sid: Option<String>,
+    /// `auth_time`: when the session signed in; kept on a refresh, so it
+    /// stands for the session when `sid` is absent (D34).
+    pub auth_time: Option<i64>,
     /// `exp`, seconds since the epoch.
     pub exp: u64,
     pub claims: Map<String, Value>,
@@ -41,9 +45,11 @@ impl Principal {
             .to_owned();
         let sid = claims.get("sid").and_then(Value::as_str).map(str::to_owned);
         let exp = claims.get("exp").and_then(Value::as_u64).unwrap_or(0);
+        let auth_time = claims.get("auth_time").and_then(Value::as_i64);
         Some(Self {
             sub,
             sid,
+            auth_time,
             exp,
             claims,
         })

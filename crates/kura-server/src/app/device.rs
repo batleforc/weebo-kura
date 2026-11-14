@@ -52,6 +52,15 @@ pub fn rate_limit(state: &SharedState, parts: &Parts, key: &str) -> Result<(), A
         .map_err(ApiError::RateLimited)
 }
 
+/// A token must name its session: `sid` on a sign-in, `auth_time` after a
+/// refresh (D34). One with neither cannot be tied to a revocation.
+pub fn require_session(p: &crate::auth::Principal) -> Result<(), ApiError> {
+    if p.sid.is_none() && p.auth_time.is_none() {
+        return Err(ApiError::of(ProblemType::InvalidToken));
+    }
+    Ok(())
+}
+
 /// Refuses a revoked device, and any device used with a token of a session
 /// whose device was revoked: otherwise a stolen refresh token would keep
 /// working through another of the user's device ids (decision 35, T2).
@@ -60,19 +69,18 @@ pub async fn require_device(
     p: &crate::auth::Principal,
     device: Uuid,
 ) -> Result<(), ApiError> {
-    // Registration refuses a token without `sid`; so does every other call.
-    let sid = p
-        .sid
-        .as_deref()
-        .ok_or(ApiError::of(ProblemType::InvalidToken))?;
+    require_session(p)?;
     let mut tx = db::begin_subject(&state.db, &p.sub).await?;
     let row: Option<(Option<time::OffsetDateTime>, bool)> = sqlx::query_as(
         "SELECT revoked_at,
-                EXISTS (SELECT 1 FROM device r WHERE r.session_sid = $2 AND r.revoked_at IS NOT NULL)
+                EXISTS (SELECT 1 FROM device r WHERE r.revoked_at IS NOT NULL
+                        AND (r.session_sid = $2 OR (r.user_sub = $4 AND r.session_auth_time = $3)))
          FROM device WHERE id = $1",
     )
     .bind(device)
-    .bind(sid)
+    .bind(p.sid.as_deref())
+    .bind(p.auth_time)
+    .bind(&p.sub)
     .fetch_optional(&mut *tx)
     .await?;
     match row {
