@@ -596,3 +596,66 @@ async fn an_expired_access_token_is_renewed_mid_run() {
     };
     assert_eq!(fixed.devices().await.unwrap_err().kind(), "invalid_token");
 }
+
+/// §4.5 `kura token create`: --cidr is required (exit 3, before any call);
+/// issued, listed, revoked.
+#[tokio::test]
+async fn the_cli_issues_lists_and_revokes_scoped_tokens() {
+    use kura_cli::commands::TokenAction;
+    let Some(st) = storage(module_path!()).await else {
+        return;
+    };
+    let Some(e) = env_with(module_path!(), Some(st)).await else {
+        return;
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = format!("http://{}", listener.local_addr().unwrap());
+    let router = app(e.state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    let a = Ctx {
+        home: dir("token-home"),
+        access_token: Some(e.key.token("boss", "tb", &["maxime-admins"])),
+    };
+    let issuer = "https://auth.example.org/application/o/kura/".to_owned();
+    let r = commands::login(&a, server, issuer, "kura-cli".into(), Some("admin".into())).await;
+    assert_eq!(code(r), 0);
+    let create = |cidr: Vec<String>| TokenAction::Create {
+        vault: "knowledge".into(),
+        prefix: "agents/".into(),
+        expires: "30d".into(),
+        cidr,
+    };
+    assert_eq!(code(commands::token(&a, create(vec![])).await), 3);
+    // Search is opt-in per tenant (decision 39): refused here, exit 3.
+    assert_eq!(code(commands::search(&a, "knowledge", "budget").await), 3);
+    assert_eq!(
+        code(commands::token(&a, create(vec!["127.0.0.0/8".into()])).await),
+        0
+    );
+    assert_eq!(
+        code(
+            commands::token(
+                &a,
+                TokenAction::List {
+                    vault: "knowledge".into()
+                }
+            )
+            .await
+        ),
+        0
+    );
+    let id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM scoped_token LIMIT 1")
+        .fetch_one(&e.t.owner)
+        .await
+        .unwrap();
+    let revoke = TokenAction::Revoke {
+        vault: "knowledge".into(),
+        id,
+    };
+    assert_eq!(code(commands::token(&a, revoke).await), 0);
+    let revoked: bool = sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM scoped_token")
+        .fetch_one(&e.t.owner)
+        .await
+        .unwrap();
+    assert!(revoked);
+}

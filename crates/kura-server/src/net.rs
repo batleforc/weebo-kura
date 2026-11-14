@@ -32,6 +32,28 @@ pub fn client_addr(peer: IpAddr, headers: &HeaderMap, trusted: &[IpNet]) -> IpAd
     client
 }
 
+/// [`client_addr`] for a check that grants access (a scoped token's CIDR
+/// list, §6.2): behind a trusted proxy, the client must be named by a
+/// well-formed `X-Forwarded-For` and be no trusted proxy itself. Otherwise
+/// `None`, refused: a malformed or missing header never makes the proxy's
+/// own address the client (review 7 M1).
+pub fn client_addr_strict(peer: IpAddr, headers: &HeaderMap, trusted: &[IpNet]) -> Option<IpAddr> {
+    let is_trusted = |ip: &IpAddr| trusted.iter().any(|n| n.contains(ip));
+    if !is_trusted(&peer) {
+        return Some(peer);
+    }
+    let hops: Vec<IpAddr> = headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .map(|v| v.to_str().ok())
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .flat_map(|v| v.split(','))
+        .map(|s| s.trim().parse::<IpAddr>().ok())
+        .collect::<Option<_>>()?;
+    hops.iter().rev().find(|h| !is_trusted(h)).copied()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,6 +95,38 @@ mod tests {
         assert_eq!(
             client_addr(ip("10.42.1.5"), &headers("1.2.3.4, junk"), &traefik),
             ip("10.42.1.5")
+        );
+    }
+
+    #[test]
+    fn the_strict_form_never_takes_the_proxy_for_the_client() {
+        let proxy: IpAddr = "10.42.0.5".parse().unwrap();
+        let trusted = ["10.42.0.0/16".parse::<IpNet>().unwrap()];
+        let strict = |xff: Option<&str>| {
+            let h = xff.map(headers).unwrap_or_default();
+            client_addr_strict(proxy, &h, &trusted)
+        };
+        assert_eq!(
+            strict(Some("203.0.113.7")),
+            Some("203.0.113.7".parse().unwrap())
+        );
+        assert_eq!(
+            strict(Some("203.0.113.7, 10.42.0.9")),
+            Some("203.0.113.7".parse().unwrap())
+        );
+        for bad in [
+            None,
+            Some("junk"),
+            Some("203.0.113.7:443"),
+            Some("10.42.0.9"),
+            Some("1.2.3.4, junk"),
+        ] {
+            assert_eq!(strict(bad), None, "{bad:?}");
+        }
+        let direct: IpAddr = "198.51.100.1".parse().unwrap();
+        assert_eq!(
+            client_addr_strict(direct, &headers("junk"), &trusted),
+            Some(direct)
         );
     }
 }

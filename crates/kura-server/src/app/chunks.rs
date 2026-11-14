@@ -330,11 +330,15 @@ async fn check_quota(
 )]
 pub async fn get_chunk(
     State(state): State<SharedState>,
-    caller: DeviceCaller,
+    reader: super::reader::Reader,
     Path((v, hash)): Path<(Uuid, String)>,
 ) -> Result<Response, ApiError> {
-    let a = access(&state, &caller, v, VaultRole::Viewer).await?;
+    let ra = reader.access(&state, v, VaultRole::Viewer).await?;
     let hash = parse_hash(&hash)?;
+    if !ra.sees_content(&state, &hash, true).await? {
+        return Err(ApiError::of(ProblemType::NotFound));
+    }
+    let a = ra.access;
     let plain = read_chunk(&state, &a, v, hash).await?;
     let mut response = (StatusCode::OK, plain).into_response();
     let headers = response.headers_mut();
@@ -591,11 +595,15 @@ pub(super) async fn store_content(
 )]
 pub async fn get_blob(
     State(state): State<SharedState>,
-    caller: DeviceCaller,
+    reader: super::reader::Reader,
     Path((v, hash)): Path<(Uuid, String)>,
 ) -> Result<Json<BlobManifest>, ApiError> {
-    let a = access(&state, &caller, v, VaultRole::Viewer).await?;
+    let ra = reader.access(&state, v, VaultRole::Viewer).await?;
     let hash = parse_hash(&hash)?;
+    if !ra.sees_content(&state, &hash, false).await? {
+        return Err(ApiError::of(ProblemType::NotFound));
+    }
+    let a = ra.access;
     let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
     let size: Option<i64> =
         sqlx::query_scalar("SELECT size FROM blob WHERE vault_id = $1 AND hash = $2")

@@ -8,6 +8,7 @@ pub mod chunk;
 pub mod merge;
 pub mod path;
 pub mod sync;
+pub mod token;
 pub mod wire;
 
 pub use chunk::{ChunkHash, ChunkParams, ChunkSpan, blob_hash, chunks};

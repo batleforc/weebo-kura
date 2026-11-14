@@ -1582,6 +1582,312 @@
           }
         ]
       }
+    },
+    "/v1/vaults/{v}/search": {
+      "post": {
+        "tags": [
+          "search"
+        ],
+        "summary": "Full-text and file-name search in one vault (§6.7): the query travels in\nthe body, never the URL (T19).",
+        "operationId": "search",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "At most 50 results, best first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query under 2 characters",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "search_disabled: the tenant has no index",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/tokens": {
+      "get": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "The vault's tokens, newest first; never a secret.",
+        "operationId": "list_tokens",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "At most 1,000 tokens",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TokenView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Below manager",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "Issues a read-only token for this vault; the secret is in this answer only.",
+        "operationId": "create_token",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The token, shown once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No address range, a /0 range, a bad prefix or expiry",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Below manager",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/tokens/{t}": {
+      "delete": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "Revokes a token at once, on every replica (the next use is refused).",
+        "operationId": "revoke_token",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "t",
+            "in": "path",
+            "description": "Token id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "403": {
+            "description": "Below manager",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault or token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1782,6 +2088,33 @@
           }
         }
       },
+      "CreateToken": {
+        "type": "object",
+        "required": [
+          "expiresInDays",
+          "cidrs"
+        ],
+        "properties": {
+          "cidrs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Client addresses allowed, at least one; never `0.0.0.0/0` or `::/0`."
+          },
+          "expiresInDays": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1 to 90.",
+            "minimum": 0
+          },
+          "prefix": {
+            "type": "string",
+            "description": "A folder the token sees, ending with `/`; absent: the whole vault."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateVault": {
         "type": "object",
         "required": [
@@ -1888,6 +2221,25 @@
             "minimum": 0
           }
         }
+      },
+      "IssuedToken": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TokenView"
+          },
+          {
+            "type": "object",
+            "required": [
+              "token"
+            ],
+            "properties": {
+              "token": {
+                "type": "string",
+                "description": "`kura_<id>_<secret>`: shown once, never stored in clear."
+              }
+            }
+          }
+        ]
       },
       "MissingRequest": {
         "type": "object",
@@ -2187,6 +2539,70 @@
           }
         }
       },
+      "SearchHit": {
+        "type": "object",
+        "required": [
+          "entry",
+          "path",
+          "score"
+        ],
+        "properties": {
+          "entry": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "path": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number",
+            "format": "float"
+          },
+          "snippet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Text around the first match; absent past the decryption budget."
+          }
+        }
+      },
+      "SearchRequest": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "At most 50 (the default).",
+            "minimum": 0
+          },
+          "query": {
+            "type": "string",
+            "description": "Web search syntax (`\"exact phrase\"`, `-word`, `or`); at least 2 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SearchResponse": {
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            }
+          }
+        }
+      },
       "Ticket": {
         "type": "object",
         "required": [
@@ -2202,6 +2618,52 @@
           "ticket": {
             "type": "string",
             "description": "Single use, valid `expiresIn` seconds; send as `?ticket=`."
+          }
+        }
+      },
+      "TokenView": {
+        "type": "object",
+        "required": [
+          "id",
+          "prefix",
+          "mode",
+          "cidrs",
+          "expiresAt",
+          "createdBy",
+          "revoked"
+        ],
+        "properties": {
+          "cidrs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "RFC 3339."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "lastUsedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "revoked": {
+            "type": "boolean"
           }
         }
       },
@@ -2300,6 +2762,14 @@
     {
       "name": "history",
       "description": "Revisions and restore"
+    },
+    {
+      "name": "tokens",
+      "description": "Scoped read-only tokens for non-interactive readers"
+    },
+    {
+      "name": "search",
+      "description": "Opt-in full-text search"
     }
   ]
 }

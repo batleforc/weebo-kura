@@ -290,6 +290,14 @@ pub async fn purge_loop(pool: sqlx::PgPool, shutdown: tokio_util::sync::Cancella
             Ok(_) => {}
             Err(e) => tracing::warn!(error = %e, "device purge failed, retried tomorrow"),
         }
+        match sqlx::query_scalar::<_, i64>("SELECT kura_scoped_token_purge()")
+            .fetch_one(&pool)
+            .await
+        {
+            Ok(n) if n > 0 => tracing::info!(purged = n, "expired scoped tokens purged"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "scoped token purge failed, retried tomorrow"),
+        }
         // Idempotency records live 7 days (§6.1).
         match sqlx::query_scalar::<_, i64>("SELECT kura_commit_purge()")
             .fetch_one(&pool)

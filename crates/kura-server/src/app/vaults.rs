@@ -112,9 +112,17 @@ fn snapshot(state: &SharedState) -> Result<std::sync::Arc<Snapshot>, ApiError> {
 )]
 pub async fn list_vaults(
     State(state): State<SharedState>,
-    caller: DeviceCaller,
+    reader: super::reader::Reader,
 ) -> Result<Json<Vec<Vault>>, ApiError> {
     let snap = snapshot(&state)?;
+    let caller = match reader {
+        super::reader::Reader::Device(d) => d,
+        // A scoped token sees its one vault.
+        super::reader::Reader::Key(k) => {
+            let a = authz::key_access(&state.db, &snap, k.tenant, k.vault).await?;
+            return Ok(Json(a.iter().map(Vault::from).collect()));
+        }
+    };
     let p = &caller.caller.principal;
     let mut out = Vec::new();
     // Every enabled tenant: a binding may open a vault without any tenant role.

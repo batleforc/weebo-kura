@@ -124,3 +124,14 @@ tests:
         exp_alerts:
           - exp_labels: { severity: critical }
             exp_annotations: { summary: "No bucket copy has completed for 36 hours (kura-server backup); restores would lose recent content." }
+  - interval: 1m
+    input_series:
+      # Steady for 20 minutes, then growing.
+      - { series: 'kura_index_queue_depth{pod="a"}', values: '5x20 5+10x30' }
+    alert_rule_test:
+      - { eval_time: 30m, alertname: KuraIndexQueueGrowing, exp_alerts: [] }
+      - eval_time: 45m
+        alertname: KuraIndexQueueGrowing
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations: { summary: "The search index queue has grown for 15 minutes; search results lag behind edits." }

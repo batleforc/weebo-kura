@@ -15,7 +15,6 @@ use kura_core::wire::{
 };
 use kura_core::{ChunkHash, EntryId, VaultPath};
 use sqlx::Row as _;
-use unicode_normalization::UnicodeNormalization as _;
 use uuid::Uuid;
 
 use super::SharedState;
@@ -49,7 +48,7 @@ type Tx = sqlx::Transaction<'static, sqlx::Postgres>;
 
 /// The case-folded form paths are unique on (§6.3), computed by the server only.
 pub fn path_key(p: &VaultPath) -> String {
-    caseless::default_case_fold_str(p.as_str()).nfc().collect()
+    crate::authz::fold(p.as_str())
 }
 
 /// An entry as this commit sees it: from the database, then as edited.
@@ -542,6 +541,7 @@ async fn decide(
     let writes = std::mem::take(&mut c.writes);
     drop(c);
     store(&mut tx, v, a.tenant, cx.device, sub, &writes).await?;
+    enqueue_index(state, &mut tx, v, a, &writes).await?;
     let response = CommitResponse {
         head_seq: u64::try_from(new_head).unwrap_or_default(),
         results,
@@ -572,6 +572,46 @@ async fn decide(
         state.metrics.commits_total.inc();
     }
     Ok(Decided::Done(response))
+}
+
+/// With search on for the tenant, each written entry gets an index job in
+/// the commit's own transaction (§6.7); a newer one replaces a pending one.
+async fn enqueue_index(
+    state: &SharedState,
+    tx: &mut Tx,
+    v: Uuid,
+    a: &VaultAccess,
+    writes: &[Write],
+) -> Result<(), ApiError> {
+    let on = state.snapshot().is_some_and(|snap| {
+        snap.config
+            .tenants
+            .get(a.tenant_slug.as_str())
+            .is_some_and(|t| t.doc.spec.search.enabled)
+    });
+    if !on {
+        return Ok(());
+    }
+    // Every write: a rename away from `.md` must drop the old words too
+    // (review 7 M3); the worker indexes Markdown heads only.
+    let (entries, revisions): (Vec<Uuid>, Vec<Uuid>) =
+        writes.iter().map(|w| (w.head.id, w.head.revision)).unzip();
+    if entries.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "INSERT INTO index_job (vault_id, tenant_id, entry_id, revision_id)
+         SELECT $1, $2, e, r FROM unnest($3::uuid[], $4::uuid[]) AS u(e, r)
+         ON CONFLICT (vault_id, entry_id) DO UPDATE
+             SET revision_id = EXCLUDED.revision_id, attempts = 0, claimed_at = NULL, failed_at = NULL, created_at = now()",
+    )
+    .bind(v)
+    .bind(a.tenant)
+    .bind(&entries)
+    .bind(&revisions)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 fn validate(req: &CommitRequest) -> Result<(), ApiError> {
@@ -1121,29 +1161,26 @@ async fn store(
 )]
 pub async fn get_revisions(
     State(state): State<SharedState>,
-    caller: DeviceCaller,
+    reader: super::reader::Reader,
     Path((v, e)): Path<(Uuid, Uuid)>,
     q: Result<Query<RevisionsQuery>, QueryRejection>,
 ) -> Result<Json<RevisionsResponse>, ApiError> {
     let q = q
         .map(|Query(q)| q)
         .map_err(|e| ApiError::with_detail(ProblemType::InvalidRequest, e.body_text()))?;
-    let snap = state
-        .snapshot()
-        .ok_or(ApiError::of(ProblemType::Unavailable))?;
-    let p = &caller.caller.principal;
-    let a = authz::require_role(&state.db, &snap, p, v, VaultRole::Viewer).await?;
+    let ra = reader.access(&state, v, VaultRole::Viewer).await?;
     let before = q
         .before
         .map_or(i64::MAX, |b| i64::try_from(b).unwrap_or(i64::MAX));
-    let mut tx = db::begin_tenant_snapshot(&state.db, a.tenant, &p.sub).await?;
-    let known: Option<bool> =
-        sqlx::query_scalar("SELECT true FROM entry WHERE vault_id = $1 AND id = $2")
+    let mut tx = db::begin_tenant_snapshot(&state.db, ra.access.tenant, &reader.subject()).await?;
+    // T16: an entry renamed out of a token's prefix disappears with its history.
+    let head: Option<String> =
+        sqlx::query_scalar("SELECT path FROM entry WHERE vault_id = $1 AND id = $2")
             .bind(v)
             .bind(e)
             .fetch_optional(&mut *tx)
             .await?;
-    if known.is_none() {
+    if !head.is_some_and(|p| ra.sees(&p)) {
         return Err(ApiError::of(ProblemType::NotFound));
     }
     let rows = sqlx::query(
@@ -1157,8 +1194,19 @@ pub async fn get_revisions(
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
-    let mut items = rows
+    // The page ends at its last row read, visible or not.
+    let page = usize::try_from(REVISIONS_PAGE).unwrap_or(usize::MAX);
+    let more = rows.len() > page;
+    let last_seq = rows
         .iter()
+        .take(page)
+        .last()
+        .and_then(|r| r.try_get::<i64, _>("seq").ok())
+        .and_then(|s| u64::try_from(s).ok());
+    let items = rows
+        .iter()
+        .take(page)
+        .filter(|r| r.try_get::<String, _>("path").is_ok_and(|p| ra.sees(&p)))
         .map(|r| {
             let created: time::OffsetDateTime = r.try_get("created_at")?;
             Ok(RevisionInfo {
@@ -1174,15 +1222,8 @@ pub async fn get_revisions(
             })
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
-    let page = usize::try_from(REVISIONS_PAGE).unwrap_or(usize::MAX);
-    let more = items.len() > page;
-    items.truncate(page);
     Ok(Json(RevisionsResponse {
-        next: if more {
-            items.last().map(|i| i.seq)
-        } else {
-            None
-        },
+        next: if more { last_seq } else { None },
         items,
     }))
 }

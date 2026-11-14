@@ -313,12 +313,8 @@ async fn concurrent_line_edits_lose_nothing() {
             "lost: {edit}\n{texts:#?}"
         );
     }
-    assert!(
-        s.e.state
-            .metrics
-            .merge_total
-            .with_label_values(&["merged"])
-            .get()
-            >= 1
-    );
+    // Whether any of the eight merged depends on timing: on a slow runner
+    // every merge can miss its 2 s budget and become a conflict file, which
+    // still loses nothing (failed CI on e95719d). Merging itself is proved
+    // by edits_of_different_lines_merge.
 }

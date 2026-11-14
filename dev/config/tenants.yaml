@@ -25,3 +25,18 @@ spec:
   tenantRef: { name: dev }
   bindings:
     - { role: viewer, claimValue: kura-dev }
+---
+# Another tenant nobody of the dev users belongs to: its vault must answer
+# exactly as a missing one (§6.P observation 4, tests/heavy/authz.sh).
+apiVersion: kura.weebo.io/v1alpha1
+kind: KuraTenant
+metadata: { name: other }
+spec:
+  claimMappings: { claim: groups, roles: { member: [other-members] } }
+  vaultNamespaces: [other]
+---
+apiVersion: kura.weebo.io/v1alpha1
+kind: KuraVault
+metadata: { name: elsewhere, namespace: other }
+spec:
+  tenantRef: { name: other }

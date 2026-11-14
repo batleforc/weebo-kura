@@ -98,6 +98,28 @@ async fn exchange(r: reqwest::RequestBuilder) -> Result<reqwest::Response, Remot
     check(r.send().await.map_err(unreachable)?).await
 }
 
+/// A scoped token as the server shows it; `token` only when just issued.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenView {
+    pub id: Uuid,
+    pub prefix: String,
+    pub cidrs: Vec<String>,
+    pub expires_at: String,
+    pub revoked: bool,
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+/// One search result.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SearchHit {
+    pub path: String,
+    pub score: f32,
+    #[serde(default)]
+    pub snippet: Option<String>,
+}
+
 /// The current access token, replaced when it is renewed.
 #[derive(Clone, Default)]
 pub struct Token(std::sync::Arc<std::sync::Mutex<String>>);
@@ -306,6 +328,45 @@ impl Api {
             )
             .json(&json!({ "revision": revision }));
         self.json(r).await
+    }
+
+    /// Full-text and file-name search; the query travels in the body (T19).
+    pub async fn search(&self, vault: Uuid, query: &str) -> Result<Vec<SearchHit>, RemoteError> {
+        #[derive(Deserialize)]
+        struct Found {
+            results: Vec<SearchHit>,
+        }
+        let r = self
+            .req(reqwest::Method::POST, &format!("/vaults/{vault}/search"))
+            .json(&json!({ "query": query }));
+        Ok(self.json::<Found>(r).await?.results)
+    }
+
+    /// Issues a scoped token; the answer holds its secret, once.
+    pub async fn create_token(
+        &self,
+        vault: Uuid,
+        prefix: &str,
+        days: u32,
+        cidrs: &[String],
+    ) -> Result<TokenView, RemoteError> {
+        let r = self
+            .req(reqwest::Method::POST, &format!("/vaults/{vault}/tokens"))
+            .json(&json!({ "prefix": prefix, "expiresInDays": days, "cidrs": cidrs }));
+        self.json(r).await
+    }
+
+    pub async fn tokens(&self, vault: Uuid) -> Result<Vec<TokenView>, RemoteError> {
+        self.json(self.req(reqwest::Method::GET, &format!("/vaults/{vault}/tokens")))
+            .await
+    }
+
+    pub async fn revoke_token(&self, vault: Uuid, id: Uuid) -> Result<(), RemoteError> {
+        let r = self.req(
+            reqwest::Method::DELETE,
+            &format!("/vaults/{vault}/tokens/{id}"),
+        );
+        self.exchange(r).await.map(drop)
     }
 
     /// A single-use ticket for the vault's notifications (§6.3).

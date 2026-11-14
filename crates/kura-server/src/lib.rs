@@ -45,6 +45,7 @@ pub fn background(
             shutdown.clone(),
         )),
         Box::pin(app::devices::purge_loop(state.db.clone(), shutdown.clone())),
+        Box::pin(app::search::run(state.clone(), shutdown.clone())),
         Box::pin(metrics::refresh_storage(
             state.db.clone(),
             state.metrics.clone(),

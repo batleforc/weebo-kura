@@ -27,6 +27,8 @@ impl FromRequestParts<SharedState> for DeviceCaller {
         parts: &mut Parts,
         state: &SharedState,
     ) -> Result<Self, Self::Rejection> {
+        // A scoped token reaches only the read routes (`Reader`).
+        super::reader::refuse_key_on_write(parts)?;
         let caller = Caller::from_request_parts(parts, state).await?;
         let device = parts
             .headers

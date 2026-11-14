@@ -37,6 +37,8 @@ use crate::reconcile::snapshot::Snapshot;
         (name = "chunks", description = "Encrypted chunks and file manifests"),
         (name = "sync", description = "Commits and changes"),
         (name = "history", description = "Revisions and restore"),
+        (name = "tokens", description = "Scoped read-only tokens for non-interactive readers"),
+        (name = "search", description = "Opt-in full-text search"),
     ),
     components(schemas(Problem)),
     modifiers(&SecurityAddon),
@@ -229,6 +231,9 @@ fn v1_router() -> OpenApiRouter<SharedState> {
         .routes(routes!(changes::get_entries))
         .routes(routes!(commits::get_revisions))
         .routes(routes!(commits::restore_revision))
+        .routes(routes!(tokens::create_token, tokens::list_tokens))
+        .routes(routes!(tokens::revoke_token))
+        .routes(routes!(search::search))
         .routes(routes!(events::create_ticket))
         .routes(routes!(events::events))
         .merge(
@@ -454,6 +459,9 @@ pub mod commits;
 pub mod device;
 pub mod devices;
 pub mod events;
+pub mod reader;
+pub mod search;
+pub mod tokens;
 pub mod vaults;
 
 #[cfg(test)]

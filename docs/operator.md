@@ -133,6 +133,29 @@ and, with vault `manager`s, bind roles (`PUT /v1/vaults/{v}/bindings/claim:<valu
 or `user:<sub>`), never above their own role and only for the tenant's own
 claim values or known members.
 
+### Scoped tokens
+
+For agents and scripts that read a vault without signing in (§6.2): issued by
+a vault manager or tenant admin, `Authorization: Bearer kura_…`, read only,
+one vault, an optional folder prefix, at most 90 days, from listed address
+ranges only (never `0.0.0.0/0` or `::/0`). The client address is read
+through `trustedProxies`: behind a proxy, a request that does not name its
+client in a well-formed `X-Forwarded-For` is refused. A token dies with the
+grant that let its creator issue it (the binding, or the claim value mapped
+to `owner`/`admin`), when revoked, or at expiry; rows are purged 30 days
+after expiry. Each use is an audit event `scoped_token_used`; a refused
+address is an `authz_denied` event with `address_not_allowed`.
+
+### Search
+
+Off unless the tenant sets `search: { enabled: true }` (decision 39): the
+index is the plaintext words of each Markdown note, in PostgreSQL and its
+backups. Enabling queues every Markdown note (the workers of each replica
+index 100 at a time); disabling drops the tenant's index. The database
+needs `unaccent` and `pg_trgm` (created by the migration; both are trusted
+extensions). `kura_index_queue_depth` and `KuraIndexQueueGrowing` watch the
+queue; a note that fails 5 times stays in `index_job` with `failed_at`.
+
 ## 5. Vault and object storage
 
 Per decision 48 and §6.6, the server logs in to Vault with its Kubernetes
@@ -222,6 +245,8 @@ revocation. Devices idle 180 days are purged daily; revoked ones are kept.
 | `kura_chunk_bytes_stored`, `kura_dedup_ratio`, `kura_quota_used_ratio` (by `tenant`) | storage, refreshed every minute |
 | `kura_deletions_scheduled` | tenants and vaults removed with `Delete`, in their grace period |
 | `kura_backup_last_success_timestamp_seconds`, `kura_storage_refreshed_timestamp_seconds` | the last bucket copy; the last storage refresh |
+| `kura_index_queue_depth` | search index jobs waiting |
+| Log target `audit`, `scoped_token_used`, `scoped_token_created`, `scoped_token_revoked` | every use of a scoped token (id, route, client), its issue and revocation |
 | `kura_maintenance_failures_total` | vaults whose maintenance failed in a pass (the others went on): alert on a rise |
 | `kura_maintenance_deleted_total{outcome}` | revisions, entries, blobs, chunks, objects, orphans and purged vaults removed by maintenance |
 | `kura_tenants_awaiting_key_destruction` | tenants purged by `Delete` whose Transit key an operator must destroy: alert on any |
@@ -248,6 +273,10 @@ kura status
 kura devices [revoke <name>]
 kura watch [notes]             # stays in sync: pulls on every notification, pushes edits once quiet
 kura sync notes --yes          # a full resync may move many files to .trash without asking
+kura search notes "budget 2026" # notes and file names, best first (tenant search on)
+kura token create notes --prefix agents/ --expires 30d --cidr 10.42.0.0/16
+kura token list notes          # never shows a secret
+kura token revoke notes <id>
 kura history notes a.md        # the file's revisions, newest first
 kura restore notes a.md <rev>  # that revision's content becomes a new revision, then syncs
 ```
@@ -296,7 +325,7 @@ Rootless podman, one container at a time, every port on loopback:
 | `task perf:run:commit`, `:pull`, `:resync`, `perf:attach`, `perf:soak` | k6 load (§10.3), decision 42's first attach of 10,000 notes, the memory soak |
 | `task dev:token [AS=alice]` | An access token by the device code flow, no browser |
 | `task dev:down` | Removes the containers and the network |
-| `task test:heavy` | The §6.P proof with the real `kura` binary, once `dev:run` serves |
+| `task test:heavy` | The §6.P proof with the real `kura` binary, once `dev:run` serves (`tests/heavy/sync.sh`, `authz.sh`; `KURA_DEV_LOG=<file>` checks observation 3's audit event) |
 
 Authentik serves a certificate from a local CA (`task dev:certs`, in
 `dev/certs/`, gitignored), because the issuer must be https; `dev:run` trusts

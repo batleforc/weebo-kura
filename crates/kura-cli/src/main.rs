@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use kura_cli::commands::{self, Ctx, DeviceAction, Fail};
+use kura_cli::commands::{self, Ctx, DeviceAction, Fail, TokenAction};
 
 #[derive(Parser)]
 #[command(
@@ -69,6 +69,13 @@ enum Command {
         #[command(subcommand)]
         action: Option<DeviceAction>,
     },
+    /// Search a vault's notes and file names.
+    Search { vault: String, query: String },
+    /// Scoped read-only tokens for agents and scripts.
+    Token {
+        #[command(subcommand)]
+        action: TokenAction,
+    },
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -112,6 +119,8 @@ async fn main() -> ExitCode {
             revision,
         } => commands::restore(ctx, &vault, &path, revision).await,
         Command::Devices { action } => commands::devices(ctx, action).await,
+        Command::Token { action } => commands::token(ctx, action).await,
+        Command::Search { vault, query } => commands::search(ctx, &vault, &query).await,
     };
     match result {
         Ok(code) => ExitCode::from(code),

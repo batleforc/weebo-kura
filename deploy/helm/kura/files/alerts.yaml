@@ -1,7 +1,6 @@
 # The alerts of RFC 0001 §10.1, as a PrometheusRule spec. Unit-tested by
 # `task alerts:test` (deploy/alerts/tests.yaml); files/backup-alerts.yaml
-# is appended unless backups are waived. index_queue_depth arrives with
-# search (phase 7).
+# is appended unless backups are waived.
 groups:
   - name: kura
     rules:
@@ -77,6 +76,11 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: Storage and quota metrics have not been refreshed for 10 minutes; quota alerts act on stale data.
+      - alert: KuraIndexQueueGrowing
+        expr: min_over_time(deriv(max(kura_index_queue_depth)[15m:1m])[15m:1m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: The search index queue has grown for 15 minutes; search results lag behind edits.
       - alert: KuraMaintenanceFailing
         expr: increase(kura_maintenance_failures_total[2h]) > 0
         labels: { severity: warning }

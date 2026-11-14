@@ -30,6 +30,10 @@ pub const LIMITS: &[(&str, &str, u32)] = &[
     ("GET", "/v1/vaults/{v}/entries/{e}/revisions", 60),
     ("POST", "/v1/vaults/{v}/entries/{e}/restore", 60),
     ("POST", "/v1/vaults/{v}/events/ticket", 10),
+    ("POST", "/v1/vaults/{v}/search", 60),
+    ("POST", "/v1/vaults/{v}/tokens", 10),
+    ("GET", "/v1/vaults/{v}/tokens", 60),
+    ("DELETE", "/v1/vaults/{v}/tokens/{t}", 10),
     // A socket is opened with a ticket, not a device: bounded by 4 per device instead.
     ("GET", "/v1/vaults/{v}/events", 60),
 ];

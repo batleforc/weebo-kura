@@ -48,3 +48,9 @@ name = "fuzz_merge"
 path = "fuzz_targets/fuzz_merge.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "fuzz_scoped_token"
+path = "fuzz_targets/fuzz_scoped_token.rs"
+test = false
+doc = false

@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use super::SharedState;
 use super::commits::{head_from_row, head_select};
-use super::device::DeviceCaller;
+use super::reader::Reader;
 use crate::authz;
 use crate::db;
 use crate::problem::{ApiError, Problem, ProblemType};
@@ -54,17 +54,15 @@ struct Head {
     horizon_seq: i64,
 }
 
+/// The transaction, the vault's head, and the `LIKE` pattern of a token's
+/// prefix (`%` for the whole vault, T16).
 async fn open(
     state: &SharedState,
-    caller: &DeviceCaller,
+    reader: &Reader,
     v: Uuid,
-) -> Result<(sqlx::Transaction<'static, sqlx::Postgres>, Head), ApiError> {
-    let snap = state
-        .snapshot()
-        .ok_or(ApiError::of(ProblemType::Unavailable))?;
-    let p = &caller.caller.principal;
-    let a = authz::require_role(&state.db, &snap, p, v, VaultRole::Viewer).await?;
-    let mut tx = db::begin_tenant_snapshot(&state.db, a.tenant, &p.sub).await?;
+) -> Result<(sqlx::Transaction<'static, sqlx::Postgres>, Head, String), ApiError> {
+    let ra = reader.access(state, v, VaultRole::Viewer).await?;
+    let mut tx = db::begin_tenant_snapshot(&state.db, ra.access.tenant, &reader.subject()).await?;
     let row = sqlx::query("SELECT epoch, head_seq, horizon_seq FROM vault WHERE id = $1")
         .bind(v)
         .fetch_one(&mut *tx)
@@ -74,7 +72,7 @@ async fn open(
         head_seq: row.try_get("head_seq")?,
         horizon_seq: row.try_get("horizon_seq")?,
     };
-    Ok((tx, head))
+    Ok((tx, head, authz::like_prefix(&ra.prefix_key)))
 }
 
 fn response(
@@ -114,13 +112,13 @@ fn response(
 )]
 pub async fn get_changes(
     State(state): State<SharedState>,
-    caller: DeviceCaller,
+    reader: Reader,
     Path(v): Path<Uuid>,
     q: Result<Query<ChangesQuery>, QueryRejection>,
 ) -> Result<Json<ChangesResponse>, ApiError> {
     let q = query(q)?;
     let since = i64::try_from(q.since).map_err(|_| ApiError::of(ProblemType::HistoryRewound))?;
-    let (mut tx, head) = open(&state, &caller, v).await?;
+    let (mut tx, head, under) = open(&state, &reader, v).await?;
     // The server lost history this device has seen (§6.3, decision 32).
     if q.epoch.is_some_and(|e| e != head.epoch) || since > head.head_seq {
         return Err(ApiError::of(ProblemType::HistoryRewound));
@@ -141,11 +139,12 @@ pub async fn get_changes(
     }
     let rows = sqlx::query(concat!(
         head_select!(),
-        " WHERE e.vault_id = $1 AND e.last_seq > $2 ORDER BY e.last_seq LIMIT $3"
+        " WHERE e.vault_id = $1 AND e.last_seq > $2 AND e.path_key LIKE $4 ESCAPE '\\' ORDER BY e.last_seq LIMIT $3"
     ))
     .bind(v)
     .bind(since)
     .bind(PAGE.saturating_add(1))
+    .bind(&under)
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -166,19 +165,20 @@ pub async fn get_changes(
 )]
 pub async fn get_entries(
     State(state): State<SharedState>,
-    caller: DeviceCaller,
+    reader: Reader,
     Path(v): Path<Uuid>,
     q: Result<Query<EntriesQuery>, QueryRejection>,
 ) -> Result<Json<ChangesResponse>, ApiError> {
     let q = query(q)?;
-    let (mut tx, head) = open(&state, &caller, v).await?;
+    let (mut tx, head, under) = open(&state, &reader, v).await?;
     let rows = sqlx::query(concat!(
         head_select!(),
-        " WHERE e.vault_id = $1 AND NOT e.deleted AND ($2::uuid IS NULL OR e.id > $2) ORDER BY e.id LIMIT $3"
+        " WHERE e.vault_id = $1 AND NOT e.deleted AND ($2::uuid IS NULL OR e.id > $2) AND e.path_key LIKE $4 ESCAPE '\\' ORDER BY e.id LIMIT $3"
     ))
     .bind(v)
     .bind(q.after)
     .bind(PAGE.saturating_add(1))
+    .bind(&under)
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;

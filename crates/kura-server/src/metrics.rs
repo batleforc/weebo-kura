@@ -63,6 +63,8 @@ pub struct Metrics {
     pub backup_last_success_timestamp_seconds: Gauge,
     /// When the storage gauges were last refreshed, so stale ones alert.
     pub storage_refreshed_timestamp_seconds: Gauge,
+    /// Search index jobs waiting (§10.1).
+    pub index_queue_depth: IntGauge,
 }
 
 impl Metrics {
@@ -173,6 +175,8 @@ impl Metrics {
             "When the storage gauges were last refreshed, unix seconds",
         )?;
         registry.register(Box::new(storage_refreshed_timestamp_seconds.clone()))?;
+        let index_queue_depth = IntGauge::new("index_queue_depth", "Search index jobs waiting")?;
+        registry.register(Box::new(index_queue_depth.clone()))?;
         Ok(Self {
             registry,
             ready,
@@ -199,6 +203,7 @@ impl Metrics {
             deletions_scheduled,
             backup_last_success_timestamp_seconds,
             storage_refreshed_timestamp_seconds,
+            index_queue_depth,
         })
     }
 }

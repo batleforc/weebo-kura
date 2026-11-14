@@ -823,6 +823,135 @@ pub async fn restore(ctx: &Ctx, vault: &str, path: &str, revision: Uuid) -> Resu
     sync_one(ctx, &api, &mut cfg, vault, false, false).await
 }
 
+/// `kura token`: scoped read-only tokens for agents and scripts (§6.2).
+#[derive(clap::Subcommand)]
+pub enum TokenAction {
+    /// Issue a token; its secret is shown once.
+    Create {
+        vault: String,
+        /// A folder the token sees, ending with `/`; the whole vault by default.
+        #[arg(long, default_value = "")]
+        prefix: String,
+        /// Days, at most 90: `30d` or `30`.
+        #[arg(long)]
+        expires: String,
+        /// An address range the token may be used from; repeat for more.
+        #[arg(long)]
+        cidr: Vec<String>,
+    },
+    /// The vault's tokens, never their secrets.
+    List { vault: String },
+    /// Revoke a token by id.
+    Revoke { vault: String, id: Uuid },
+}
+
+async fn vault_named(api: &Api, name: &str) -> Result<Uuid, Fail> {
+    api.vaults()
+        .await?
+        .into_iter()
+        .find(|v| v.name == name)
+        .map(|v| v.id)
+        .ok_or_else(|| Fail(3, format!("{name}: no such vault, or not visible to you")))
+}
+
+pub async fn token(ctx: &Ctx, action: TokenAction) -> Result<u8, Fail> {
+    let mut cfg = config(ctx)?;
+    // Checked before any call: the closed defaults of §6.2.
+    if let TokenAction::Create { cidr, .. } = &action
+        && cidr.is_empty()
+    {
+        return Err(Fail(
+            3,
+            "--cidr is required; a scoped token is always bound to addresses.".into(),
+        ));
+    }
+    let api = session(ctx, &mut cfg).await?;
+    match action {
+        TokenAction::Create {
+            vault,
+            prefix,
+            expires,
+            cidr,
+        } => {
+            let days: u32 = expires
+                .trim_end_matches('d')
+                .parse()
+                .map_err(|_| Fail(3, format!("--expires {expires}: days, e.g. 30d")))?;
+            let v = vault_named(&api, &vault).await?;
+            let t = api.create_token(v, &prefix, days, &cidr).await?;
+            let secret = t.token.unwrap_or_default();
+            let shown: String = secret.chars().take(13).collect();
+            println!(
+                "Token {shown}..._****  read  {vault}/{prefix}  expires {}  from {}",
+                t.expires_at.get(..10).unwrap_or_default(),
+                cidr.join(", ")
+            );
+            println!("\n    {secret}\n");
+            println!("This secret is shown once. Store it now.");
+            Ok(0)
+        }
+        TokenAction::List { vault } => {
+            let v = vault_named(&api, &vault).await?;
+            println!(
+                "{:<36} {:<16} {:<11} {:<8} FROM",
+                "ID", "PREFIX", "EXPIRES", "STATE"
+            );
+            for t in api.tokens(v).await? {
+                let state = if t.revoked { "revoked" } else { "active" };
+                let cidrs = t.cidrs.join(", ");
+                println!(
+                    "{:<36} {:<16} {:<11} {:<8} {}",
+                    t.id,
+                    if t.prefix.is_empty() {
+                        "(all)"
+                    } else {
+                        t.prefix.as_str()
+                    },
+                    t.expires_at.get(..10).unwrap_or_default(),
+                    state,
+                    cidrs
+                );
+            }
+            Ok(0)
+        }
+        TokenAction::Revoke { vault, id } => {
+            let v = vault_named(&api, &vault).await?;
+            api.revoke_token(v, id).await?;
+            println!("Token {id} revoked.");
+            Ok(0)
+        }
+    }
+}
+
+/// `kura search <vault> <query>`: best matches first, with a snippet (§6.7).
+pub async fn search(ctx: &Ctx, vault: &str, query: &str) -> Result<u8, Fail> {
+    let mut cfg = config(ctx)?;
+    let api = session(ctx, &mut cfg).await?;
+    let v = vault_named(&api, vault).await?;
+    let hits = match api.search(v, query).await {
+        Err(e) if e.kind() == "search_disabled" => {
+            return Err(Fail(
+                3,
+                format!("{vault}: search is not enabled for this tenant"),
+            ));
+        }
+        other => other?,
+    };
+    if hits.is_empty() {
+        println!("No match.");
+    }
+    // Note text is written by other people: no control character reaches
+    // the terminal (review 7 L7).
+    let clean = |s: &str| -> String { s.chars().filter(|c| !c.is_control()).collect() };
+    for h in &hits {
+        println!("{}", clean(&h.path));
+        if let Some(s) = &h.snippet {
+            println!("    {}", clean(s));
+        }
+    }
+    Ok(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

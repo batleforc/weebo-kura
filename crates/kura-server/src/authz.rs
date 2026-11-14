@@ -308,3 +308,105 @@ pub async fn check_binding(
     }
     Ok(())
 }
+
+/// Full Unicode case folding then NFC: the one comparison form of paths and
+/// token prefixes (§6.3), so a prefix check and a uniqueness check agree.
+pub fn fold(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization as _;
+    caseless::default_case_fold_str(s).nfc().collect()
+}
+
+/// `authz::visible_under_prefix` (§6.2, T16): whether a path is under a
+/// token's folded prefix; an empty prefix sees everything.
+pub fn visible_under_prefix(path: &str, prefix_key: &str) -> bool {
+    prefix_key.is_empty() || fold(path).starts_with(prefix_key)
+}
+
+/// A folded prefix as a SQL `LIKE` pattern on `path_key`, wildcards escaped.
+pub fn like_prefix(prefix_key: &str) -> String {
+    let mut out = String::with_capacity(prefix_key.len().saturating_add(1));
+    for c in prefix_key.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('%');
+    out
+}
+
+/// A claim value of the caller that the tenant maps to `owner` or `admin`:
+/// what a token issued through the tenant role depends on.
+pub fn tenant_grant_claim(snapshot: &Snapshot, tenant: Uuid, p: &Principal) -> Option<String> {
+    let (slug, _) = snapshot.tenant_ids.iter().find(|(_, id)| **id == tenant)?;
+    let m = snapshot
+        .config
+        .tenants
+        .get(slug.as_str())?
+        .doc
+        .spec
+        .claim_mappings
+        .as_ref()?;
+    let values = p.claim_values(&m.claim);
+    m.roles
+        .owner
+        .iter()
+        .chain(&m.roles.admin)
+        .find(|v| values.contains(&v.as_str()))
+        .cloned()
+}
+
+/// Whether the tenant still maps this claim value to `owner` or `admin`.
+pub fn claim_grants_manager(snapshot: &Snapshot, tenant: Uuid, value: &str) -> bool {
+    let Some((slug, _)) = snapshot.tenant_ids.iter().find(|(_, id)| **id == tenant) else {
+        return false;
+    };
+    snapshot
+        .config
+        .tenants
+        .get(slug.as_str())
+        .and_then(|t| t.doc.spec.claim_mappings.as_ref())
+        .is_some_and(|m| {
+            m.roles
+                .owner
+                .iter()
+                .chain(&m.roles.admin)
+                .any(|v| v == value)
+        })
+}
+
+/// A scoped token's access to its vault: always `viewer` (read only, §6.2).
+pub async fn key_access(
+    pool: &sqlx::PgPool,
+    snapshot: &Snapshot,
+    tenant: Uuid,
+    vault: Uuid,
+) -> Result<Option<VaultAccess>, ApiError> {
+    let Some((slug, _)) = snapshot.tenant_ids.iter().find(|(_, id)| **id == tenant) else {
+        return Ok(None);
+    };
+    let mut tx = db::begin_tenant(pool, tenant, None).await?;
+    let row = sqlx::query(
+        "SELECT namespace, name, managed_by, chunking_params, epoch, head_seq FROM vault WHERE id = $1 AND disabled_at IS NULL",
+    )
+    .bind(vault)
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let Some(row) = row else { return Ok(None) };
+    Ok(Some(VaultAccess {
+        vault,
+        tenant,
+        tenant_slug: slug.clone(),
+        claim: None,
+        namespace: row.try_get("namespace")?,
+        name: row.try_get("name")?,
+        managed_by: row.try_get("managed_by")?,
+        tenant_role: None,
+        role: VaultRole::Viewer,
+        chunking: serde_json::from_value(row.try_get("chunking_params")?)
+            .map_err(|e| ApiError::Unavailable(format!("stored chunking refused: {e}")))?,
+        epoch: row.try_get("epoch")?,
+        head_seq: row.try_get("head_seq")?,
+    }))
+}
