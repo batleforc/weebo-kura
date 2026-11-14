@@ -1276,6 +1276,124 @@
           }
         ]
       }
+    },
+    "/v1/vaults/{v}/events": {
+      "get": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "The vault's notifications, over a WebSocket opened with a ticket.",
+        "operationId": "events",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "ticket",
+            "in": "query",
+            "description": "The ticket from `POST events/ticket`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "WebSocket: JSON `change`, `pull` and `ping` notices; closed 4003 for a used, expired or unknown ticket, 4004 for another vault's, 4001 when the token behind it expires, 4002 on revocation, 4008 past 4 sockets, 4009 when too slow"
+          },
+          "400": {
+            "description": "No ticket",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over 60 attempts a minute from this address",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ws_ticket": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/events/ticket": {
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "A ticket for this device and vault.",
+        "operationId": "create_ticket",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A single-use ticket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ticket"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1791,6 +1909,24 @@
         },
         "additionalProperties": false
       },
+      "Ticket": {
+        "type": "object",
+        "required": [
+          "ticket",
+          "expiresIn"
+        ],
+        "properties": {
+          "expiresIn": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "ticket": {
+            "type": "string",
+            "description": "Single use, valid `expiresIn` seconds; send as `?ticket=`."
+          }
+        }
+      },
       "Vault": {
         "type": "object",
         "required": [
@@ -1849,6 +1985,12 @@
         "scheme": "bearer",
         "bearerFormat": "JWT",
         "description": "OIDC access token from Authentik, verified per RFC8725: pinned algorithms, issuer, audience, expiry and the `scope` claim"
+      },
+      "ws_ticket": {
+        "type": "apiKey",
+        "in": "query",
+        "name": "ticket",
+        "description": "From POST /vaults/{v}/events/ticket: 256 random bits, single use, 30 s"
       }
     }
   },

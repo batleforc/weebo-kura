@@ -18,8 +18,9 @@ use uuid::Uuid;
 
 use super::SharedState;
 use super::body::Raw;
+use super::chunks::{read_blob, store_content};
 use super::device::DeviceCaller;
-use crate::authz;
+use crate::authz::{self, VaultAccess};
 use crate::db;
 use crate::problem::{ApiError, Problem, ProblemType};
 
@@ -27,6 +28,17 @@ use crate::problem::{ApiError, Problem, ProblemType};
 pub const MAX_OPERATIONS: usize = 1000;
 /// A commit body: 1,000 operations of a few hundred bytes each.
 pub const MAX_COMMIT_BYTES: usize = 1 << 20;
+/// CPU time for all the merges of one commit (§6.3); past it, the remaining
+/// diverging edits become conflict files.
+const MERGE_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+/// Attempts when a merged head moves before the lock (§6.3).
+const MERGE_ATTEMPTS: u32 = 3;
+/// Merges running at once on this replica, each up to 3 × 4 MiB in memory.
+/// The permit moves into the merge's thread: a merge past the deadline keeps
+/// its slot until it ends, so memory stays bounded (review 4 H1).
+static MERGES: std::sync::LazyLock<std::sync::Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)));
+
 /// Numbered suffixes tried for an occupied path, each one query under the
 /// vault lock; past them, the entry's own id makes the name unique.
 const MAX_SUFFIX: u32 = 9;
@@ -130,6 +142,9 @@ struct Commit<'a> {
     occupancy: HashMap<String, Option<Uuid>>,
     writes: Vec<Write>,
     conflict_suffix: String,
+    merges: &'a HashMap<usize, Prepared>,
+    allow_retry: bool,
+    head_moved: bool,
 }
 
 impl Commit<'_> {
@@ -190,6 +205,42 @@ impl Commit<'_> {
             Some(o) if o != owner => Err(refused(i, "too many files share this name")),
             _ => Ok(unique),
         }
+    }
+
+    /// A live conflict file of `path` already holding `blob`: a push retried
+    /// while its file could not be moved locally (an open note) lands there
+    /// again instead of creating one more (review 4 H2).
+    async fn existing_conflict(
+        &mut self,
+        path: &VaultPath,
+        blob: ChunkHash,
+    ) -> Result<Option<Head>, ApiError> {
+        let Ok(marker) = path.suffixed("conflict") else {
+            return Ok(None);
+        };
+        let Some(stem) = marker
+            .as_str()
+            .find(" (conflict)")
+            .and_then(|n| marker.as_str().get(..n))
+        else {
+            return Ok(None);
+        };
+        let like = format!(
+            "{} (conflict %",
+            stem.replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        let row = sqlx::query(concat!(
+            head_select!(),
+            " WHERE e.vault_id = $1 AND NOT e.deleted AND r.blob_hash = $2 AND e.path LIKE $3 ESCAPE '\\' ORDER BY e.last_seq LIMIT 1"
+        ))
+        .bind(self.vault)
+        .bind(blob.as_bytes().as_slice())
+        .bind(like)
+        .fetch_optional(&mut **self.tx)
+        .await?;
+        row.as_ref().map(head_from_row).transpose()
     }
 
     /// Where the pushed content of a conflict goes: `name (conflict <device> <date>).ext`.
@@ -290,6 +341,94 @@ pub async fn post_commit(
     let request_hash = ChunkHash::of(&canonical);
     let sub = &caller.caller.principal.sub;
 
+    // A retry finds its stored result before any merge is redone.
+    if let Some(stored) = stored_result(
+        &state,
+        &a,
+        v,
+        caller.device,
+        &req.idempotency_key,
+        request_hash,
+    )
+    .await?
+    {
+        return Ok(Json(stored));
+    }
+    let cx = Cx {
+        state: &state,
+        a: &a,
+        v,
+        device: caller.device,
+        sub,
+        req: &req,
+        request_hash,
+    };
+    let deadline = tokio::time::Instant::now()
+        .checked_add(MERGE_BUDGET)
+        .unwrap_or_else(tokio::time::Instant::now);
+    let mut attempt = 1;
+    loop {
+        let merges = prepare(&cx, deadline).await;
+        let retry = attempt < MERGE_ATTEMPTS;
+        match decide(&cx, &merges, retry).await? {
+            Decided::Done(r) => return Ok(Json(r)),
+            Decided::HeadMoved => attempt = attempt.saturating_add(1),
+        }
+    }
+}
+
+/// What every step of one commit shares.
+struct Cx<'a> {
+    state: &'a SharedState,
+    a: &'a VaultAccess,
+    v: Uuid,
+    device: Uuid,
+    sub: &'a str,
+    req: &'a CommitRequest,
+    request_hash: ChunkHash,
+}
+
+enum Decided {
+    Done(CommitResponse),
+    /// A prepared merge's head moved before the lock: prepare again.
+    HeadMoved,
+}
+
+/// The stored result of this key, if any; another body under it is refused.
+async fn stored_result(
+    state: &SharedState,
+    a: &VaultAccess,
+    v: Uuid,
+    device: Uuid,
+    key: &str,
+    request_hash: ChunkHash,
+) -> Result<Option<CommitResponse>, ApiError> {
+    let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
+    let stored = sqlx::query("SELECT request_hash, result FROM commit_record WHERE vault_id = $1 AND device_id = $2 AND idempotency_key = $3")
+        .bind(v)
+        .bind(device)
+        .bind(key)
+        .fetch_optional(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    let Some(row) = stored else { return Ok(None) };
+    let hash: Vec<u8> = row.try_get("request_hash")?;
+    if hash.as_slice() != request_hash.as_bytes() {
+        return Err(ApiError::of(ProblemType::IdempotencyConflict));
+    }
+    let result: sqlx::types::Json<CommitResponse> = row.try_get("result")?;
+    Ok(Some(result.0))
+}
+
+/// Under the vault lock: the rules of §6.5, prepared merges used only if
+/// their head is still the head.
+async fn decide(
+    cx: &Cx<'_>,
+    merges: &HashMap<usize, Prepared>,
+    allow_retry: bool,
+) -> Result<Decided, ApiError> {
+    let (state, a, v, req, sub) = (cx.state, cx.a, cx.v, cx.req, cx.sub);
+    let request_hash = cx.request_hash;
     let mut tx = db::begin_tenant(&state.db, a.tenant, Some(sub)).await?;
     let head_seq: i64 = sqlx::query_scalar("SELECT head_seq FROM vault WHERE id = $1 FOR UPDATE")
         .bind(v)
@@ -298,7 +437,7 @@ pub async fn post_commit(
     // Under the lock, so two retries racing see one stored result (§6.3).
     let stored = sqlx::query("SELECT request_hash, result FROM commit_record WHERE vault_id = $1 AND device_id = $2 AND idempotency_key = $3")
         .bind(v)
-        .bind(caller.device)
+        .bind(cx.device)
         .bind(&req.idempotency_key)
         .fetch_optional(&mut *tx)
         .await?;
@@ -309,11 +448,11 @@ pub async fn post_commit(
         }
         let result: sqlx::types::Json<CommitResponse> = row.try_get("result")?;
         tx.commit().await?;
-        return Ok(Json(result.0));
+        return Ok(Decided::Done(result.0));
     }
 
     let device_name: String = sqlx::query_scalar("SELECT name FROM device WHERE id = $1")
-        .bind(caller.device)
+        .bind(cx.device)
         .fetch_one(&mut *tx)
         .await?;
     let today = time::OffsetDateTime::now_utc().date();
@@ -333,8 +472,8 @@ pub async fn post_commit(
     .iter()
     .map(|r| head_from_row(r).map(|h| (h.id, h)))
     .collect::<Result<HashMap<_, _>, _>>()?;
-    let bases = load_bases(&mut tx, v, &req).await?;
-    check_blobs(&mut tx, v, &req).await?;
+    let bases = load_bases(&mut tx, v, req).await?;
+    check_blobs(&mut tx, v, req).await?;
     let keys: Vec<String> = req
         .operations
         .iter()
@@ -370,15 +509,22 @@ pub async fn post_commit(
         occupancy,
         writes: Vec::new(),
         conflict_suffix: format!("conflict {device_name} {today}"),
+        merges,
+        allow_retry,
+        head_moved: false,
     };
     let mut results = Vec::with_capacity(req.operations.len());
     for (i, op) in req.operations.iter().enumerate() {
         results.push(apply(&mut c, i, op, &bases).await?);
     }
+    if c.head_moved {
+        // Rolled back on drop, releasing the lock before merging again.
+        return Ok(Decided::HeadMoved);
+    }
     let new_head = c.next_seq.saturating_sub(1);
     let writes = std::mem::take(&mut c.writes);
     drop(c);
-    store(&mut tx, v, a.tenant, caller.device, sub, &writes).await?;
+    store(&mut tx, v, a.tenant, cx.device, sub, &writes).await?;
     let response = CommitResponse {
         head_seq: u64::try_from(new_head).unwrap_or_default(),
         results,
@@ -388,13 +534,17 @@ pub async fn post_commit(
         .bind(new_head)
         .execute(&mut *tx)
         .await?;
+    if !writes.is_empty() {
+        // Delivered on commit only, to every replica's sockets (§6.3).
+        crate::notify::notify_change(&mut tx, v, new_head).await?;
+    }
     sqlx::query(
         "INSERT INTO commit_record (vault_id, tenant_id, device_id, idempotency_key, request_hash, result)
          VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(v)
     .bind(a.tenant)
-    .bind(caller.device)
+    .bind(cx.device)
     .bind(&req.idempotency_key)
     .bind(request_hash.as_bytes().as_slice())
     .bind(sqlx::types::Json(&response))
@@ -404,7 +554,7 @@ pub async fn post_commit(
     if !writes.is_empty() {
         state.metrics.commits_total.inc();
     }
-    Ok(Json(response))
+    Ok(Decided::Done(response))
 }
 
 fn validate(req: &CommitRequest) -> Result<(), ApiError> {
@@ -593,7 +743,42 @@ async fn apply(
                 let p = c.free_path(i, &target, id).await?;
                 return accepted(c.write(id, p, false, Some(*blob), size, base));
             }
-            // Both sides changed the content: the head stays, the push becomes a conflict file.
+            // Both sides changed the content: a merge prepared against this
+            // very head becomes the head (§6.5, phase 4).
+            if let Some(m) = c.merges.get(&i) {
+                if m.head == h.revision {
+                    let target = match base_rev {
+                        Some(r) if r.path != path.as_str() => path.clone(),
+                        _ => h.path.clone(),
+                    };
+                    if Some(m.blob) == h.blob && target == h.path {
+                        return Ok(OpResult {
+                            outcome: Outcome::Merged,
+                            head: h.state()?,
+                            conflict: None,
+                        });
+                    }
+                    let p = c.free_path(i, &target, id).await?;
+                    let head = c.write(id, p, false, Some(m.blob), m.size, Some(h.revision));
+                    return Ok(OpResult {
+                        outcome: Outcome::Merged,
+                        head: head.state()?,
+                        conflict: None,
+                    });
+                }
+                if c.allow_retry {
+                    c.head_moved = true;
+                }
+            }
+            // Otherwise the head stays and the push becomes a conflict file,
+            // the same one if this content was pushed before (review 4 H2).
+            if let Some(existing) = c.existing_conflict(path, *blob).await? {
+                return Ok(OpResult {
+                    outcome: Outcome::Conflicted,
+                    head: h.state()?,
+                    conflict: Some(existing.state()?),
+                });
+            }
             let conflict_id = Uuid::now_v7();
             let p = c.conflict_path(i, path, conflict_id).await?;
             let conflict = c.write(conflict_id, p, false, Some(*blob), size, None);
@@ -634,6 +819,13 @@ async fn put_new(
                     conflict: None,
                 });
             }
+            if let Some(existing) = c.existing_conflict(path, blob).await? {
+                return Ok(OpResult {
+                    outcome: Outcome::Conflicted,
+                    head: other.state()?,
+                    conflict: Some(existing.state()?),
+                });
+            }
             let p = c.conflict_path(i, path, id).await?;
             let conflict = c.write(id, p, false, Some(blob), size, None);
             Ok(OpResult {
@@ -643,6 +835,173 @@ async fn put_new(
             })
         }
     }
+}
+
+/// A merge computed before the lock, against `head`.
+struct Prepared {
+    head: Uuid,
+    blob: ChunkHash,
+    size: i64,
+}
+
+/// Without the lock: for each `put` whose text diverged from a head that also
+/// changed since its base, reads base, head and pushed content, merges them
+/// within the commit's budget and stores a clean result. Any failure (no
+/// storage, a blob too large, binary content, the budget spent, a quota
+/// refusal) leaves that operation to become a conflict file.
+async fn prepare(cx: &Cx<'_>, deadline: tokio::time::Instant) -> HashMap<usize, Prepared> {
+    match prepare_inner(cx, deadline).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(error = %e, "merges not prepared; diverging edits become conflict files");
+            HashMap::new()
+        }
+    }
+}
+
+async fn prepare_inner(
+    cx: &Cx<'_>,
+    deadline: tokio::time::Instant,
+) -> Result<HashMap<usize, Prepared>, ApiError> {
+    use kura_core::merge::{MAX_MERGE, Merge, merge3, mergeable};
+    let mut out = HashMap::new();
+    let max_file = cx.state.snapshot().and_then(|snap| {
+        snap.config
+            .tenants
+            .get(cx.a.tenant_slug.as_str())
+            .and_then(|t| t.doc.spec.quota.max_file_size)
+            .map(|q| q.bytes())
+    });
+    let candidates: Vec<(usize, Uuid, Uuid, ChunkHash)> = cx
+        .req
+        .operations
+        .iter()
+        .enumerate()
+        .filter_map(|(i, o)| match o {
+            Operation::Put {
+                entry,
+                path,
+                base: Some(b),
+                blob,
+                ..
+            } if mergeable(path) => Some((i, *entry.as_uuid(), *b, *blob)),
+            _ => None,
+        })
+        .collect();
+    if candidates.is_empty() || cx.state.storage.is_none() {
+        return Ok(out);
+    }
+    let ids: Vec<Uuid> = candidates.iter().map(|c| c.1).collect();
+    let mut tx = db::begin_tenant(&cx.state.db, cx.a.tenant, None).await?;
+    let heads = sqlx::query(concat!(
+        head_select!(),
+        " WHERE e.vault_id = $1 AND e.id = ANY($2)"
+    ))
+    .bind(cx.v)
+    .bind(&ids)
+    .fetch_all(&mut *tx)
+    .await?
+    .iter()
+    .map(|r| head_from_row(r).map(|h| (h.id, h)))
+    .collect::<Result<HashMap<_, _>, _>>()?;
+    let bases = load_bases(&mut tx, cx.v, cx.req).await?;
+    // The sizes of only the blobs involved, before reading any content.
+    let involved: Vec<Vec<u8>> = candidates
+        .iter()
+        .flat_map(|(_, entry, base, pushed)| {
+            let head = heads.get(entry).and_then(|h| h.blob);
+            let base = bases.get(base).and_then(|b| b.blob);
+            [head, base, Some(*pushed)]
+        })
+        .flatten()
+        .map(|h| h.as_bytes().to_vec())
+        .collect();
+    let sizes: HashMap<Vec<u8>, i64> =
+        sqlx::query("SELECT hash, size FROM blob WHERE vault_id = $1 AND hash = ANY($2)")
+            .bind(cx.v)
+            .bind(&involved)
+            .fetch_all(&mut *tx)
+            .await?
+            .iter()
+            .map(|r| Ok((r.try_get("hash")?, r.try_get("size")?)))
+            .collect::<Result<_, sqlx::Error>>()?;
+    tx.commit().await?;
+    let small = |h: &ChunkHash| {
+        sizes
+            .get(h.as_bytes().as_slice())
+            .is_some_and(|s| usize::try_from(*s).is_ok_and(|s| s <= MAX_MERGE))
+    };
+    for (i, entry, base, pushed) in candidates {
+        let (Some(h), Some(br)) = (heads.get(&entry), bases.get(&base)) else {
+            continue;
+        };
+        let (Some(head_blob), Some(base_blob)) = (h.blob, br.blob) else {
+            continue;
+        };
+        let diverged = br.entry == entry
+            && !h.deleted
+            && base != h.revision
+            && head_blob != pushed
+            && base_blob != pushed
+            && base_blob != head_blob;
+        if !diverged || ![head_blob, base_blob, pushed].iter().all(small) {
+            continue;
+        }
+        let Some(left) = deadline
+            .checked_duration_since(tokio::time::Instant::now())
+            .filter(|d| !d.is_zero())
+        else {
+            break;
+        };
+        let Ok(Ok(permit)) = tokio::time::timeout(left, MERGES.clone().acquire_owned()).await
+        else {
+            break;
+        };
+        let (b, o, t) = (
+            read_blob(cx.state, cx.a, cx.v, base_blob).await?,
+            read_blob(cx.state, cx.a, cx.v, head_blob).await?,
+            read_blob(cx.state, cx.a, cx.v, pushed).await?,
+        );
+        let merged = tokio::time::timeout(
+            left,
+            tokio::task::spawn_blocking(move || {
+                let merged = merge3(&b, &o, &t);
+                drop(permit);
+                merged
+            }),
+        )
+        .await;
+        let outcome = match merged {
+            // Larger than a side may be, or than the tenant allows: a conflict file (review 4 L2).
+            Ok(Ok(Merge::Clean(data)))
+                if data.len() <= kura_core::merge::MAX_MERGE
+                    && max_file.is_none_or(|m| data.len() as u64 <= m) =>
+            {
+                let size = i64::try_from(data.len()).unwrap_or(i64::MAX);
+                match store_content(cx.state, cx.a, cx.v, data).await {
+                    Ok(blob) => {
+                        out.insert(
+                            i,
+                            Prepared {
+                                head: h.revision,
+                                blob,
+                                size,
+                            },
+                        );
+                        "merged"
+                    }
+                    Err(_) => "conflict",
+                }
+            }
+            _ => "conflict",
+        };
+        cx.state
+            .metrics
+            .merge_total
+            .with_label_values(&[outcome])
+            .inc();
+    }
+    Ok(out)
 }
 
 /// Set-based writes, in seq order: an entry that frees a path is written

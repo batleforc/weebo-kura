@@ -21,7 +21,7 @@ use axum::http::Request;
 use common::app::{Env, env_with, storage, vault_id};
 use kura_core::sync::{FileMeta, Host, HostError, LocalState, Options, Remote, RemoteError, sync};
 use kura_core::wire::{ChangesResponse, CommitRequest, CommitResponse};
-use kura_core::{ChunkHash, ChunkParams, VaultPath, blob_hash, chunks};
+use kura_core::{ChunkHash, ChunkParams, VaultPath};
 use kura_server::app::app;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -283,24 +283,27 @@ struct Device<'a> {
 
 #[tokio::test]
 async fn devices_converge_and_lose_nothing() {
-    let mut conflicts = 0;
+    let (mut conflicts, mut merged) = (0, 0);
     for seed in [42, 7, 1234, 99, 2026] {
-        conflicts += run(seed).await;
+        let (c, m) = run(seed).await;
+        conflicts += c;
+        merged += m;
     }
     eprintln!("conflict files over all seeds: {conflicts}");
     if std::env::var("KURA_TEST_S3_ENDPOINT").is_ok() {
         assert!(conflicts > 0, "the runs never produced a conflict");
+        assert!(merged > 0, "the runs never merged");
     }
 }
 
-/// One simulated history; returns how many conflict files it produced.
-async fn run(seed: u64) -> usize {
+/// One simulated history; returns its conflict files and merges.
+async fn run(seed: u64) -> (usize, u64) {
     let name = format!("{}::seed{seed}", module_path!());
     let Some(st) = storage(&name).await else {
-        return 0;
+        return (0, 0);
     };
     let Some(e) = env_with(&name, Some(st)).await else {
-        return 0;
+        return (0, 0);
     };
     let tok = e.key.token("u1", "s1", &["maxime-members"]);
     let v = vault_id(&e, "knowledge").await;
@@ -337,13 +340,29 @@ async fn run(seed: u64) -> usize {
             for _ in 0..rng.below(3) {
                 n += 1;
                 let names: Vec<String> = d.host.notes().into_keys().collect();
-                let body = format!("device {i} edit {n}\n")
-                    .repeat(1 + rng.below(40))
+                // Unique lines, so a merge can be told from a loss.
+                let body: Vec<u8> = (0..1 + rng.below(40))
+                    .map(|j| format!("device {i} edit {n} line {j}\n"))
+                    .collect::<String>()
                     .into_bytes();
                 match (rng.below(5), names.is_empty()) {
                     (0 | 1, false) => {
-                        let p = &names[rng.below(names.len())];
-                        d.host.put(p, &body);
+                        // One line replaced or inserted: what merges (phase 4).
+                        let p = names[rng.below(names.len())].clone();
+                        let old = d.host.files.borrow()[&p].0.clone();
+                        let mut lines: Vec<String> = String::from_utf8(old)
+                            .unwrap()
+                            .lines()
+                            .map(str::to_owned)
+                            .collect();
+                        let k = rng.below(lines.len() + 1);
+                        let line = format!("device {i} edit {n} line 0");
+                        if k < lines.len() && rng.below(2) == 0 {
+                            lines[k] = line;
+                        } else {
+                            lines.insert(k, line);
+                        }
+                        d.host.put(&p, (lines.join("\n") + "\n").as_bytes());
                     }
                     (2, false) => {
                         let p = names[rng.below(names.len())].clone();
@@ -393,22 +412,42 @@ async fn run(seed: u64) -> usize {
         .await
         .unwrap();
     assert_eq!(usize::try_from(live).unwrap(), first.len());
-    // No content lost: every version a device synced is in the history.
-    let stored: HashSet<Vec<u8>> =
-        sqlx::query_scalar("SELECT blob_hash FROM revision WHERE blob_hash IS NOT NULL")
+    // No line lost: every line of every version a device synced is in some
+    // stored revision (merged heads do not store the pushed version itself).
+    let blobs: Vec<Vec<u8>> =
+        sqlx::query_scalar("SELECT DISTINCT blob_hash FROM revision WHERE blob_hash IS NOT NULL")
             .fetch_all(&e.t.owner)
             .await
-            .unwrap()
-            .into_iter()
-            .collect();
-    for content in &pushed {
-        let hashes: Vec<ChunkHash> = chunks(content, params).iter().map(|c| c.hash).collect();
-        let b = blob_hash(content.len() as u64, &hashes);
-        assert!(
-            stored.contains(b.as_bytes().as_slice()),
-            "seed {seed} lost: {:?}",
-            String::from_utf8_lossy(content)
-        );
+            .unwrap();
+    let mut stored: HashSet<String> = HashSet::new();
+    for b in blobs {
+        let hash = ChunkHash::from_bytes(b.try_into().unwrap());
+        let (_, parts) = devices[0].remote.get_blob(&hash).await.unwrap();
+        let mut text = Vec::new();
+        for c in parts {
+            text.extend(devices[0].remote.get_chunk(&c).await.unwrap());
+        }
+        stored.extend(String::from_utf8(text).unwrap().lines().map(str::to_owned));
     }
-    conflicts
+    for content in &pushed {
+        for line in String::from_utf8_lossy(content).lines() {
+            assert!(stored.contains(line), "seed {seed} lost the line {line:?}");
+        }
+    }
+    let merged = e
+        .state
+        .metrics
+        .merge_total
+        .with_label_values(&["merged"])
+        .get();
+    let attempted = e
+        .state
+        .metrics
+        .merge_total
+        .with_label_values(&["conflict"])
+        .get();
+    eprintln!(
+        "seed {seed}: {merged} merged, {attempted} merge conflicts, {conflicts} conflict files"
+    );
+    (conflicts, merged)
 }

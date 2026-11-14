@@ -2,7 +2,8 @@ version: "3"
 
 vars:
   # main.rs is process wiring only; everything it calls lives in lib.rs and is tested there.
-  COVERAGE_EXCLUDE: 'crates/kura-(server|cli)/src/main\.rs'
+  # kura-wasm is JS glue, run by the plugin's vitest engine test, not by cargo.
+  COVERAGE_EXCLUDE: 'crates/kura-(server|cli)/src/main\.rs|crates/kura-wasm/'
 
 tasks:
   cov:collect:
@@ -24,7 +25,7 @@ tasks:
     # One gate per crate (plan PR 1.10).
     cmds:
       - task: cov:collect
-      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(server|core|cli)/' --fail-under-lines 80
-      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(server|api|cli)/' --fail-under-lines 80
+      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(server|core|cli|wasm)/' --fail-under-lines 80
+      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(server|api|cli|wasm)/' --fail-under-lines 80
       - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(api|core|cli)/|{{.COVERAGE_EXCLUDE}}' --fail-under-lines 80
       - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(api|core|server)/|{{.COVERAGE_EXCLUDE}}' --fail-under-lines 80

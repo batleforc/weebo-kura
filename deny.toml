@@ -43,6 +43,12 @@ skip = [
     { name = "syn", version = "1" },
     # syn 2, held by most proc-macros (jiff-static, serde_derive…); syn 3 by displaydoc.
     { name = "syn", version = "2" },
+    # The rand 0.9 line, held by tungstenite 0.29 (axum's WebSocket, phase 4);
+    # uuid and the rest are on rand 0.10 / getrandom 0.4.
+    { name = "rand", version = "0.9" },
+    { name = "rand_core", version = "0.9" },
+    { name = "getrandom", version = "0.3" },
+    { name = "r-efi", version = "5" },
 ]
 # Workspace crates depend on each other through versionless paths.
 wildcards = "allow"

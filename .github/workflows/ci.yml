@@ -30,6 +30,16 @@ jobs:
       - run: task openapi:check
       - run: task audit
 
+  plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      # The Obsidian plugin: WASM core, strict TypeScript, tests with the 80% gate, bundle within 3 MB.
+      - run: task plugin:install
+      - run: task plugin:test
+      - run: task plugin:build
+
   test:
     runs-on: ubuntu-latest
     services:

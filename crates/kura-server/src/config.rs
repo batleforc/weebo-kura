@@ -43,6 +43,11 @@ pub struct ServerConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OidcConfig {
     pub issuer: String,
+    /// Where the discovery document lives when it is not under `issuer`:
+    /// with Authentik's global issuer mode, one issuer serves every client
+    /// type and each application keeps its own discovery URL (plan D52).
+    #[serde(default)]
+    pub discovery: Option<String>,
     /// One `client_id` per client type.
     pub audiences: Vec<String>,
     #[serde(default = "default_algorithms")]
@@ -181,6 +186,13 @@ impl ServerConfig {
         if !https {
             return Err(invalid("oidc.issuer", "must be an https:// URL".into()));
         }
+        let discovery_https = config.oidc.discovery.as_deref().is_none_or(|d| {
+            d.parse::<axum::http::Uri>()
+                .is_ok_and(|u| u.scheme_str() == Some("https") && u.host().is_some())
+        });
+        if !discovery_https {
+            return Err(invalid("oidc.discovery", "must be an https:// URL".into()));
+        }
         if config.oidc.audiences.is_empty() || config.oidc.audiences.iter().any(String::is_empty) {
             return Err(invalid(
                 "oidc.audiences",
@@ -229,6 +241,24 @@ vault:
         assert_eq!(c.cors, CorsConfig::default());
         assert_eq!(c.listen, ListenConfig::default());
         assert_eq!(c.oidc.algorithms, vec![Algorithm::RS256]);
+    }
+
+    #[test]
+    fn discovery_is_optional_and_https() {
+        let with = EXAMPLE.replace(
+            "  audiences:",
+            "  discovery: https://auth.example.org/application/o/kura-cli/\n  audiences:",
+        );
+        let c = ServerConfig::parse("server.yaml", &with).unwrap();
+        assert_eq!(
+            c.oidc.discovery.as_deref(),
+            Some("https://auth.example.org/application/o/kura-cli/")
+        );
+        let bad = EXAMPLE.replace("  audiences:", "  discovery: http://auth/\n  audiences:");
+        assert_eq!(
+            err(&bad),
+            "server.yaml oidc.discovery: must be an https:// URL"
+        );
     }
 
     #[test]

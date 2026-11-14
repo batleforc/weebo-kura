@@ -49,6 +49,8 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Keep a vault in sync: pull on every notification, push local edits.
+    Watch { vault: Option<String> },
     /// The state of every attached vault.
     Status,
     /// List devices, or revoke one by name.
@@ -82,6 +84,12 @@ async fn main() -> ExitCode {
         Command::Attach { vault, folder, yes } => commands::attach(ctx, &vault, folder, yes).await,
         Command::Sync { vault, dry_run } => {
             commands::sync_cmd(ctx, vault.as_deref(), dry_run).await
+        }
+        Command::Watch { vault } => {
+            let stop = async {
+                drop(tokio::signal::ctrl_c().await);
+            };
+            commands::watch(ctx, vault.as_deref(), stop).await
         }
         Command::Status => commands::status(ctx).await,
         Command::Devices { action } => commands::devices(ctx, action).await,

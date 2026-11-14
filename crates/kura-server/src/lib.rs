@@ -8,6 +8,7 @@ pub mod db;
 pub mod limits;
 pub mod metrics;
 pub mod net;
+pub mod notify;
 pub mod problem;
 pub mod reconcile;
 pub mod scalar;
@@ -42,6 +43,11 @@ pub fn background(
             shutdown.clone(),
         )),
         Box::pin(app::devices::purge_loop(state.db.clone(), shutdown.clone())),
+        Box::pin(notify::listen(
+            state.db.clone(),
+            state.clone(),
+            shutdown.clone(),
+        )),
     ]
 }
 

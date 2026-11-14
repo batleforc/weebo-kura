@@ -272,6 +272,10 @@ pub async fn revoke_device(
         return Err(ApiError::of(ProblemType::NotFound));
     }
     tracing::info!(target: "audit", event = "device_revoked", sub = %sub, device = %d);
+    // Its sockets close on every replica (§6.2).
+    if let Err(e) = crate::notify::notify_revoked(&state.db, d).await {
+        tracing::warn!(error = %e, "revocation not broadcast; its sockets close at token expiry");
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

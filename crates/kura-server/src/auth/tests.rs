@@ -51,6 +51,7 @@ pub fn access_claims(sub: &str) -> Value {
 pub fn oidc() -> OidcConfig {
     OidcConfig {
         issuer: ISSUER.into(),
+        discovery: None,
         audiences: vec!["kura-plugin".into(), "kura-cli".into()],
         algorithms: vec![config::Algorithm::EdDSA],
         platform_admin: config::ClaimMatch {
@@ -215,7 +216,7 @@ async fn keys_and_userinfo_come_through_oidc_discovery() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let jwks = json!({ "keys": [k.jwk.clone()] });
-    let discovery = json!({ "jwks_uri": format!("{base}/jwks/"), "userinfo_endpoint": format!("{base}/userinfo/") });
+    let discovery = json!({ "issuer": format!("{base}/application/o/kura/"), "jwks_uri": format!("{base}/jwks/"), "userinfo_endpoint": format!("{base}/userinfo/") });
     let app = axum::Router::new()
         .route(
             "/application/o/kura/.well-known/openid-configuration",
@@ -232,10 +233,29 @@ async fn keys_and_userinfo_come_through_oidc_discovery() {
     let server = tokio::spawn(async move { axum::serve(listener, app).await });
 
     let issuer = format!("{base}/application/o/kura/");
-    let keys = Keys::new(KeySource::http(&issuer).unwrap(), None);
+    // A discovery document naming another issuer is refused (review 4 L5).
+    let foreign = Keys::new(
+        KeySource::http(&issuer)
+            .unwrap()
+            .expecting("https://evil.example.org/"),
+        None,
+    );
+    let fv = Verifier::new(
+        &OidcConfig {
+            issuer: issuer.clone(),
+            discovery: None,
+            ..oidc()
+        },
+        foreign,
+    );
+    let mut fc = access_claims("u1");
+    fc["iss"] = json!(issuer);
+    assert!(fv.verify_access_token(&k.sign(&fc)).await.is_err());
+    let keys = Keys::new(KeySource::http(&issuer).unwrap().expecting(&issuer), None);
     let v = Verifier::new(
         &OidcConfig {
             issuer: issuer.clone(),
+            discovery: None,
             ..oidc()
         },
         keys,

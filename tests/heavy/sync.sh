@@ -45,6 +45,23 @@ for d in a b; do
 done
 pass "7: conflicted, both versions on both devices"
 
+# 1. A change reaches a watching device within 5 s, through the socket.
+as bob watch notes >"$work/watch.log" 2>&1 &
+watcher=$!
+sleep 2
+printf 'pushed by alice %s\n' "$$" > "$work/a/live-$$.md"
+start=$(date +%s%N)
+as alice sync notes >/dev/null
+arrived=""
+for _ in $(seq 50); do
+  [ -f "$work/b/live-$$.md" ] && { arrived=yes; break; }
+  sleep 0.1
+done
+kill "$watcher" 2>/dev/null || true
+wait "$watcher" 2>/dev/null || true
+[ -n "$arrived" ] || fail "1: no change on the watching device within 5 s: $(cat "$work/watch.log")"
+pass "1: change on the watching device after $(( ($(date +%s%N) - start) / 1000000 )) ms"
+
 # 2. A viewer's push: exit 3, and no chunk stored.
 mkdir -p "$work/s"
 as bob attach shared "$work/s" --yes >/dev/null

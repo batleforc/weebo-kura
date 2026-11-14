@@ -56,6 +56,16 @@ async fn logs_name_routes_and_audit_every_denial() {
         )
         .await;
     assert_eq!(s, StatusCode::GONE);
+    // Nor does a WebSocket ticket in `?ticket=`.
+    let (_, _) = e
+        .call(
+            "GET",
+            &format!("/v1/vaults/{knowledge}/events?ticket=Zq9ticketSecretValue"),
+            &member,
+            Some(&d),
+            None,
+        )
+        .await;
 
     let logs = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
     assert!(logs.contains(r#"route="/v1/vaults/{v}""#), "{logs}");
@@ -68,6 +78,10 @@ async fn logs_name_routes_and_audit_every_denial() {
     assert!(
         !logs.contains("8f3e2b6a"),
         "the query string leaked: {logs}"
+    );
+    assert!(
+        !logs.contains("Zq9ticketSecretValue"),
+        "the ticket leaked: {logs}"
     );
     assert!(!logs.contains(&knowledge), "the vault id leaked");
     let denials: Vec<&str> = logs

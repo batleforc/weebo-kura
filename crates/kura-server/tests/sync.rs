@@ -196,6 +196,35 @@ async fn diverging_edits_become_a_conflict_file() {
     );
 }
 
+/// Review 4 H2: a push retried because its conflict file could not be
+/// moved locally (an open note) lands on the same conflict file.
+#[tokio::test]
+async fn the_same_content_pushed_again_reuses_its_conflict_file() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    let a = eid();
+    let base = s.put(&a, "Open.md", "base", None).await["head"]["revision"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    s.put(&a, "Open.md", "edited elsewhere", Some(&base)).await;
+    let first = s.put(&a, "Open.md", "typed here", Some(&base)).await;
+    let again = s.put(&a, "Open.md", "typed here", Some(&base)).await;
+    assert_eq!(first["outcome"], "conflicted");
+    assert_eq!(again["conflict"]["entry"], first["conflict"]["entry"]);
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM entry WHERE NOT deleted")
+        .fetch_one(&s.e.t.owner)
+        .await
+        .unwrap();
+    assert_eq!(n, 2, "one note, one conflict file");
+    // A new file pushed twice onto an occupied path, likewise.
+    let x = eid();
+    let c1 = s.put(&x, "Open.md", "another", None).await;
+    let c2 = s.put(&eid(), "Open.md", "another", None).await;
+    assert_eq!(c2["conflict"]["entry"], c1["conflict"]["entry"]);
+}
+
 #[tokio::test]
 async fn section_6_5_rows_without_merge() {
     let Some(s) = setup(module_path!()).await else {

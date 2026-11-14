@@ -10,6 +10,9 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+pub type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
 pub const CLIENT: &str = concat!("kura-cli/", env!("CARGO_PKG_VERSION"));
 
 pub fn http() -> Result<reqwest::Client, RemoteError> {
@@ -188,6 +191,39 @@ impl Api {
             r = r.query(&[("after", a)]);
         }
         self.json(r).await
+    }
+
+    /// A single-use ticket for the vault's notifications (§6.3).
+    pub async fn ticket(&self, vault: Uuid) -> Result<String, RemoteError> {
+        #[derive(Deserialize)]
+        struct Ticket {
+            ticket: String,
+        }
+        let r = self.req(
+            reqwest::Method::POST,
+            &format!("/vaults/{vault}/events/ticket"),
+        );
+        Ok(self.json::<Ticket>(r).await?.ticket)
+    }
+
+    /// The notifications socket of a vault, opened with a ticket.
+    pub async fn events(&self, vault: Uuid) -> Result<Socket, RemoteError> {
+        let ticket = self.ticket(vault).await?;
+        let base = self.server.trim_end_matches('/');
+        let ws = match (base.strip_prefix("https://"), base.strip_prefix("http://")) {
+            (Some(rest), _) => format!("wss://{rest}"),
+            (_, Some(rest)) => format!("ws://{rest}"),
+            _ => base.to_owned(),
+        };
+        let url = format!("{ws}/v1/vaults/{vault}/events?ticket={ticket}");
+        let connect = tokio_tungstenite::connect_async(url);
+        match tokio::time::timeout(Duration::from_secs(30), connect).await {
+            Ok(Ok((socket, _))) => Ok(socket),
+            Ok(Err(e)) => Err(RemoteError::Unavailable(e.to_string())),
+            Err(_) => Err(RemoteError::Unavailable(
+                "notifications: no answer within 30 s".into(),
+            )),
+        }
     }
 
     pub fn vault(&self, vault: Uuid) -> VaultRemote<'_> {

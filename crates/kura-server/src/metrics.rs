@@ -23,6 +23,8 @@ pub struct Metrics {
     pub chunk_corrupt_total: IntCounter,
     /// Commits that wrote at least one revision (§10.1, §6.P observation 1).
     pub commits_total: IntCounter,
+    /// Three-way merges attempted, by `outcome`: `merged` or `conflict` (§10.1).
+    pub merge_total: IntCounterVec,
 }
 
 impl Metrics {
@@ -45,6 +47,11 @@ impl Metrics {
         registry.register(Box::new(chunk_corrupt_total.clone()))?;
         let commits_total = IntCounter::new("commits_total", "Commits that wrote revisions")?;
         registry.register(Box::new(commits_total.clone()))?;
+        let merge_total = IntCounterVec::new(
+            Opts::new("merge_total", "Three-way merges attempted"),
+            &["outcome"],
+        )?;
+        registry.register(Box::new(merge_total.clone()))?;
         Ok(Self {
             registry,
             ready,
@@ -53,6 +60,7 @@ impl Metrics {
             authz_denied_total,
             chunk_corrupt_total,
             commits_total,
+            merge_total,
         })
     }
 }

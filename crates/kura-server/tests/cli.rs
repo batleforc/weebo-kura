@@ -248,3 +248,96 @@ async fn sign_in_by_device_code_and_refresh_with_rotation() {
     // r2 is unknown to the provider: invalid_grant means sign in again (2).
     assert_eq!(code(commands::devices(&ctx, None).await), 2);
 }
+
+/// §6.P observation 1, in process: `kura watch` on b receives a's change
+/// within 5 s through the socket (no timer), and pushes b's own edit once quiet.
+#[tokio::test]
+async fn watch_pulls_on_notification_and_pushes_when_quiet() {
+    let Some(st) = storage(module_path!()).await else {
+        return;
+    };
+    let Some(e) = env_with(module_path!(), Some(st)).await else {
+        return;
+    };
+    let stop = tokio_util::sync::CancellationToken::new();
+    tokio::spawn(kura_server::notify::listen(
+        e.state.db.clone(),
+        e.state.clone(),
+        stop.clone(),
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = format!("http://{}", listener.local_addr().unwrap());
+    let router = app(e.state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let a = Ctx {
+        home: dir("watch-home-a"),
+        access_token: Some(e.key.token("u1", "wa", &["maxime-members"])),
+    };
+    let b = Ctx {
+        home: dir("watch-home-b"),
+        access_token: Some(e.key.token("u2", "wb", &["maxime-members"])),
+    };
+    let issuer = "https://auth.example.org/application/o/kura/".to_owned();
+    let (fa, fb) = (dir("watch-a"), dir("watch-b"));
+    for (ctx, name, folder) in [(&a, "wa", &fa), (&b, "wb", &fb)] {
+        assert_eq!(
+            code(
+                commands::login(
+                    ctx,
+                    server.clone(),
+                    issuer.clone(),
+                    "kura-cli".into(),
+                    Some(name.into())
+                )
+                .await
+            ),
+            0
+        );
+        assert_eq!(
+            code(commands::attach(ctx, "knowledge", folder.clone(), true).await),
+            0
+        );
+    }
+    let watching = stop.clone();
+    let b_home = b.home.clone();
+    let b_token = b.access_token.clone();
+    let watcher = tokio::spawn(async move {
+        let b = Ctx {
+            home: b_home,
+            access_token: b_token,
+        };
+        commands::watch(&b, Some("knowledge"), watching.cancelled())
+            .await
+            .map_err(|f| f.1)
+    });
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    std::fs::write(fa.join("from-a.md"), "hello b\n").unwrap();
+    let pushed = tokio::time::Instant::now();
+    assert_eq!(code(commands::sync_cmd(&a, None, false).await), 0);
+    let arrived = async {
+        while !fb.join("from-a.md").exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(5), arrived)
+        .await
+        .expect("a's change reached b within 5 s");
+    assert!(pushed.elapsed() < std::time::Duration::from_secs(5));
+    // b edits; watch pushes once quiet (5 s) and a pulls it.
+    std::fs::write(fb.join("from-b.md"), "hello a\n").unwrap();
+    let back = async {
+        loop {
+            assert_eq!(code(commands::sync_cmd(&a, None, false).await), 0);
+            if fa.join("from-b.md").exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(20), back)
+        .await
+        .expect("b's edit was pushed by watch");
+    stop.cancel();
+    assert_eq!(watcher.await.unwrap(), Ok(0));
+}

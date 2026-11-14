@@ -1,0 +1,55 @@
+# The Obsidian plugin (RFC 0001 §6.8, phase 4): the kura-core engine built
+# to WASM, then the TypeScript shell bundled with it by esbuild.
+version: "3"
+
+vars:
+  WASM_OUT: plugin/src/wasm
+
+tasks:
+  wasm:build:
+    desc: Build kura-wasm for wasm32, bind it for the web and shrink it with wasm-opt -Oz into plugin/src/wasm (gitignored)
+    sources:
+      - crates/kura-core/src/**/*.rs
+      - crates/kura-wasm/src/**/*.rs
+    generates:
+      - "{{.WASM_OUT}}/kura_bg.wasm"
+    cmds:
+      - cargo build -p kura-wasm --profile wasm --target wasm32-unknown-unknown
+      - wasm-bindgen --target web --out-dir {{.WASM_OUT}} --out-name kura target/wasm32-unknown-unknown/wasm/kura_wasm.wasm
+      # The generated .wasm.d.ts would shadow the bytes import esbuild provides.
+      - rm -f {{.WASM_OUT}}/kura_bg.wasm.d.ts
+      - wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals -o {{.WASM_OUT}}/kura_bg.wasm {{.WASM_OUT}}/kura_bg.wasm
+      - 'echo "kura_bg.wasm: $(stat -c %s {{.WASM_OUT}}/kura_bg.wasm) bytes"'
+
+  plugin:install:
+    desc: Install the plugin's pinned JavaScript dependencies (pnpm, frozen lockfile)
+    dir: plugin
+    cmds:
+      - pnpm install --frozen-lockfile
+
+  plugin:build:
+    desc: "Bundle the plugin into plugin/main.js with the WASM core embedded; fails above 3 MB (decision 54)"
+    deps: [wasm:build]
+    dir: plugin
+    cmds:
+      - pnpm run build
+
+  plugin:test:
+    desc: Run the plugin shell's tests with coverage (80% gate)
+    deps: [wasm:build]
+    dir: plugin
+    cmds:
+      - pnpm run test
+
+  plugin:lint:
+    desc: "Type-check (strict, noUncheckedIndexedAccess) and lint the plugin shell: no any, no non-null assertion"
+    deps: [wasm:build]
+    dir: plugin
+    cmds:
+      - pnpm run lint
+
+  plugin:audit:
+    desc: Check the plugin's JavaScript dependencies for known vulnerabilities
+    dir: plugin
+    cmds:
+      - pnpm audit

@@ -151,9 +151,8 @@ pub async fn put_chunk(
     Raw(body): Raw,
 ) -> Result<StatusCode, ApiError> {
     let a = access(&state, &caller, v, VaultRole::Editor).await?;
-    let store = storage(&state)?;
+    storage(&state)?;
     let hash = parse_hash(&hash)?;
-    let len = i64::try_from(body.len()).map_err(|_| ApiError::of(ProblemType::PayloadTooLarge))?;
     // T6: the bytes are their address, checked before anything is stored.
     let data = body.clone();
     let actual = tokio::task::spawn_blocking(move || ChunkHash::of(&data))
@@ -162,6 +161,21 @@ pub async fn put_chunk(
     if actual != hash {
         return Err(ApiError::of(ProblemType::HashMismatch));
     }
+    store_chunk(&state, &a, v, hash, body).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Stores one chunk whose hash was checked: sealed, stored, then recorded
+/// within the tenant's quota. Shared by uploads and server-side merges.
+pub(super) async fn store_chunk(
+    state: &SharedState,
+    a: &VaultAccess,
+    v: Uuid,
+    hash: ChunkHash,
+    body: bytes::Bytes,
+) -> Result<(), ApiError> {
+    let store = storage(state)?;
+    let len = i64::try_from(body.len()).map_err(|_| ApiError::of(ProblemType::PayloadTooLarge))?;
     // 1. A short transaction: already present? over quota? No connection is
     //    held across the Vault and object storage calls below (review P1).
     let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
@@ -175,9 +189,9 @@ pub async fn put_chunk(
     .unwrap_or(false);
     if present {
         tx.commit().await?;
-        return Ok(StatusCode::NO_CONTENT);
+        return Ok(());
     }
-    check_quota(&state, &a, &mut tx, len).await?;
+    check_quota(state, a, &mut tx, len).await?;
     tx.commit().await?;
 
     // 2. Seal and store, no transaction open. Storage first: if it fails, no
@@ -203,7 +217,7 @@ pub async fn put_chunk(
     // 3. Record it. The tenant lock serializes this check with every other
     //    upload of the tenant, so concurrent uploads cannot overshoot the
     //    quota (review P3).
-    let recorded = record_chunk(&state, &a, v, &hash, len, &object_key).await;
+    let recorded = record_chunk(state, a, v, &hash, len, &object_key).await;
     let inserted = match recorded {
         Ok(inserted) => inserted,
         Err(e) => {
@@ -215,7 +229,7 @@ pub async fn put_chunk(
         // Another upload of the same chunk won; ours is an orphan object.
         delete_orphan(&objects, &path).await;
     }
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }
 
 async fn record_chunk(
@@ -320,8 +334,33 @@ pub async fn get_chunk(
     Path((v, hash)): Path<(Uuid, String)>,
 ) -> Result<Response, ApiError> {
     let a = access(&state, &caller, v, VaultRole::Viewer).await?;
-    let store = storage(&state)?;
     let hash = parse_hash(&hash)?;
+    let plain = read_chunk(&state, &a, v, hash).await?;
+    let mut response = (StatusCode::OK, plain).into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    // A chunk never changes under its address (§6.4).
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, immutable, max-age=31536000"),
+    );
+    if let Ok(etag) = HeaderValue::from_str(&format!("\"{hash}\"")) {
+        headers.insert(header::ETAG, etag);
+    }
+    Ok(response)
+}
+
+/// One stored chunk, decrypted and checked against its address.
+pub(super) async fn read_chunk(
+    state: &SharedState,
+    a: &VaultAccess,
+    v: Uuid,
+    hash: ChunkHash,
+) -> Result<Vec<u8>, ApiError> {
+    let store = storage(state)?;
     let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
     let object_key: Option<String> =
         sqlx::query_scalar("SELECT object_key FROM chunk WHERE vault_id = $1 AND hash = $2")
@@ -346,26 +385,37 @@ pub async fn get_chunk(
     let opened = tokio::task::spawn_blocking(move || crypto::open(&key, v, &hash, &stored))
         .await
         .map_err(|e| ApiError::Unavailable(e.to_string()))?;
-    let plain = opened.map_err(|e| {
+    opened.map_err(|e| {
         state.metrics.chunk_corrupt_total.inc();
         tracing::error!(vault = %v, error = %e, "stored chunk failed its check");
         ApiError::Unavailable(e.to_string())
-    })?;
-    let mut response = (StatusCode::OK, plain).into_response();
-    let headers = response.headers_mut();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/octet-stream"),
-    );
-    // A chunk never changes under its address (§6.4).
-    headers.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("private, immutable, max-age=31536000"),
-    );
-    if let Ok(etag) = HeaderValue::from_str(&format!("\"{hash}\"")) {
-        headers.insert(header::ETAG, etag);
+    })
+}
+
+/// A whole stored file version, chunk by chunk.
+pub(super) async fn read_blob(
+    state: &SharedState,
+    a: &VaultAccess,
+    v: Uuid,
+    hash: ChunkHash,
+) -> Result<Vec<u8>, ApiError> {
+    let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
+    let chunks: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT chunk_hash FROM blob_chunk WHERE vault_id = $1 AND blob_hash = $2 ORDER BY position",
+    )
+    .bind(v)
+    .bind(hash.as_bytes().as_slice())
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let mut out = Vec::new();
+    for c in chunks {
+        let h = <[u8; 32]>::try_from(c.as_slice())
+            .map(ChunkHash::from_bytes)
+            .map_err(|_| ApiError::Unavailable("stored chunk hash is not 32 bytes".into()))?;
+        out.extend_from_slice(&read_chunk(state, a, v, h).await?);
     }
-    Ok(response)
+    Ok(out)
 }
 
 /// Store a file version's manifest; every chunk must already be present.
@@ -413,8 +463,21 @@ pub async fn put_blob(
     if max_file.is_some_and(|m| body.size > m.bytes()) {
         return Err(ApiError::of(ProblemType::PayloadTooLarge));
     }
+    store_blob(&state, &a, v, hash, body.size, &chunks).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Records a manifest whose address was checked; every chunk must be stored.
+pub(super) async fn store_blob(
+    state: &SharedState,
+    a: &VaultAccess,
+    v: Uuid,
+    hash: ChunkHash,
+    size: u64,
+    chunks: &[ChunkHash],
+) -> Result<(), ApiError> {
     let raw: Vec<Vec<u8>> = chunks.iter().map(|h| h.as_bytes().to_vec()).collect();
-    let size = i64::try_from(body.size).map_err(|_| ApiError::of(ProblemType::PayloadTooLarge))?;
+    let size = i64::try_from(size).map_err(|_| ApiError::of(ProblemType::PayloadTooLarge))?;
     let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
     let rows = sqlx::query("SELECT hash, size FROM chunk WHERE vault_id = $1 AND hash = ANY($2)")
         .bind(v)
@@ -464,7 +527,41 @@ pub async fn put_blob(
         .await?;
     }
     tx.commit().await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
+}
+
+/// Stores `data` as a file version: cut with the vault's chunking, chunks the
+/// vault lacks sealed and stored, then the manifest. Returns its address.
+pub(super) async fn store_content(
+    state: &SharedState,
+    a: &VaultAccess,
+    v: Uuid,
+    data: Vec<u8>,
+) -> Result<ChunkHash, ApiError> {
+    let params = kura_core::ChunkParams::new(
+        a.chunking.min.bytes(),
+        a.chunking.avg.bytes(),
+        a.chunking.max.bytes(),
+    )
+    .map_err(|e| ApiError::Unavailable(e.to_string()))?;
+    let data = bytes::Bytes::from(data);
+    let spans = kura_core::chunks(&data, params);
+    let hashes: Vec<ChunkHash> = spans.iter().map(|c| c.hash).collect();
+    for span in &spans {
+        let end = span.offset.saturating_add(span.len);
+        store_chunk(
+            state,
+            a,
+            v,
+            span.hash,
+            data.slice(span.offset..end.min(data.len())),
+        )
+        .await?;
+    }
+    let size = data.len() as u64;
+    let blob = blob_hash(size, &hashes);
+    store_blob(state, a, v, blob, size, &hashes).await?;
+    Ok(blob)
 }
 
 /// A file version's manifest.

@@ -51,3 +51,8 @@ fuzz/artifacts/
 
 # Local dev stack: generated CA/certificates (task dev:certs)
 dev/certs/
+
+# The plugin: the generated WASM core and its build output
+plugin/src/wasm/
+plugin/main.js
+plugin/coverage/

@@ -522,3 +522,260 @@ pub async fn devices(ctx: &Ctx, action: Option<DeviceAction>) -> Result<u8, Fail
         }
     }
 }
+
+/// Local edits quiet this long are pushed (§6.3: Obsidian saves coalesce).
+const QUIET: std::time::Duration = std::time::Duration::from_secs(5);
+/// No notice (the server pings every 30 s) for this long: the socket is down.
+const SILENCE: std::time::Duration = std::time::Duration::from_secs(75);
+/// Reconnection backoff bounds, with decorrelated jitter (§6.3).
+const BACKOFF_MIN: u64 = 1;
+const BACKOFF_MAX: u64 = 60;
+
+/// Decorrelated jitter: a delay between the minimum and three times the last, capped.
+fn next_backoff(last: u64) -> u64 {
+    let r = u64::from_le_bytes(
+        uuid::Uuid::new_v4().as_bytes()[..8]
+            .try_into()
+            .unwrap_or_default(),
+    );
+    let span = last.saturating_mul(3).saturating_sub(BACKOFF_MIN).max(1);
+    BACKOFF_MIN
+        .saturating_add(r.checked_rem(span).unwrap_or_default())
+        .min(BACKOFF_MAX)
+}
+
+/// A fingerprint of the folder's files, to tell when local edits went quiet.
+async fn fingerprint(host: &FsHost) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    if let Ok(mut files) = host.list().await {
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        for f in files {
+            (f.path, f.size, f.mtime).hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+enum Socketed {
+    Stop,
+    Reconnect,
+}
+
+/// `kura watch`: sync once, then pull on every notification, push local
+/// edits once quiet for 5 s, reconnect with backoff, and pull on each retry
+/// while the socket is down, until `stop` (§6.3).
+pub async fn watch(
+    ctx: &Ctx,
+    vault: Option<&str>,
+    stop: impl std::future::Future<Output = ()>,
+) -> Result<u8, Fail> {
+    let mut cfg = config(ctx)?;
+    let name = match vault {
+        Some(v) if cfg.vaults.contains_key(v) => v.to_owned(),
+        Some(v) => {
+            return Err(Fail(
+                3,
+                format!("{v} is not attached: run `kura attach {v} <folder>`"),
+            ));
+        }
+        None if cfg.vaults.len() == 1 => cfg.vaults.keys().next().cloned().unwrap_or_default(),
+        None => return Err(Fail(3, "name the vault to watch".into())),
+    };
+    tokio::pin!(stop);
+    let mut backoff = BACKOFF_MIN;
+    loop {
+        // A fresh access token per connection: the server closes the socket
+        // when the one behind its ticket expires. Only "sign in again" and a
+        // refusal end the watch; anything else is retried (review 4 L3).
+        let wait = match connect_and_watch(ctx, &mut cfg, &name, &mut stop).await {
+            Ok(Watched::Stop) => return Ok(0),
+            Ok(Watched::Dropped { lasted }) if lasted >= std::time::Duration::from_secs(60) => {
+                backoff = BACKOFF_MIN;
+                continue;
+            }
+            Ok(Watched::Dropped { .. }) => format!("{name}: notifications dropped"),
+            Err(Fail(code @ (2 | 3), msg)) => return Err(Fail(code, msg)),
+            Err(Fail(_, msg)) => format!("{name}: {msg}"),
+        };
+        backoff = next_backoff(backoff);
+        eprintln!("{wait}; retrying in {backoff} s");
+        tokio::select! {
+            () = &mut stop => return Ok(0),
+            () = tokio::time::sleep(std::time::Duration::from_secs(backoff)) => {}
+        }
+    }
+}
+
+enum Watched {
+    Stop,
+    Dropped { lasted: std::time::Duration },
+}
+
+/// One connection: a sync, the socket, then notices until it drops.
+async fn connect_and_watch(
+    ctx: &Ctx,
+    cfg: &mut Config,
+    name: &str,
+    stop: &mut std::pin::Pin<&mut impl std::future::Future<Output = ()>>,
+) -> Result<Watched, Fail> {
+    let api = session(ctx, cfg).await?;
+    if sync_one(ctx, &api, cfg, name, false).await? == 2 {
+        return Err(Fail(2, "sign in again: run `kura login`".into()));
+    }
+    let id = cfg
+        .vaults
+        .get(name)
+        .map(|a| a.id)
+        .ok_or_else(|| Fail(3, format!("{name} is not attached")))?;
+    let mut socket = api
+        .events(id)
+        .await
+        .map_err(|e| Fail(1, format!("notifications unavailable ({e})")))?;
+    println!("{name}: watching for changes");
+    let opened = tokio::time::Instant::now();
+    match on_socket(ctx, &api, cfg, name, &mut socket, stop).await? {
+        Socketed::Stop => Ok(Watched::Stop),
+        Socketed::Reconnect => Ok(Watched::Dropped {
+            lasted: opened.elapsed(),
+        }),
+    }
+}
+
+async fn on_socket(
+    ctx: &Ctx,
+    api: &Api,
+    cfg: &mut Config,
+    name: &str,
+    socket: &mut api::Socket,
+    stop: &mut std::pin::Pin<&mut impl std::future::Future<Output = ()>>,
+) -> Result<Socketed, Fail> {
+    use futures_util::StreamExt as _;
+    use tokio_tungstenite::tungstenite::Message;
+    let path = cfg
+        .vaults
+        .get(name)
+        .map(|a| a.path.clone())
+        .unwrap_or_default();
+    let host = FsHost::new(path);
+    let mut last_notice = tokio::time::Instant::now();
+    let mut scan = tokio::time::interval(QUIET);
+    let mut seen = fingerprint(&host).await;
+    let mut changed_at: Option<tokio::time::Instant> = None;
+    loop {
+        tokio::select! {
+            () = stop.as_mut() => {
+                drop(socket.close(None).await);
+                return Ok(Socketed::Stop);
+            }
+            m = socket.next() => match m {
+                Some(Ok(Message::Text(t))) => {
+                    last_notice = tokio::time::Instant::now();
+                    let kind = serde_json::from_str::<serde_json::Value>(&t).ok().and_then(|v| v.get("type").and_then(|k| k.as_str()).map(str::to_owned));
+                    if matches!(kind.as_deref(), Some("change" | "pull")) {
+                        let code = sync_one(ctx, api, cfg, name, false).await?;
+                        if code == 2 {
+                            return Err(Fail(2, "sign in again: run `kura login`".into()));
+                        }
+                        seen = fingerprint(&host).await;
+                    }
+                }
+                Some(Ok(Message::Close(_)) | Err(_)) | None => return Ok(Socketed::Reconnect),
+                Some(Ok(_)) => last_notice = tokio::time::Instant::now(),
+            },
+            _ = scan.tick() => {
+                if last_notice.elapsed() > SILENCE {
+                    return Ok(Socketed::Reconnect);
+                }
+                let now = fingerprint(&host).await;
+                if now != seen {
+                    seen = now;
+                    changed_at = Some(tokio::time::Instant::now());
+                } else if changed_at.is_some_and(|t| t.elapsed() >= QUIET) {
+                    changed_at = None;
+                    sync_one(ctx, api, cfg, name, false).await?;
+                    seen = fingerprint(&host).await;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_stays_between_one_and_sixty_seconds() {
+        let mut b = BACKOFF_MIN;
+        for _ in 0..200 {
+            b = next_backoff(b);
+            assert!((BACKOFF_MIN..=BACKOFF_MAX).contains(&b), "{b}");
+        }
+        assert!((BACKOFF_MIN..=3).contains(&next_backoff(1)));
+    }
+
+    #[test]
+    fn exit_codes_follow_section_4_5() {
+        let p = |kind: &str| RemoteError::Problem {
+            status: 400,
+            kind: kind.into(),
+            detail: None,
+        };
+        for (kind, code) in [
+            ("invalid_token", 2),
+            ("device_revoked", 2),
+            ("device_unknown", 2),
+            ("insufficient_role", 3),
+            ("quota_exceeded", 3),
+            ("client_too_old", 3),
+            ("invalid_path", 4),
+            ("payload_too_large", 4),
+            ("rate_limited", 1),
+        ] {
+            assert_eq!(code_of(&p(kind)), code, "{kind}");
+        }
+        assert_eq!(code_of(&RemoteError::Unavailable("x".into())), 1);
+        let f = Fail::from(p("client_too_old"));
+        assert_eq!((f.0, f.1.ends_with("Update kura.")), (3, true));
+        assert_eq!(Fail::from(oidc::OidcError::Denied).0, 2);
+        assert_eq!(Fail::from(oidc::OidcError::Unavailable("x".into())).0, 1);
+    }
+
+    #[test]
+    fn a_host_name_is_a_valid_device_name() {
+        assert!(VaultPath::parse(&host_name()).is_ok());
+    }
+
+    #[test]
+    fn server_chunking_is_checked() {
+        assert!(
+            params(api::Chunking {
+                min: 64,
+                avg: 256,
+                max: 1024
+            })
+            .is_ok()
+        );
+        assert_eq!(
+            params(api::Chunking {
+                min: 0,
+                avg: 1,
+                max: 2
+            })
+            .err()
+            .map(|f| f.0),
+            Some(1)
+        );
+        let a = blob_of(
+            b"x",
+            params(api::Chunking {
+                min: 64,
+                avg: 256,
+                max: 1024,
+            })
+            .unwrap_or_else(|f| panic!("{}", f.1)),
+        );
+        assert_eq!(a, blob_hash(1, &[ChunkHash::of(b"x")]));
+    }
+}

@@ -27,6 +27,9 @@ pub const LIMITS: &[(&str, &str, u32)] = &[
     ("POST", "/v1/vaults/{v}/commits", 120),
     ("GET", "/v1/vaults/{v}/changes", 600),
     ("GET", "/v1/vaults/{v}/entries", 60),
+    ("POST", "/v1/vaults/{v}/events/ticket", 10),
+    // A socket is opened with a ticket, not a device: bounded by 4 per device instead.
+    ("GET", "/v1/vaults/{v}/events", 60),
 ];
 
 const WINDOW: Duration = Duration::from_secs(60);

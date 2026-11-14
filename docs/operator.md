@@ -51,7 +51,8 @@ Locally: `task dev:up` starts PostgreSQL 18 with podman and prints the
 
 ```yaml
 oidc:
-  issuer: https://auth.example.org/application/o/kura/   # https only
+  issuer: https://auth.example.org/                     # https only; Authentik's global issuer mode
+  discovery: https://auth.example.org/application/o/kura-cli/   # optional: where the keys are found (default: the issuer)
   audiences: [kura-plugin, kura-cli]                     # one client_id per client type, at least one
   algorithms: [RS256]                                    # pinned; never `none`; default [RS256]
   platformAdmin: { claim: groups, value: kura-platform-admins }
@@ -158,7 +159,9 @@ Per §13 and §6.2:
 
 - A device code flow, set on the brand (none ships by default).
 - One public OAuth provider per client type (`kura-plugin`, `kura-cli`),
-  matching `oidc.audiences`, with the `offline_access` and `profile` scope
+  matching `oidc.audiences`, both in **global issuer mode**, so one issuer
+  (`oidc.issuer`, Authentik's base URL) serves both; `oidc.discovery` then
+  names one application's discovery URL, since the base URL has none, with the `offline_access` and `profile` scope
   mappings, `include_claims_in_id_token` on, and a consent stage in its
   authorization flow.
 - The groups named in `claimMappings` and `platformAdmin`.
@@ -205,6 +208,7 @@ kura attach notes ~/Notes      # shows what will move, asks first (--yes to skip
 kura sync [notes] [--dry-run]
 kura status
 kura devices [revoke <name>]
+kura watch [notes]             # stays in sync: pulls on every notification, pushes edits once quiet
 ```
 
 Exit codes: 0 done, 1 unexpected (server unreachable, local I/O), 2 sign in
@@ -216,7 +220,20 @@ replaces the sign-in for scripts and tests. The sync state of a folder is
 `<folder>/.kura/state.json`; dot-folders (`.obsidian`, `.trash`, `.kura`)
 never sync as notes; deleted files go to `<folder>/.trash`.
 
-## 10. Local stack
+## 10. The Obsidian plugin
+
+Kura Sync is built by `task plugin:build` into `plugin/main.js` (the WASM
+core embedded, at most 3 MB), with `plugin/manifest.json` and
+`plugin/styles.css`. Copy the three files into
+`<vault>/.obsidian/plugins/weebo-kura/` and enable it (Obsidian 1.11.4 or
+later). In its settings: the server URL, the sign-in URL (the `kura-plugin`
+application's OIDC URL, e.g. `https://auth.example.org/application/o/kura-plugin/`),
+then **Sign in** (device code), then the vault. The refresh token is kept in
+Obsidian's `SecretStorage` under an id naming the server and the vault; the
+sync state in the plugin's folder; neither syncs. A note open in the editor
+is not overwritten: the remote change waits until it is closed.
+
+## 11. Local stack
 
 Rootless podman, one container at a time, every port on loopback:
 

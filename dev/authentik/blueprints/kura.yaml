@@ -94,6 +94,8 @@ entries:
       name: kura-cli
       client_type: public
       client_id: kura-cli
+      # One issuer for both client types: the server accepts one (§4.1).
+      issuer_mode: global
       grant_types: [authorization_code, refresh_token, "urn:ietf:params:oauth:grant-type:device_code"]
       include_claims_in_id_token: true
       # The device code lives as long as this (60 s by default: too short to type it).
@@ -118,3 +120,36 @@ entries:
       name: kura
       slug: kura
       provider: !KeyOf provider-kura-cli
+
+  # The Obsidian plugin's client (§6.2): same flows, its own audience.
+  - model: authentik_providers_oauth2.oauth2provider
+    id: provider-kura-plugin
+    identifiers: { name: kura-plugin }
+    attrs:
+      name: kura-plugin
+      client_type: public
+      client_id: kura-plugin
+      issuer_mode: global
+      grant_types: [authorization_code, refresh_token, "urn:ietf:params:oauth:grant-type:device_code"]
+      include_claims_in_id_token: true
+      access_code_validity: minutes=10
+      access_token_validity: minutes=15
+      refresh_token_validity: days=30
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-explicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, offline_access]]
+      redirect_uris:
+        - matching_mode: strict
+          url: "app://obsidian.md"
+
+  - model: authentik_core.application
+    identifiers: { slug: kura-plugin }
+    attrs:
+      name: Kura Sync
+      slug: kura-plugin
+      provider: !KeyOf provider-kura-plugin

@@ -407,7 +407,14 @@ async fn push<H: Host, R: Remote>(
         };
         let resp = commit(remote, &req).await?;
         for (&(op, pushed), result) in batch.iter().zip(resp.results) {
-            settle(
+            // A local file that cannot be moved or written now (an open note)
+            // fails that file only: the rest of the batch is settled and saved,
+            // and the retried push lands on the same conflict file (review 4 H2).
+            let path = pushed
+                .as_ref()
+                .map(|p| p.local.clone())
+                .unwrap_or_else(|| result.head.path.clone());
+            match settle(
                 host,
                 remote,
                 state,
@@ -417,7 +424,17 @@ async fn push<H: Host, R: Remote>(
                 result,
                 report,
             )
-            .await?;
+            .await
+            {
+                Ok(()) => {}
+                Err(e @ (SyncError::Host(_) | SyncError::Corrupt)) => {
+                    report.failed.push((path, e.to_string()))
+                }
+                Err(e) => {
+                    host.save(state).await?;
+                    return Err(e);
+                }
+            }
         }
         host.save(state).await?;
     }
@@ -551,6 +568,27 @@ async fn settle<H: Host, R: Remote>(
             // A delete of an entry edited since: dropped, the file comes back.
             apply(host, remote, state, &head, opts, report).await?;
         }
+        (_, Some(p), _) if head.blob.is_some_and(|b| b != p.blob) => {
+            // Merged with edits made elsewhere (phase 4): our edit is in the
+            // head. Known as our pushed version on its old base, so the head is
+            // written only if the file is still what was pushed; an edit made
+            // since is pushed again against that base and merged again.
+            let base = match op {
+                Operation::Put { base, .. } => base.unwrap_or(head.revision),
+                Operation::Delete { base, .. } => *base,
+            };
+            state.entries.insert(
+                op.entry(),
+                Known {
+                    path: p.local.clone(),
+                    revision: base,
+                    blob: p.blob,
+                    size: p.size,
+                    stamp: Some(p.stamp),
+                },
+            );
+            apply(host, remote, state, &head, opts, report).await?;
+        }
         (_, Some(p), _) => {
             if head.entry != op.entry() {
                 // Unified with an identical entry pushed by another device.
@@ -564,21 +602,16 @@ async fn settle<H: Host, R: Remote>(
                 let moved = Stamp::from(&host.rename(&p.local, &head.path).await?);
                 (moved == p.stamp).then_some(p.stamp)
             };
-            let blob = head.blob.unwrap_or(p.blob);
-            if blob == p.blob {
-                state.entries.insert(
-                    head.entry,
-                    Known {
-                        path: head.path.clone(),
-                        revision: head.revision,
-                        blob,
-                        size: head.size,
-                        stamp,
-                    },
-                );
-            } else {
-                apply(host, remote, state, &head, opts, report).await?;
-            }
+            state.entries.insert(
+                head.entry,
+                Known {
+                    path: head.path.clone(),
+                    revision: head.revision,
+                    blob: p.blob,
+                    size: head.size,
+                    stamp,
+                },
+            );
         }
         (_, None, _) => {}
     }
@@ -752,7 +785,9 @@ async fn download<R: Remote>(remote: &R, blob: ChunkHash, size: u64) -> Result<V
     );
     for h in &hashes {
         let part = remote.get_chunk(h).await?;
-        if ChunkHash::of(&part) != *h {
+        // The stated size bounds memory before the bytes are kept (review 4 L6).
+        if ChunkHash::of(&part) != *h || (out.len() as u64).saturating_add(part.len() as u64) > size
+        {
             return Err(SyncError::Corrupt);
         }
         out.extend_from_slice(&part);

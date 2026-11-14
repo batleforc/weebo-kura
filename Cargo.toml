@@ -3,7 +3,7 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/kura-api", "crates/kura-core", "crates/kura-server", "crates/kura-cli"]
+members = ["crates/kura-api", "crates/kura-core", "crates/kura-server", "crates/kura-cli", "crates/kura-wasm"]
 
 [workspace.package]
 version = "0.1.0"
@@ -29,7 +29,7 @@ serde_norway = "0.9"
 serde_path_to_error = "0.1"
 thiserror = "2"
 anyhow = "1"
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "signal", "io-util"] }
 tokio-util = "0.7"
 tower = "0.5"
@@ -52,6 +52,8 @@ fastcdc = { version = "5", default-features = false }
 # Vault paths are NFC (§6.3); case folding for path_key on the server.
 unicode-normalization = { version = "0.1", default-features = false, features = ["std"] }
 caseless = "0.2"
+# Line merge for Markdown (§8, decision 43).
+diffy = "0.5"
 # Chunk encryption (§6.6): AES-256-GCM from aws-lc-rs, already linked by
 # jsonwebtoken and rustls, instead of the `aes-gcm` crate (plan D38).
 aws-lc-rs = "1"
@@ -109,6 +111,12 @@ wildcard_imports = "deny"
 lto = true
 codegen-units = 1
 strip = true
+
+# The plugin's WASM core: release, unstripped so wasm-bindgen sees its target
+# features; `wasm-opt -Oz` then strips it (decision 54).
+[profile.wasm]
+inherits = "release"
+strip = false
 
 # Most of target/ is debug info nobody reads; overflow checks stay on.
 [profile.dev]

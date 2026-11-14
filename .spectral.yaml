@@ -59,3 +59,14 @@ overrides:
       - "docs/api/openapi.json#/paths/~1readyz"
     rules:
       owasp:api2:2023-read-restricted: off
+  # The notification socket answers 101 Switching Protocols, never 2xx (RFC 6455).
+  - files:
+      - "docs/api/openapi.json#/paths/~1v1~1vaults~1%7Bv%7D~1events"
+    rules:
+      operation-success-response: off
+  # The ticket is in the URL by decision 36: a web view cannot set headers on a
+  # WebSocket. It is single use, valid 30 s, and stored only as its SHA-256 (T11).
+  - files:
+      - "docs/api/openapi.json#/components/securitySchemes/ws_ticket"
+    rules:
+      owasp:api2:2023-no-api-keys-in-url: off

@@ -144,6 +144,7 @@ pub fn no_key_verifier() -> kura_server::auth::Verifier {
     use kura_server::config::{Algorithm, ClaimMatch, OidcConfig};
     let oidc = OidcConfig {
         issuer: "https://auth.example.org/".into(),
+        discovery: None,
         audiences: vec!["kura-cli".into()],
         algorithms: vec![Algorithm::EdDSA],
         platform_admin: ClaimMatch {
@@ -229,6 +230,7 @@ pub mod tokens {
             use kura_server::config::{Algorithm, ClaimMatch, OidcConfig};
             let oidc = OidcConfig {
                 issuer: ISSUER.into(),
+                discovery: None,
                 audiences: vec!["kura-cli".into()],
                 algorithms: vec![Algorithm::EdDSA],
                 platform_admin: ClaimMatch {

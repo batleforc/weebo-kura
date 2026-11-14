@@ -61,6 +61,17 @@ impl utoipa::Modify for SecurityAddon {
                     .build(),
             ),
         );
+        // A WebSocket cannot carry an Authorization header from a web view:
+        // the socket presents a single-use ticket instead (decision 36).
+        components.add_security_scheme(
+            "ws_ticket",
+            SecurityScheme::ApiKey(utoipa::openapi::security::ApiKey::Query(
+                utoipa::openapi::security::ApiKeyValue::with_description(
+                    "ticket",
+                    "From POST /vaults/{v}/events/ticket: 256 random bits, single use, 30 s",
+                ),
+            )),
+        );
     }
 }
 
@@ -75,6 +86,8 @@ pub struct AppState {
     pub http: HttpSettings,
     /// Object storage and data keys; `None` until configured (503 on chunk routes).
     pub storage: Option<Arc<crate::store::Storage>>,
+    /// This replica's WebSocket fan-out (§6.3).
+    pub hub: crate::notify::Hub,
     snapshot: RwLock<Option<Arc<Snapshot>>>,
     /// This replica's last rejected configuration, for `GET /v1/admin/status`.
     rejection: Mutex<Option<Vec<kura_api::ConfigError>>>,
@@ -90,6 +103,7 @@ impl AppState {
             limits: crate::limits::RateLimiter::default(),
             http: HttpSettings::default(),
             storage: None,
+            hub: crate::notify::Hub::default(),
             snapshot: RwLock::new(None),
             rejection: Mutex::new(None),
         }
@@ -212,6 +226,8 @@ fn v1_router() -> OpenApiRouter<SharedState> {
         .routes(routes!(chunks::missing_chunks))
         .routes(routes!(changes::get_changes))
         .routes(routes!(changes::get_entries))
+        .routes(routes!(events::create_ticket))
+        .routes(routes!(events::events))
         .routes(routes!(chunks::put_blob, chunks::get_blob))
         .merge(
             // 1,000 operations do not fit in 64 KiB.
@@ -414,6 +430,7 @@ pub mod chunks;
 pub mod commits;
 pub mod device;
 pub mod devices;
+pub mod events;
 pub mod vaults;
 
 #[cfg(test)]

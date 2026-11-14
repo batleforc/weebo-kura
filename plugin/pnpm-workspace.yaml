@@ -1,0 +1,5 @@
+allowBuilds:
+  esbuild: true
+overrides:
+  # GHSA-g3hv-75wg-m249 (ReDoS), reached through eslint (dev only); fixed in 11.0.1.
+  minimatch: ">=11.0.1"

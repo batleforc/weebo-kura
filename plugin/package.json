@@ -1,0 +1,24 @@
+{
+  "name": "weebo-kura",
+  "version": "0.1.0",
+  "description": "Kura Sync: Obsidian vaults synced with a self-hosted kura server (RFC 0001)",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "test": "vitest run --coverage",
+    "lint": "tsc --noEmit && eslint src test"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "26.6.6",
+    "@vitest/coverage-v8": "5.1.0",
+    "esbuild": "0.28.2",
+    "eslint": "10.14.0",
+    "obsidian": "1.14.4",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.2",
+    "vitest": "5.1.0"
+  }
+}

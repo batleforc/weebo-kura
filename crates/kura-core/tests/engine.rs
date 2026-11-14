@@ -13,7 +13,9 @@ use std::collections::BTreeMap;
 use kura_core::sync::{
     FileMeta, Host, HostError, LocalState, Options, Pending, Remote, RemoteError, sync,
 };
-use kura_core::wire::{ChangesResponse, CommitRequest, CommitResponse, EntryState};
+use kura_core::wire::{
+    ChangesResponse, CommitRequest, CommitResponse, EntryState, OpResult, Outcome,
+};
 use kura_core::{ChunkHash, ChunkParams, EntryId, VaultPath, blob_hash};
 use uuid::Uuid;
 
@@ -23,6 +25,8 @@ struct Mem {
     tick: Cell<i64>,
     /// Writes to this path fail, as a name the disk refuses would.
     unwritable: Option<String>,
+    /// This file cannot be moved (an open note).
+    pinned: Option<String>,
 }
 
 impl Host for Mem {
@@ -63,6 +67,9 @@ impl Host for Mem {
         Ok(self.stat(path).await?.unwrap())
     }
     async fn rename(&self, from: &VaultPath, to: &VaultPath) -> Result<FileMeta, HostError> {
+        if self.pinned.as_deref() == Some(from.as_str()) {
+            return Err(HostError("open in the editor".into()));
+        }
         // As FsHost: never onto an existing file.
         if self.files.borrow().contains_key(to.as_str()) {
             return Err(HostError("exists".into()));
@@ -95,6 +102,8 @@ struct Scripted {
     calls: Cell<usize>,
     /// Items per `changes` page; 0 for all in one.
     page: usize,
+    /// The answer to a commit; unreachable when absent.
+    reply: Option<CommitResponse>,
 }
 
 impl Remote for Scripted {
@@ -139,7 +148,9 @@ impl Remote for Scripted {
         Ok((data.len() as u64, vec![ChunkHash::of(data)]))
     }
     async fn commit(&self, _: &CommitRequest) -> Result<CommitResponse, RemoteError> {
-        Err(RemoteError::Unavailable("scripted".into()))
+        self.reply
+            .clone()
+            .ok_or_else(|| RemoteError::Unavailable("scripted".into()))
     }
     async fn changes(&self, since: u64, _: Option<Uuid>) -> Result<ChangesResponse, RemoteError> {
         let all: Vec<EntryState> = self
@@ -417,4 +428,100 @@ fn a_copied_folder_starts_fresh() {
     assert_eq!(LocalState::adopt(Some(old), s.device, s.vault).cursor, 0);
     let json = serde_json::to_string(&s).unwrap();
     assert_eq!(serde_json::from_str::<LocalState>(&json).unwrap(), s);
+}
+
+/// Phase 4: a push answered `merged` ends with the merged head on disk,
+/// known at its new revision, and nothing left to push.
+#[tokio::test]
+async fn a_merged_push_writes_the_merged_head() {
+    let (base, base_data) = served_as("plan.md", b"one\ntwo\n", 1, 1);
+    let host = Mem::default();
+    let meta = host.write(&base.path, &base_data).await.unwrap();
+    let mut s = state();
+    s.entries.insert(
+        base.entry,
+        kura_core::sync::Known {
+            path: base.path.clone(),
+            revision: base.revision,
+            blob: base.blob.unwrap(),
+            size: base.size,
+            stamp: Some(kura_core::sync::Stamp::from(&meta)),
+        },
+    );
+    s.cursor = 1;
+    // Edited here (the fake host's mtime is fixed, so the size tells).
+    host.files
+        .borrow_mut()
+        .insert("plan.md".into(), b"one, here\ntwo\n".to_vec());
+    let (merged, merged_data) = served_as("plan.md", b"one, here\ntwo, there\n", 1, 3);
+    let remote = Scripted {
+        serve: vec![(merged.clone(), merged_data.clone())],
+        reply: Some(CommitResponse {
+            head_seq: 3,
+            results: vec![OpResult {
+                outcome: Outcome::Merged,
+                head: merged.clone(),
+                conflict: None,
+            }],
+        }),
+        ..Scripted::default()
+    };
+    let r = sync(&host, &remote, &mut s, &opts(false)).await.unwrap();
+    assert!(r.deferred.is_empty() && r.failed.is_empty(), "{r:?}");
+    assert_eq!(host.files.borrow()["plan.md"], merged_data);
+    assert_eq!(s.entries[&merged.entry].revision, merged.revision);
+    let again = sync(&host, &remote, &mut s, &opts(true)).await.unwrap();
+    assert_eq!(again.pushed, 0, "nothing left to push");
+}
+
+/// Review 4 H2: a conflict whose local file cannot be moved (an open note)
+/// fails that file only; the run completes and keeps the old base.
+#[tokio::test]
+async fn a_conflict_on_an_open_note_fails_that_file_only() {
+    let (base, base_data) = served_as("open.md", b"base\n", 1, 1);
+    let host = Mem {
+        pinned: Some("open.md".into()),
+        ..Mem::default()
+    };
+    let meta = host.write(&base.path, &base_data).await.unwrap();
+    let mut s = state();
+    s.entries.insert(
+        base.entry,
+        kura_core::sync::Known {
+            path: base.path.clone(),
+            revision: base.revision,
+            blob: base.blob.unwrap(),
+            size: base.size,
+            stamp: Some(kura_core::sync::Stamp::from(&meta)),
+        },
+    );
+    s.cursor = 1;
+    host.files
+        .borrow_mut()
+        .insert("open.md".into(), b"typed here\n".to_vec());
+    let (head, head_data) = served_as("open.md", b"edited elsewhere\n", 1, 2);
+    let (conflict, _) = served_as("open (conflict x).md", b"typed here\n", 9, 3);
+    let remote = Scripted {
+        serve: vec![(head.clone(), head_data)],
+        reply: Some(CommitResponse {
+            head_seq: 3,
+            results: vec![OpResult {
+                outcome: Outcome::Conflicted,
+                head: head.clone(),
+                conflict: Some(conflict),
+            }],
+        }),
+        ..Scripted::default()
+    };
+    let r = sync(&host, &remote, &mut s, &opts(false)).await.unwrap();
+    assert_eq!(r.failed.len(), 1, "{r:?}");
+    assert_eq!(
+        host.files.borrow()["open.md"],
+        b"typed here\n",
+        "the open note is untouched"
+    );
+    assert_eq!(
+        s.entries[&base.entry].revision, base.revision,
+        "the old base is kept for the retry"
+    );
 }

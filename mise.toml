@@ -26,6 +26,11 @@ cargo-deny = "latest"
 "cargo:cargo-fuzz" = "latest"
 # OpenAPI lint (weebo-api-contract)
 spectral = "latest"
+# The Obsidian plugin (phase 4): its package manager, the WASM bindings CLI
+# (must equal the `wasm-bindgen` crate's version) and `wasm-opt` (decision 54).
+pnpm = "latest"
+"cargo:wasm-bindgen-cli" = "0.2.130"
+"aqua:WebAssembly/binaryen" = "latest"
 
 [env]
 # Nightly only for `cargo fuzz`, pinned by date so a fuzz run is reproducible.

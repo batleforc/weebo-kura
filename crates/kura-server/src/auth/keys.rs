@@ -24,8 +24,21 @@ pub const MAX_AGE: Duration = Duration::from_secs(600);
 /// The two endpoints read from the provider's discovery document.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Discovery {
+    #[serde(default)]
+    issuer: Option<String>,
     jwks_uri: String,
     userinfo_endpoint: String,
+}
+
+/// An endpoint the server may send tokens to: https, or http on loopback
+/// for local tests (review 4 L5).
+fn safe_endpoint(url: &str) -> bool {
+    url.parse::<axum::http::Uri>()
+        .is_ok_and(|u| match (u.scheme_str(), u.host()) {
+            (Some("https"), Some(_)) => true,
+            (Some("http"), Some(h)) => matches!(h, "127.0.0.1" | "localhost" | "[::1]"),
+            _ => false,
+        })
 }
 
 /// Where keys and userinfo come from.
@@ -34,6 +47,8 @@ pub enum KeySource {
     Http {
         client: reqwest::Client,
         issuer: String,
+        /// The `iss` the discovery document must name (`oidc.issuer`).
+        expected: Option<String>,
         discovery: tokio::sync::OnceCell<Discovery>,
     },
     /// A fixed key set and userinfo answer, for tests.
@@ -53,8 +68,18 @@ impl KeySource {
         Ok(Self::Http {
             client,
             issuer: issuer.to_owned(),
+            expected: None,
             discovery: tokio::sync::OnceCell::new(),
         })
+    }
+
+    /// Refuses a discovery document that names another issuer.
+    #[must_use]
+    pub fn expecting(mut self, issuer: &str) -> Self {
+        if let Self::Http { expected, .. } = &mut self {
+            *expected = Some(issuer.to_owned());
+        }
+        self
     }
 }
 
@@ -162,6 +187,7 @@ impl Keys {
         let KeySource::Http {
             client,
             issuer,
+            expected,
             discovery,
         } = &self.source
         else {
@@ -183,6 +209,23 @@ impl Keys {
                     .json::<Discovery>()
                     .await
                     .map_err(provider)
+                    .and_then(|d| {
+                        let same =
+                            |a: &str, b: &str| a.trim_end_matches('/') == b.trim_end_matches('/');
+                        if let Some(want) = expected
+                            && !d.issuer.as_deref().is_some_and(|got| same(got, want))
+                        {
+                            return Err(AuthError::Provider(
+                                "discovery names another issuer".into(),
+                            ));
+                        }
+                        if !safe_endpoint(&d.jwks_uri) || !safe_endpoint(&d.userinfo_endpoint) {
+                            return Err(AuthError::Provider(
+                                "discovery endpoints must be https".into(),
+                            ));
+                        }
+                        Ok(d)
+                    })
             })
             .await
             .map(Some)

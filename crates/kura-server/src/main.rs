@@ -92,7 +92,14 @@ async fn run(config_path: PathBuf) -> anyhow::Result<()> {
     let pool = kura_server::db::connect(&url, 16).await?;
     kura_server::db::check_schema(&pool).await?;
     let keys = kura_server::auth::Keys::new(
-        kura_server::auth::KeySource::http(&config.oidc.issuer)?,
+        kura_server::auth::KeySource::http(
+            config
+                .oidc
+                .discovery
+                .as_deref()
+                .unwrap_or(&config.oidc.issuer),
+        )?
+        .expecting(&config.oidc.issuer),
         Some(pool.clone()),
     );
     let persisted = keys.load_persisted().await?;

@@ -1,0 +1,4 @@
+/* State is text, never colour alone (§4.5). */
+.kura-status { font-variant-numeric: tabular-nums; }
+.kura-code { font-family: var(--font-monospace); font-size: 1.6em; letter-spacing: 0.1em; user-select: all; }
+.kura-list li { overflow-wrap: anywhere; }

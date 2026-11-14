@@ -12,7 +12,7 @@ object_store = { workspace = true }
 base64 = { workspace = true }
 aws-lc-rs = { workspace = true }
 blake3 = { workspace = true }
-kura-core = { workspace = true, features = ["openapi"] }
+kura-core = { workspace = true, features = ["openapi", "merge"] }
 caseless = { workspace = true }
 unicode-normalization = { workspace = true }
 zeroize = { workspace = true }
@@ -48,6 +48,8 @@ uuid = { workspace = true, features = ["v4", "v7"] }
 futures-util = "0.3"
 # The CLI commands, driven over real HTTP against the app (tests/cli.rs).
 kura-cli = { workspace = true }
+# A WebSocket client for the notification tests, the version axum already links.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect"] }
 tower = { workspace = true }
 # Paused clock for the key-age test.
 tokio = { workspace = true, features = ["test-util"] }
