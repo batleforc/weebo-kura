@@ -1,0 +1,18 @@
+# The local tenant: groups from dev/authentik/blueprints/kura.yaml.
+apiVersion: kura.weebo.io/v1alpha1
+kind: KuraTenant
+metadata: { name: dev }
+spec:
+  claimMappings:
+    claim: groups
+    roles: { owner: [kura-dev-owners], admin: [], member: [kura-dev] }
+  vaultNamespaces: [dev]
+  quota: { storage: 1Gi, maxFileSize: 100Mi }
+---
+apiVersion: kura.weebo.io/v1alpha1
+kind: KuraVault
+metadata: { name: notes, namespace: dev }
+spec:
+  tenantRef: { name: dev }
+  bindings:
+    - { role: editor, claimValue: kura-dev }

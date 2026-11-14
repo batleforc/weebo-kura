@@ -1,0 +1,11 @@
+# kura-server against the local stack (task dev:stack, then task dev:run).
+oidc:
+  issuer: https://localhost:59443/application/o/kura/
+  audiences: [kura-cli]
+  platformAdmin: { claim: groups, value: kura-platform-admins }
+listen: { api: 127.0.0.1:58080, metrics: 127.0.0.1:59090 }
+vault:
+  address: http://127.0.0.1:58200
+  kubernetesAuth: { mount: kubernetes, role: kura }   # unused: KURA_VAULT_TOKEN is set
+  secrets: { database: mv/data/kura/database, bucket: mv/data/kura/bucket }
+  transit: { mount: transit }

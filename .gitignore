@@ -48,3 +48,6 @@ lcov.info
 fuzz/target/
 fuzz/corpus/
 fuzz/artifacts/
+
+# Local dev stack: generated CA/certificates (task dev:certs)
+dev/certs/

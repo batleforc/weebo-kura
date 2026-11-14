@@ -150,7 +150,7 @@ outage, vaults with a cached key keep working.
 The bucket holds only ciphertext under keyed object names (`<vault id>/<keyed
 hash>-<random>`), so it reveals neither content nor which known file is
 stored. Chunks are at most 4 MiB; `quota.storage` and `quota.maxFileSize`
-bound each tenant. Locally: `task dev:vault`, `task dev:s3` (RustFS).
+bound each tenant. Locally: `task dev:vault` (OpenBao, same API), `task dev:s3` (RustFS).
 
 ## 6. Authentik
 
@@ -190,3 +190,30 @@ days are purged daily; revoked ones are kept.
 | `kura_chunk_corrupt_total` | stored chunks failing their check on read: alert on any |
 | `QuotaBelowUsage` condition | in `GET /v1/admin/status`, a tenant storing more than its quota |
 | `429` with `Retry-After` | per-device rate limits (§4.4), held in each replica's memory |
+
+## 9. Local stack
+
+Rootless podman, one container at a time, every port on loopback:
+
+| Task | What |
+|---|---|
+| `task dev:stack` | PostgreSQL 18 (55433), OpenBao 2.7 dev mode (58200, token `kura-dev`), RustFS (59000), Authentik 2026.8 (https://localhost:59443), then `dev:seed` |
+| `task dev:seed` | OpenBao KV `mv/kura/{database,bucket}`, Transit key `kura-dev`, database `kura`, `kura_app`, migrations |
+| `task dev:run` | `kura-server` with `dev/server.yaml` and `dev/config/` (API 58080, metrics 59090) |
+| `task dev:token [AS=alice]` | An access token by the device code flow, no browser |
+| `task dev:down` | Removes the containers and the network |
+
+Authentik serves a certificate from a local CA (`task dev:certs`, in
+`dev/certs/`, gitignored), because the issuer must be https; `dev:run` trusts
+it through `SSL_CERT_FILE`. Its admin password is generated once into
+`dev/.env.local`. The blueprint `dev/authentik/blueprints/kura.yaml` creates
+the `kura-cli` client, the device code flow and three users (password
+`kura-dev`): `alice` owns tenant `dev` and is a platform admin, `bob` is a
+member, `carol` is in no group.
+
+```bash
+task dev:stack && task dev:run        # in one terminal
+T=$(task dev:token AS=alice)          # in another
+curl -H "authorization: Bearer $T" -H 'content-type: application/json' \
+  -d '{"name":"laptop","profile":"desktop"}' http://127.0.0.1:58080/v1/devices
+```

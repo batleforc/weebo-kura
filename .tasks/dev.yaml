@@ -1,64 +1,196 @@
-# Local services for the integration tests (plan P3). Outside Eclipse Che only:
-# in a CDE they are devfile sidecars. Same image as CI's service container.
+# Local services (plan P3), outside Eclipse Che only: in a CDE they are devfile
+# sidecars. Rootless podman: containers start one at a time, each waited for
+# before the next, on the network kura-dev. Every port listens on loopback only.
 version: "3"
 
+# The scripts print what matters themselves.
+silent: true
+
 vars:
+  NET: kura-dev
   PG_CONTAINER: kura-dev-postgres
   PG_PORT: '{{.PG_PORT | default "55433"}}'
   PG_IMAGE: docker.io/library/postgres:18-alpine
   VAULT_CONTAINER: kura-dev-vault
   VAULT_PORT: '{{.VAULT_PORT | default "58200"}}'
-  VAULT_IMAGE: docker.io/hashicorp/vault:latest
+  # OpenBao: the MPL-2.0 fork of Vault, same API.
+  VAULT_IMAGE: quay.io/openbao/openbao:2.7.2
   S3_CONTAINER: kura-dev-s3
   S3_PORT: '{{.S3_PORT | default "59000"}}'
   # RustFS: S3-compatible, Apache-2.0; MinIO no longer publishes images.
   S3_IMAGE: docker.io/rustfs/rustfs:latest
+  AK_IMAGE: ghcr.io/goauthentik/server:2026.8.3
+  AK_PORT: '{{.AK_PORT | default "59443"}}'
+  # Waits up to 60 s for a command to succeed: `{{.WAIT}} <command>`.
+  WAIT: 'wait_for() { for _ in $(seq 60); do "$@" >/dev/null 2>&1 && return 0; sleep 1; done; echo "timed out: $*" >&2; return 1; }; wait_for'
 
 tasks:
-  dev:up:
-    desc: "Start PostgreSQL for the integration tests on localhost:55433, then export KURA_TEST_DATABASE_URL as printed (usage: task dev:up [PG_PORT=55433])"
+  dev:network:
+    desc: Create the podman network the local services share
+    internal: true
     status:
-      - podman container exists {{.PG_CONTAINER}}
+      - podman network exists {{.NET}}
     cmds:
-      # A throwaway superuser password: the container listens on localhost only.
-      - podman run -d --name {{.PG_CONTAINER}} -p 127.0.0.1:{{.PG_PORT}}:5432 -e POSTGRES_PASSWORD=kura-dev {{.PG_IMAGE}}
-      - |
-        for _ in $(seq 30); do
-          podman exec {{.PG_CONTAINER}} pg_isready -U postgres >/dev/null 2>&1 && break
-          sleep 1
-        done
+      - podman network create {{.NET}}
+
+  dev:up:
+    desc: "Start PostgreSQL on localhost:55433, then export KURA_TEST_DATABASE_URL as printed (usage: task dev:up [PG_PORT=55433])"
+    cmds:
+      - task: dev:network
+      - cmd: |
+          podman container exists {{.PG_CONTAINER}} || \
+          podman run -d --name {{.PG_CONTAINER}} --network {{.NET}} -p 127.0.0.1:{{.PG_PORT}}:5432 -e POSTGRES_PASSWORD=kura-dev {{.PG_IMAGE}}
+          podman start {{.PG_CONTAINER}} >/dev/null
+      - '{{.WAIT}} podman exec {{.PG_CONTAINER}} pg_isready -U postgres'
       - echo "export KURA_TEST_DATABASE_URL=postgres://postgres:kura-dev@127.0.0.1:{{.PG_PORT}}/postgres"
 
   dev:vault:
-    desc: "Start Vault in dev mode on localhost:58200 (root token kura-dev, in memory) for the Vault tests (usage: task dev:vault [VAULT_PORT=58200])"
-    status:
-      - podman container exists {{.VAULT_CONTAINER}}
+    desc: "Start OpenBao in dev mode on localhost:58200 (root token kura-dev, in memory) (usage: task dev:vault [VAULT_PORT=58200])"
     cmds:
-      - podman run -d --name {{.VAULT_CONTAINER}} -p 127.0.0.1:{{.VAULT_PORT}}:8200 --cap-add IPC_LOCK -e VAULT_DEV_ROOT_TOKEN_ID=kura-dev {{.VAULT_IMAGE}}
+      - task: dev:network
+      - cmd: |
+          podman container exists {{.VAULT_CONTAINER}} || \
+          podman run -d --name {{.VAULT_CONTAINER}} --network {{.NET}} -p 127.0.0.1:{{.VAULT_PORT}}:8200 -e BAO_DEV_ROOT_TOKEN_ID=kura-dev {{.VAULT_IMAGE}}
+          podman start {{.VAULT_CONTAINER}} >/dev/null
+      - '{{.WAIT}} curl -sf http://127.0.0.1:{{.VAULT_PORT}}/v1/sys/health'
       - echo "export KURA_TEST_VAULT_ADDR=http://127.0.0.1:{{.VAULT_PORT}} KURA_TEST_VAULT_TOKEN=kura-dev"
 
   dev:s3:
-    desc: "Start an S3-compatible store on localhost:59000 with the bucket kura-test (keys kura-dev / kura-dev-secret) for the chunk tests (usage: task dev:s3 [S3_PORT=59000])"
-    status:
-      - podman container exists {{.S3_CONTAINER}}
+    desc: "Start an S3-compatible store on localhost:59000 with the buckets kura-test and kura-dev (keys kura-dev / kura-dev-secret) (usage: task dev:s3 [S3_PORT=59000])"
     cmds:
-      - podman run -d --name {{.S3_CONTAINER}} -p 127.0.0.1:{{.S3_PORT}}:9000 -e RUSTFS_ACCESS_KEY=kura-dev -e RUSTFS_SECRET_KEY=kura-dev-secret {{.S3_IMAGE}}
+      - task: dev:network
+      - cmd: |
+          podman container exists {{.S3_CONTAINER}} || \
+          podman run -d --name {{.S3_CONTAINER}} --network {{.NET}} -p 127.0.0.1:{{.S3_PORT}}:9000 -e RUSTFS_ACCESS_KEY=kura-dev -e RUSTFS_SECRET_KEY=kura-dev-secret {{.S3_IMAGE}}
+          podman start {{.S3_CONTAINER}} >/dev/null
       # A top-level directory of the data volume is a bucket.
-      - podman exec {{.S3_CONTAINER}} mkdir -p /data/kura-test
+      - '{{.WAIT}} podman exec {{.S3_CONTAINER}} mkdir -p /data/kura-test /data/kura-dev'
+      - '{{.WAIT}} curl -s -o /dev/null http://127.0.0.1:{{.S3_PORT}}/'
       - echo "export KURA_TEST_S3_ENDPOINT=http://127.0.0.1:{{.S3_PORT}}"
 
-  dev:down:
-    desc: Stop and remove the local PostgreSQL, Vault and S3 containers (their data goes with them)
+  dev:certs:
+    desc: "Create a local CA and a localhost certificate in dev/certs/ (gitignored), so Authentik serves the https issuer server.yaml requires"
+    status:
+      - test -f dev/certs/ca.pem -a -f dev/certs/localhost.pem -a -f dev/certs/localhost.key
     cmds:
-      - podman rm -f {{.PG_CONTAINER}} {{.VAULT_CONTAINER}} {{.S3_CONTAINER}}
+      - mkdir -p dev/certs
+      - openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 825 -subj "/CN=kura dev CA" -keyout dev/certs/ca.key -out dev/certs/ca.pem -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign"
+      - openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=localhost" -keyout dev/certs/localhost.key -out dev/certs/localhost.csr
+      - openssl x509 -req -in dev/certs/localhost.csr -CA dev/certs/ca.pem -CAkey dev/certs/ca.key -days 825 -out dev/certs/localhost.pem -extfile <(printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\nbasicConstraints=CA:FALSE\n')
+      - rm dev/certs/localhost.csr
+      # Authentik reads them as another user.
+      - chmod 644 dev/certs/localhost.key
+
+  dev:env:
+    desc: Generate Authentik's secret key and admin password into dev/.env.local (gitignored), printed once
+    status:
+      - test -f dev/.env.local
+    cmds:
+      - |
+        gen() { LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "$1"; }
+        pw=$(gen 32)
+        touch dev/.env.local && chmod 600 dev/.env.local
+        printf 'AUTHENTIK_SECRET_KEY=%s\nAUTHENTIK_BOOTSTRAP_PASSWORD=%s\n' "$(gen 60)" "$pw" > dev/.env.local
+        echo "Authentik admin: akadmin / $pw (kept in dev/.env.local)"
+
+  dev:authentik:
+    desc: "Start Authentik 2026.8 on https://localhost:59443 (server, then worker), with the kura-cli client and the users alice, bob, carol (password kura-dev)"
+    cmds:
+      - task: dev:up
+      - task: dev:certs
+      - task: dev:env
+      - |
+        podman exec {{.PG_CONTAINER}} psql -U postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='authentik'" | grep -q 1 || \
+          podman exec {{.PG_CONTAINER}} psql -U postgres -c "CREATE ROLE authentik LOGIN PASSWORD 'authentik'"
+        podman exec {{.PG_CONTAINER}} psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='authentik'" | grep -q 1 || \
+          podman exec {{.PG_CONTAINER}} psql -U postgres -c "CREATE DATABASE authentik OWNER authentik"
+      - for: [server, worker]
+        cmd: |
+          c=kura-dev-authentik-{{.ITEM}}
+          if ! podman container exists $c; then
+            ports=""; [ {{.ITEM}} = server ] && ports="-p 127.0.0.1:{{.AK_PORT}}:9443"
+            podman run -d --name $c --network {{.NET}} $ports --env-file dev/.env.local \
+              -e AUTHENTIK_POSTGRESQL__HOST={{.PG_CONTAINER}} -e AUTHENTIK_POSTGRESQL__NAME=authentik \
+              -e AUTHENTIK_POSTGRESQL__USER=authentik -e AUTHENTIK_POSTGRESQL__PASSWORD=authentik \
+              -e AUTHENTIK_BOOTSTRAP_EMAIL=admin@kura.local \
+              -e AUTHENTIK_ERROR_REPORTING__ENABLED=false -e AUTHENTIK_DISABLE_UPDATE_CHECK=true \
+              -v ./dev/authentik/blueprints:/blueprints/kura:ro,Z -v ./dev/certs/localhost.pem:/certs/localhost.pem:ro,Z -v ./dev/certs/localhost.key:/certs/localhost.key:ro,Z \
+              {{.AK_IMAGE}} {{.ITEM}}
+          fi
+          podman start $c >/dev/null
+          # The worker waits for the server, which runs the migrations.
+          if [ {{.ITEM}} = server ]; then
+            for _ in $(seq 180); do curl -skf https://127.0.0.1:{{.AK_PORT}}/-/health/ready/ >/dev/null && break; sleep 2; done
+            curl -skf https://127.0.0.1:{{.AK_PORT}}/-/health/ready/ >/dev/null || { echo "Authentik server not ready" >&2; exit 1; }
+          fi
+      # The blueprint is applied by the worker: wait for the kura issuer.
+      - |
+        for _ in $(seq 90); do
+          curl -sf --cacert dev/certs/ca.pem https://localhost:{{.AK_PORT}}/application/o/kura/.well-known/openid-configuration >/dev/null && break
+          sleep 2
+        done
+        curl -sf --cacert dev/certs/ca.pem https://localhost:{{.AK_PORT}}/application/o/kura/.well-known/openid-configuration >/dev/null \
+          || { echo "the kura issuer is not served yet: podman logs kura-dev-authentik-worker" >&2; exit 1; }
+        echo "Authentik: https://localhost:{{.AK_PORT}}/ (trust dev/certs/ca.pem in your browser, or accept the warning)"
+
+  dev:seed:
+    desc: "Seed the local stack for kura-server: OpenBao KV secrets and Transit key, the kura database, kura_app and the migrations"
+    cmds:
+      - |
+        set -eu
+        bao() { podman exec -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN=kura-dev {{.VAULT_CONTAINER}} bao "$@"; }
+        bao secrets list | grep -q '^mv/' || bao secrets enable -path=mv kv-v2
+        bao secrets list | grep -q '^transit/' || bao secrets enable transit
+        bao read transit/keys/kura-dev >/dev/null 2>&1 || bao write -f transit/keys/kura-dev >/dev/null
+        bao kv put -mount=mv kura/database url=postgres://kura_app:kura-app-dev@127.0.0.1:{{.PG_PORT}}/kura >/dev/null
+        bao kv put -mount=mv kura/bucket endpoint=http://127.0.0.1:{{.S3_PORT}} bucket=kura-dev accessKeyId=kura-dev secretAccessKey=kura-dev-secret >/dev/null
+      - |
+        set -eu
+        psql() { podman exec -i {{.PG_CONTAINER}} psql -v ON_ERROR_STOP=1 -U postgres "$@"; }
+        psql -tAc "SELECT 1 FROM pg_database WHERE datname='kura'" | grep -q 1 || psql -c "CREATE DATABASE kura"
+        psql -d kura < crates/kura-server/sql/bootstrap-roles.sql >/dev/null
+        psql -d kura -c "ALTER ROLE kura_app PASSWORD 'kura-app-dev'" >/dev/null
+      - KURA_DATABASE_URL=postgres://postgres:kura-dev@127.0.0.1:{{.PG_PORT}}/kura cargo run -q -p kura-server -- migrate
+
+  dev:stack:
+    desc: "Start the whole local stack one container at a time (PostgreSQL, OpenBao, RustFS, Authentik) and seed it; then task dev:run"
+    cmds:
+      - task: dev:up
+      - task: dev:vault
+      - task: dev:s3
+      - task: dev:authentik
+      - task: dev:seed
+
+  dev:run:
+    desc: "Run kura-server against the local stack (task dev:stack first): API on 127.0.0.1:58080, metrics on 127.0.0.1:59090"
+    env:
+      KURA_VAULT_TOKEN: kura-dev
+      KURA_CONFIG_DIR: dev/config
+      # Trust the local CA for the https issuer.
+      SSL_CERT_FILE: dev/certs/ca.pem
+    cmds:
+      - cargo run -p kura-server -- --config dev/server.yaml
+
+  dev:token:
+    desc: "Print an access token for a dev user from the local Authentik, by the device code flow with no browser (usage: task dev:token [AS=alice], alice, bob or carol)"
+    cmds:
+      - dev/token.sh {{.AS | default "alice"}}
+
+  dev:down:
+    desc: Stop and remove the local containers and their network (their data goes with them; dev/certs and dev/.env.local stay)
+    cmds:
+      - podman rm -f -i kura-dev-authentik-worker kura-dev-authentik-server {{.S3_CONTAINER}} {{.VAULT_CONTAINER}} {{.PG_CONTAINER}}
+      - podman network rm -f {{.NET}} 2>/dev/null || true
 
   test:db:
-    desc: Run the tests with the local PostgreSQL, Vault and S3 of dev:up, dev:vault and dev:s3, so nothing skips
-    deps: [dev:up, dev:vault, dev:s3]
+    desc: Run the tests with the local PostgreSQL, OpenBao and S3, started one at a time, so nothing skips
     env:
       KURA_TEST_DATABASE_URL: postgres://postgres:kura-dev@127.0.0.1:{{.PG_PORT}}/postgres
       KURA_TEST_VAULT_ADDR: http://127.0.0.1:{{.VAULT_PORT}}
       KURA_TEST_VAULT_TOKEN: kura-dev
       KURA_TEST_S3_ENDPOINT: http://127.0.0.1:{{.S3_PORT}}
     cmds:
+      - task: dev:up
+      - task: dev:vault
+      - task: dev:s3
       - cargo test --workspace
