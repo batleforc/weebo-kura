@@ -4,7 +4,7 @@ Nov 13, 2026 · @Maxime
 
 | Field | Value |
 | --- | --- |
-| Status | In review |
+| Status | Accepted (2026-11-14) |
 | Short | Kura sync backend |
 | Settles | How Obsidian vaults are synced across devices through a self-hosted, multi-tenant backend authenticated by OIDC |
 | Author | Maxime (batleforc) |
@@ -739,7 +739,7 @@ Only `.md` and `.txt` files are merged, line by line; a textual merge of `.canva
 `kura-core` holds all sync logic: protocol client, local state (path to entry id, revision, hash, size and modification time), change detection and chunking. File and network access go through traits, so each shell supplies its own and tests supply fakes.
 
 - **Change detection** rehashes a file only when its size or modification time changed, so starting the client does not rehash the vault.
-- **Applying a remote change** writes a temporary file and renames it into place, after recording the intended path and hash in a local journal. On start, a file matching the journal's hash is adopted; a file matching neither the old nor the new hash is listed as damaged, never pushed. A change to the note open in the editor is deferred until the note is closed or saved (open question 7 measures whether Obsidian's own handling makes this unnecessary).
+- **Applying a remote change** writes a temporary file and renames it into place, after recording the intended path and hash in a local journal. On start, a file matching the journal's hash is adopted; a file matching neither the old nor the new hash is listed as damaged, never pushed. A change to the note open in the editor is deferred until the note is closed or saved (decision 55; phase 4 tests whether Obsidian's own handling makes this unnecessary).
 - **Local state** carries a format version and the device id. An unknown version, or a device id that differs from the one in `SecretStorage` or the keyring (a copied vault folder), discards the state and runs a full resync.
 - **Plugin**: a TypeScript shell implementing the core's traits on the Obsidian API, bundled with esbuild, published under the id `weebo-kura` with the display name "Kura Sync". It requires Obsidian 1.11.4 for `SecretStorage`, declared as `minAppVersion`, and checks that `app.secretStorage` exists before use, showing "update Obsidian" otherwise. The WASM core is embedded in `main.js`, because a community plugin ships as `main.js`, `manifest.json` and `styles.css` only. Obsidian mobile shows no plugin status bar, so the state is also shown on a ribbon icon and in the settings panel (§4.5).
 - **Plugin transport**: `fetch` against the server's CORS allowlist. Obsidian's `requestUrl` bypasses CORS but passes bodies as base64 on mobile and is reported, in community forums and not reproduced here, to crash on bodies of tens of megabytes; the 4 MiB chunk ceiling keeps either transport safe. Calls to Authentik use `requestUrl`.
@@ -1071,7 +1071,7 @@ Layers and tooling follow the `weebo-testing` skill.
 | 22 | Project licence? (was open question 8) | **Apache-2.0.** Same as BatleHub; compatibility with the dependency licences is confirmed by the phase 1 gate. |
 | 23 | Which zstd implementation, given the no-unsafe rule? | **zenzstd in its safe default build**, with round-trip verification of every compressed chunk; miniz\_oxide as the fallback codec. The crate is young, so data safety rests on the verification, not on the crate. Superseded by decision 38. |
 
-The decisions below were raised by the last review (2026-11-14). Each fixes a defect with one reasonable answer and changes no earlier decision; they are recorded here so the change is visible, and confirmed at sign-off.
+The decisions below were raised by the last review (2026-11-14). Each fixes a defect with one reasonable answer and changes no earlier decision; they are recorded here so the change is visible. The author confirmed them at sign-off, on 2026-11-14.
 
 | # | Question | Decision |
 | --- | --- | --- |
@@ -1109,14 +1109,18 @@ The grilling session of 2026-11-14 settled the questions below with the author. 
 | 50 | How is an ID token refused as an access token? | **By requiring the `scope` claim**, the only claim that tells them apart on Authentik, with a test on a real ID token so an Authentik change breaks the test, not production. |
 | 51 | When does the tenant API arrive? | **With the operator's RFC.** In v1, tenants come only from files. |
 
+The four questions left after that session each had a default and a fallback, so they are recorded as decisions whose value a measurement confirms. If the measurement fails, the fallback applies and §17 records it; neither reopens the design.
+
+| # | Question | Decision |
+| --- | --- | --- |
+| 52 | Chunking parameters (was 2) | **256 KiB minimum, 1 MiB average, 4 MiB maximum**, confirmed in phase 2 by measuring deduplication and request counts on the real vault. Fallback: keep them. A change applies to new vaults only (§4.1). |
+| 53 | How is `SecretStorage` scoped on Android with several vaults open? (was 5) | **Secret ids include the server and vault ids** (§6.8), safe whether the store is shared across vaults or not; confirmed in phase 4 on the Android test phone. Fallback: none needed, the namespacing already covers the shared case. |
+| 54 | Size and load time of the WASM core on Android (was 6) | **`main.js` at most 3 MB, core loaded in at most 1 second** (§6.8), measured in phase 4. Fallback: `wasm-opt -Oz`, then strip server-only features, then ship and record the numbers in §17. |
+| 55 | Is Obsidian's handling of external modifications enough for the open note? (was 7) | **No change is applied to the note open in the editor until it is closed or saved** (§6.8); phase 4 tests whether Obsidian's own handling makes the deferral unnecessary. Fallback: keep the deferral. |
+
 ### Still open
 
-Each remaining question is a measurement with a stated fallback; none blocks `Accepted`.
-
-2. **Chunking parameters.** 256 KiB, 1 MiB and 4 MiB are proposed. Measured on the real vault in phase 2; fallback: keep them.
-5. **How is `SecretStorage` scoped on Android** when several vaults are open on one device? Tested in phase 4; fallback: the ids already include the server and vault.
-6. **Size and load time of the WASM core on Android.** Measured in phase 4 against the budget of §6.8 (3 MB, 1 second); fallback: `wasm-opt`, feature stripping, then ship and record.
-7. **Is Obsidian's handling of external modifications enough** when a remote change lands on the note being edited? Tested in phase 4; fallback: the deferred apply already in §6.8.
+None. Every question is settled; the measurements of decisions 52 to 55 are phase exit criteria (§16).
 
 ## 16. Implementation phases
 
@@ -1125,9 +1129,9 @@ Each phase leaves the tree green and ships with the security controls of the sur
 | Phase | Content |
 | --- | --- |
 | 1 | Repository scaffold with the lint table, pinned toolchain, audit gate, `Containerfile` and `Containerfile.hardened`. `kura-api` with the `KuraTenant` and `KuraVault` types, `validate()` and reason codes, on `weebo-kit-api` and `weebo-kit-domain`. Server skeleton on axum: configuration loading, `config_state` and authorization from it, token verification, device registration with `sid`, listing and revocation, roles and bindings, row-level security, rate and body limits, audit events for denials, the OpenAPI dump and drift gates. Tests T1, T2, T4, T12, T15, the denial half of T10. Fuzz `fuzz_config_document`. |
-| 2 | Chunk and blob storage with envelope encryption, keyed per-upload object keys and the write-once data key, credentials read from Vault KV. The chunk format with its codec byte, and the measurement of what compression would save. Quota. Tests T6, T8, T9 (`oversized_chunk_is_413`). Open question 2. |
+| 2 | Chunk and blob storage with envelope encryption, keyed per-upload object keys and the write-once data key, credentials read from Vault KV. The chunk format with its codec byte, and the measurement of what compression would save. Quota. Tests T6, T8, T9 (`oversized_chunk_is_413`). Measurement of decision 52. |
 | 3 | Changes and commits with the vault lock, idempotency, conflict files; `kura-core` and `kura-cli`; the device simulation. Tests T3, T7, T14, T17, T19. Fuzz `fuzz_vault_path`, `fuzz_commit_body`. |
-| 4 | Server-side three-way merge. WebSocket tickets and notifications across replicas. Obsidian plugin on desktop, then Android. Test T11. Fuzz `fuzz_merge`. Open questions 5 to 7. |
+| 4 | Server-side three-way merge. WebSocket tickets and notifications across replicas. Obsidian plugin on desktop, then Android. Test T11. Fuzz `fuzz_merge`. Measurements of decisions 53 to 55. |
 | 5 | History API, restore, retention pruning, garbage collection, horizon, vault epochs and full resync with its deletion guard, `Delete` with its grace period. Test T18. |
 | 6 | Helm chart, telemetry, alerts, backup and restore drill, load and soak tests. |
 | 7 | Search, opt-in. Scoped tokens with expiry, CIDR allowlist and revocation, shipped together with the read endpoints they open. Tests T5, T16, the token-use half of T10. Fuzz `fuzz_scoped_token`. |

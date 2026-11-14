@@ -7,7 +7,7 @@ Every project keeps its documentation here, either as plain markdown or as a
 
 | # | Title | Status | Settles |
 | --- | --- | --- | --- |
-| [0001](RFC/rfc0001-init-project.md) | weebo-kura: self-hosted sync backend for Obsidian vaults | In review | How vaults sync across devices through a self-hosted, multi-tenant backend authenticated by OIDC |
+| [0001](RFC/rfc0001-init-project.md) | weebo-kura: self-hosted sync backend for Obsidian vaults | Accepted | How vaults sync across devices through a self-hosted, multi-tenant backend authenticated by OIDC |
 
 ### Planned
 
