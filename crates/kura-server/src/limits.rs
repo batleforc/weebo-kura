@@ -24,6 +24,9 @@ pub const LIMITS: &[(&str, &str, u32)] = &[
     ("GET", "/v1/vaults/{v}/chunks/{hash}", 600),
     ("PUT", "/v1/vaults/{v}/blobs/{hash}", 600),
     ("GET", "/v1/vaults/{v}/blobs/{hash}", 600),
+    ("POST", "/v1/vaults/{v}/commits", 120),
+    ("GET", "/v1/vaults/{v}/changes", 600),
+    ("GET", "/v1/vaults/{v}/entries", 60),
 ];
 
 const WINDOW: Duration = Duration::from_secs(60);

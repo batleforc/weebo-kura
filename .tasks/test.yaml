@@ -1,6 +1,11 @@
 version: "3"
 
 tasks:
+  test:heavy:
+    desc: "Run the §6.P proof against the local stack with the real kura binary (task dev:stack and task dev:run first)"
+    cmds:
+      - tests/heavy/sync.sh
+
   test:
     desc: "Run every unit and integration test (tests needing PostgreSQL skip loudly unless KURA_TEST_DATABASE_URL is set, see task dev:up)"
     cmds:

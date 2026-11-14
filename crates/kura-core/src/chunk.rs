@@ -64,6 +64,19 @@ impl fmt::Display for ChunkHash {
     }
 }
 
+impl serde::Serialize for ChunkHash {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ChunkHash {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = std::borrow::Cow::<str>::deserialize(d)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 impl fmt::Debug for ChunkHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ChunkHash({self})")

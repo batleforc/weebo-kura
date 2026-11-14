@@ -16,6 +16,8 @@ tasks:
     desc: Run clippy (warnings are errors) and the format check across the workspace
     cmds:
       - cargo clippy --workspace --all-targets -- -D warnings
+      # kura-core also runs in WASM inside Obsidian (§6.8): it must build there.
+      - cargo clippy -p kura-core --target wasm32-unknown-unknown -- -D warnings
       - cargo fmt --all --check
 
   fmt:

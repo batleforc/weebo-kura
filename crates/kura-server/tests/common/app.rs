@@ -6,9 +6,14 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use kura_server::app::{AppState, app};
+use kura_server::config::{TransitConfig, VaultConfig, VaultKubernetesAuth, VaultSecrets};
 use kura_server::metrics::Metrics;
+use kura_server::store::Storage;
+use kura_server::store::keys::DataKeys;
+use kura_server::vault::{BucketSecret, Vault};
 use serde_json::{Value, json};
 use tower::ServiceExt;
+use vaultrs::client::{VaultClient, VaultClientSettingsBuilder};
 
 use super::tokens::TestKey;
 use super::{TestDb, test_db};
@@ -45,6 +50,64 @@ metadata: { name: secrets, namespace: other }
 spec:
   tenantRef: { name: other }
 "#;
+
+/// Object storage and data keys on the test Vault (or OpenBao) and S3 store.
+/// Opt-in: KURA_TEST_VAULT_ADDR, KURA_TEST_VAULT_TOKEN, KURA_TEST_S3_ENDPOINT
+/// (bucket `kura-test`, keys `kura-dev` / `kura-dev-secret`, see `task dev:s3`).
+pub async fn storage(test: &str) -> Option<Arc<Storage>> {
+    let vars = [
+        "KURA_TEST_VAULT_ADDR",
+        "KURA_TEST_VAULT_TOKEN",
+        "KURA_TEST_S3_ENDPOINT",
+    ]
+    .map(|v| std::env::var(v).ok());
+    let [Some(addr), Some(token), Some(endpoint)] = vars else {
+        eprintln!(
+            "SKIPPED: {test} — KURA_TEST_VAULT_ADDR, KURA_TEST_VAULT_TOKEN or KURA_TEST_S3_ENDPOINT unset"
+        );
+        return None;
+    };
+    let mount = format!(
+        "transit-chunks-{}-{}",
+        std::process::id(),
+        test.rsplit("::").next().unwrap_or(test).len()
+    );
+    let admin = VaultClient::new(
+        VaultClientSettingsBuilder::default()
+            .address(&addr)
+            .token(&token)
+            .build()
+            .ok()?,
+    )
+    .ok()?;
+    // Idempotent per process: tests of this binary share the mount.
+    drop(vaultrs::sys::mount::enable(&admin, &mount, "transit", None).await);
+    drop(vaultrs::transit::key::create(&admin, &mount, "kura-maxime", None).await);
+    let config = VaultConfig {
+        address: addr,
+        kubernetes_auth: VaultKubernetesAuth {
+            mount: "kubernetes".into(),
+            role: "kura".into(),
+        },
+        secrets: VaultSecrets {
+            database: "kv/data/x".into(),
+            bucket: "kv/data/y".into(),
+        },
+        transit: TransitConfig { mount },
+    };
+    let vault = Arc::new(Vault::connect_with(&config, Some(token)).await.ok()?);
+    let bucket = BucketSecret {
+        endpoint,
+        bucket: "kura-test".into(),
+        region: "us-east-1".into(),
+        access_key_id: "kura-dev".into(),
+        secret_access_key: "kura-dev-secret".into(),
+    };
+    Some(Arc::new(Storage::new(
+        kura_server::store::s3(&bucket).ok()?,
+        DataKeys::new(vault),
+    )))
+}
 
 pub struct Env {
     pub t: TestDb,

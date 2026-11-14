@@ -32,6 +32,18 @@ pub struct Vault {
     pub role: String,
     /// `config` (read-only here) or `api`.
     pub managed_by: String,
+    /// FastCDC parameters in bytes; clients never use a compiled-in value (§6.4).
+    pub chunking: ChunkingView,
+    /// Send back with `changes?since=` (§6.3).
+    pub epoch: Uuid,
+    pub head_seq: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+pub struct ChunkingView {
+    pub min: u64,
+    pub avg: u64,
+    pub max: u64,
 }
 
 impl From<&VaultAccess> for Vault {
@@ -43,6 +55,13 @@ impl From<&VaultAccess> for Vault {
             name: a.name.clone(),
             role: role_name(a.role).into(),
             managed_by: a.managed_by.clone(),
+            chunking: ChunkingView {
+                min: a.chunking.min.bytes(),
+                avg: a.chunking.avg.bytes(),
+                max: a.chunking.max.bytes(),
+            },
+            epoch: a.epoch,
+            head_seq: u64::try_from(a.head_seq).unwrap_or_default(),
         }
     }
 }

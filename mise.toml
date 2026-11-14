@@ -2,7 +2,7 @@
 cocogitto = "latest"
 node = "lts"
 # Exact pin (plan PR 1.1): the toolchain is only pinned here, no rust-toolchain.toml.
-rust = { version = "1.100.0", components = "rust-src,rustfmt,llvm-tools,clippy", profile = "default" }
+rust = { version = "1.100.0", components = "rust-src,rustfmt,llvm-tools,clippy", profile = "default", targets = "wasm32-unknown-unknown" }
 task = "latest"
 gitleaks = "latest"
 jq = "latest"

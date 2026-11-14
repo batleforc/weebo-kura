@@ -35,6 +35,7 @@ use crate::reconcile::snapshot::Snapshot;
         (name = "devices", description = "Device registration and revocation"),
         (name = "vaults", description = "Vaults and their role bindings"),
         (name = "chunks", description = "Encrypted chunks and file manifests"),
+        (name = "sync", description = "Commits and changes"),
     ),
     components(schemas(Problem)),
     modifiers(&SecurityAddon),
@@ -209,7 +210,17 @@ fn v1_router() -> OpenApiRouter<SharedState> {
         .routes(routes!(vaults::delete_vault))
         .routes(routes!(vaults::put_binding, vaults::delete_binding))
         .routes(routes!(chunks::missing_chunks))
+        .routes(routes!(changes::get_changes))
+        .routes(routes!(changes::get_entries))
         .routes(routes!(chunks::put_blob, chunks::get_blob))
+        .merge(
+            // 1,000 operations do not fit in 64 KiB.
+            OpenApiRouter::new()
+                .routes(routes!(commits::post_commit))
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    commits::MAX_COMMIT_BYTES,
+                )),
+        )
         .merge(
             // Chunk bodies up to 4 MiB; every other route keeps 64 KiB.
             OpenApiRouter::new()
@@ -398,7 +409,9 @@ async fn client_version(request: Request, next: Next) -> Response {
 pub mod admin;
 pub mod body;
 pub mod caller;
+pub mod changes;
 pub mod chunks;
+pub mod commits;
 pub mod device;
 pub mod devices;
 pub mod vaults;

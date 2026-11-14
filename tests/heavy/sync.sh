@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# RFC 0001 §6.P against the local stack (task dev:stack, then task dev:run):
+# the real `kura` binary, Authentik, PostgreSQL, OpenBao and RustFS.
+# Phase 3 observations: 2 (a viewer's push is refused and stores nothing),
+# 7 (two offline edits of one paragraph: both versions kept as files),
+# 11 (a dot-path note is refused by the server and reaches no device).
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/../.." && pwd)
+kura="$root/target/debug/kura"
+server=${KURA_DEV_SERVER:-http://127.0.0.1:58080}
+issuer=https://localhost:59443/application/o/kura/
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+fail() { echo "FAIL: $*" >&2; exit 1; }
+pass() { echo "ok: $*"; }
+sql() { podman exec kura-dev-postgres psql -U postgres -d kura -tAc "$1"; }
+as() { # as <who> <kura args…>: runs kura with that user's home and a fresh token
+  local who=$1; shift
+  KURA_CLI_HOME="$work/$who" KURA_ACCESS_TOKEN="${tokens[$who]}" "$kura" "$@"
+}
+
+curl -sf "$server/readyz" >/dev/null || fail "no server on $server: task dev:run"
+cargo build -q -p kura-cli
+declare -A tokens=([alice]=$("$root/dev/token.sh" alice) [bob]=$("$root/dev/token.sh" bob))
+as alice login --server "$server" --issuer "$issuer" --device-name "heavy-a" >/dev/null
+as bob login --server "$server" --issuer "$issuer" --device-name "heavy-b" >/dev/null
+
+# 7. Two devices edit the same paragraph offline.
+mkdir -p "$work/a" "$work/b"
+note="heavy-$$.md"
+printf 'shared paragraph\n' > "$work/a/$note"
+as alice attach notes "$work/a" --yes >/dev/null
+as bob attach notes "$work/b" --yes >/dev/null
+[ -f "$work/b/$note" ] || fail "7: bob did not receive $note"
+printf 'shared paragraph, alice version\n' > "$work/a/$note"
+printf 'shared paragraph, bob version\n' > "$work/b/$note"
+as alice sync notes >/dev/null
+out=$(as bob sync notes)
+grep -q "^conflict: " <<<"$out" || fail "7: no conflict reported: $out"
+as alice sync notes >/dev/null
+for d in a b; do
+  grep -rqs "alice version" "$work/$d" --include='*.md' || fail "7: $d lost alice's text"
+  grep -rqs "bob version" "$work/$d" --include='*.md' || fail "7: $d lost bob's text"
+done
+pass "7: conflicted, both versions on both devices"
+
+# 2. A viewer's push: exit 3, and no chunk stored.
+mkdir -p "$work/s"
+as bob attach shared "$work/s" --yes >/dev/null
+before=$(sql "SELECT count(*) FROM chunk")
+printf 'viewer text %s\n' "$$" > "$work/s/refused.md"
+set +e
+as bob sync shared >/dev/null 2>"$work/err"
+code=$?
+set -e
+[ "$code" = 3 ] || fail "2: exit $code, expected 3: $(cat "$work/err")"
+grep -q "insufficient_role" "$work/err" || fail "2: $(cat "$work/err")"
+[ "$(sql "SELECT count(*) FROM chunk")" = "$before" ] || fail "2: a chunk was stored"
+pass "2: viewer refused with exit 3, nothing stored"
+
+# 11. A dot-path note: refused by the server, received by no one.
+device=$(jq -r .device "$work/alice/config.json")
+vault=$(jq -r '.vaults.notes.id' "$work/alice/config.json")
+status=$(curl -s -o "$work/body" -w '%{http_code}' -X POST "$server/v1/vaults/$vault/commits" \
+  -H "authorization: Bearer ${tokens[alice]}" -H "x-kura-device: $device" -H 'content-type: application/json' \
+  -d '{"idempotencyKey":"heavy-11","operations":[{"op":"put","entry":"019a0000-0000-7000-8000-000000000000","path":".obsidian/plugins/x/main.js","blob":"'"$(printf '0%.0s' {1..64})"'","size":1}]}')
+if [ "$status" != 422 ] || ! jq -e '.type == "/v1/problems/invalid_path"' "$work/body" >/dev/null; then
+  fail "11: $status $(cat "$work/body")"
+fi
+mkdir -p "$work/a/.obsidian/plugins/x" && echo 'evil()' > "$work/a/.obsidian/plugins/x/main.js"
+as alice sync notes >/dev/null
+as bob sync notes >/dev/null
+[ ! -e "$work/b/.obsidian/plugins/x/main.js" ] || fail "11: the plugin reached bob"
+pass "11: dot-path refused by the server (422 invalid_path), not synced by the client"

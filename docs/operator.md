@@ -162,6 +162,9 @@ Per §13 and §6.2:
   mappings, `include_claims_in_id_token` on, and a consent stage in its
   authorization flow.
 - The groups named in `claimMappings` and `platformAdmin`.
+- The provider's *access code validity* of at least 10 minutes: Authentik
+  gives a device code that same lifetime, 1 minute by default, too short to
+  type the code on another device.
 
 The server reads discovery, the JWKS and userinfo from the issuer (5 s
 timeout, no redirects). Keys are cached and stored in PostgreSQL, so a replica
@@ -191,7 +194,26 @@ days are purged daily; revoked ones are kept.
 | `QuotaBelowUsage` condition | in `GET /v1/admin/status`, a tenant storing more than its quota |
 | `429` with `Retry-After` | per-device rate limits (§4.4), held in each replica's memory |
 
-## 9. Local stack
+## 9. The `kura` CLI
+
+```bash
+kura login --server https://kura.example.org --issuer https://auth.example.org/application/o/kura/
+kura attach notes ~/Notes      # shows what will move, asks first (--yes to skip)
+kura sync [notes] [--dry-run]
+kura status
+kura devices [revoke <name>]
+```
+
+Exit codes: 0 done, 1 unexpected (server unreachable, local I/O), 2 sign in
+again, 3 refused by the server (role, quota, client too old; local changes
+kept), 4 some files cannot sync (named, with the rule they break). Its files
+are in `$KURA_CLI_HOME`, else `~/.config/kura`: `config.json` and
+`credentials.json` (the refresh token, mode 0600). `KURA_ACCESS_TOKEN`
+replaces the sign-in for scripts and tests. The sync state of a folder is
+`<folder>/.kura/state.json`; dot-folders (`.obsidian`, `.trash`, `.kura`)
+never sync as notes; deleted files go to `<folder>/.trash`.
+
+## 10. Local stack
 
 Rootless podman, one container at a time, every port on loopback:
 
@@ -202,6 +224,7 @@ Rootless podman, one container at a time, every port on loopback:
 | `task dev:run` | `kura-server` with `dev/server.yaml` and `dev/config/` (API 58080, metrics 59090) |
 | `task dev:token [AS=alice]` | An access token by the device code flow, no browser |
 | `task dev:down` | Removes the containers and the network |
+| `task test:heavy` | The §6.P proof with the real `kura` binary, once `dev:run` serves |
 
 Authentik serves a certificate from a local CA (`task dev:certs`, in
 `dev/certs/`, gitignored), because the issuer must be https; `dev:run` trusts

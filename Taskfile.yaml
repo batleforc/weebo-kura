@@ -71,5 +71,5 @@ tasks:
       - task: rust:lint
       - task: fuzz:check
       - task: openapi:lint
-      - shellcheck .hooks/*.sh
+      - shellcheck .hooks/*.sh dev/*.sh tests/heavy/*.sh
 

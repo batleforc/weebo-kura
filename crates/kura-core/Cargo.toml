@@ -10,6 +10,18 @@ repository.workspace = true
 blake3 = { workspace = true }
 fastcdc = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }
+uuid = { workspace = true }
+unicode-normalization = { workspace = true }
+utoipa = { workspace = true, optional = true }
+
+[features]
+# The server derives its OpenAPI schemas from the wire types.
+openapi = ["dep:utoipa", "utoipa/uuid"]
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tokio = { workspace = true }
 
 [lints]
 workspace = true

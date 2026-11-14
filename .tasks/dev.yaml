@@ -142,14 +142,15 @@ tasks:
         bao secrets list | grep -q '^mv/' || bao secrets enable -path=mv kv-v2
         bao secrets list | grep -q '^transit/' || bao secrets enable transit
         bao read transit/keys/kura-dev >/dev/null 2>&1 || bao write -f transit/keys/kura-dev >/dev/null
-        bao kv put -mount=mv kura/database url=postgres://kura_app:kura-app-dev@127.0.0.1:{{.PG_PORT}}/kura >/dev/null
+        bao kv put -mount=mv kura/database url=postgres://kura_app:kura-test@127.0.0.1:{{.PG_PORT}}/kura >/dev/null
         bao kv put -mount=mv kura/bucket endpoint=http://127.0.0.1:{{.S3_PORT}} bucket=kura-dev accessKeyId=kura-dev secretAccessKey=kura-dev-secret >/dev/null
       - |
         set -eu
         psql() { podman exec -i {{.PG_CONTAINER}} psql -v ON_ERROR_STOP=1 -U postgres "$@"; }
         psql -tAc "SELECT 1 FROM pg_database WHERE datname='kura'" | grep -q 1 || psql -c "CREATE DATABASE kura"
         psql -d kura < crates/kura-server/sql/bootstrap-roles.sql >/dev/null
-        psql -d kura -c "ALTER ROLE kura_app PASSWORD 'kura-app-dev'" >/dev/null
+        # The integration tests set this same password: roles are cluster-wide.
+        psql -d kura -c "ALTER ROLE kura_app PASSWORD 'kura-test'" >/dev/null
       - KURA_DATABASE_URL=postgres://postgres:kura-dev@127.0.0.1:{{.PG_PORT}}/kura cargo run -q -p kura-server -- migrate
 
   dev:stack:

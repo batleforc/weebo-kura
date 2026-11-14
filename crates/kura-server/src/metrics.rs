@@ -21,6 +21,8 @@ pub struct Metrics {
     pub authz_denied_total: IntCounterVec,
     /// Stored chunks that failed their check on read (§10.1).
     pub chunk_corrupt_total: IntCounter,
+    /// Commits that wrote at least one revision (§10.1, §6.P observation 1).
+    pub commits_total: IntCounter,
 }
 
 impl Metrics {
@@ -41,6 +43,8 @@ impl Metrics {
         let chunk_corrupt_total =
             IntCounter::new("chunk_corrupt_total", "Stored chunks failing their check")?;
         registry.register(Box::new(chunk_corrupt_total.clone()))?;
+        let commits_total = IntCounter::new("commits_total", "Commits that wrote revisions")?;
+        registry.register(Box::new(commits_total.clone()))?;
         Ok(Self {
             registry,
             ready,
@@ -48,6 +52,7 @@ impl Metrics {
             config_warnings,
             authz_denied_total,
             chunk_corrupt_total,
+            commits_total,
         })
     }
 }

@@ -2,7 +2,7 @@ version: "3"
 
 vars:
   # main.rs is process wiring only; everything it calls lives in lib.rs and is tested there.
-  COVERAGE_EXCLUDE: 'crates/kura-server/src/main\.rs'
+  COVERAGE_EXCLUDE: 'crates/kura-(server|cli)/src/main\.rs'
 
 tasks:
   cov:collect:
@@ -20,10 +20,11 @@ tasks:
       - cargo llvm-cov report --ignore-filename-regex '{{.COVERAGE_EXCLUDE}}' --lcov --output-path lcov.info
 
   coverage-check:
-    desc: Fail when the line coverage of kura-api, kura-core or kura-server is under 80% (export KURA_TEST_DATABASE_URL first)
+    desc: Fail when the line coverage of kura-api, kura-core, kura-server or kura-cli is under 80% (export KURA_TEST_DATABASE_URL first)
     # One gate per crate (plan PR 1.10).
     cmds:
       - task: cov:collect
-      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(server|core)/' --fail-under-lines 80
-      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(server|api)/' --fail-under-lines 80
-      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(api|core)/|{{.COVERAGE_EXCLUDE}}' --fail-under-lines 80
+      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(server|core|cli)/' --fail-under-lines 80
+      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(server|api|cli)/' --fail-under-lines 80
+      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(api|core|cli)/|{{.COVERAGE_EXCLUDE}}' --fail-under-lines 80
+      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(api|core|server)/|{{.COVERAGE_EXCLUDE}}' --fail-under-lines 80

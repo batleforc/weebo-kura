@@ -798,6 +798,95 @@
         ]
       }
     },
+    "/v1/vaults/{v}/changes": {
+      "get": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "Entries changed after a cursor, oldest first.",
+        "operationId": "get_changes",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "The last `seq` this device applied; 0 for a first sync.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "epoch",
+            "in": "query",
+            "description": "The epoch the cursor was read under; a different one answers 410.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "At most 1,000 entries; follow `next` for more",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangesResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "cursor_expired, or history_rewound: run a full resync",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/v1/vaults/{v}/chunks/missing": {
       "post": {
         "tags": [
@@ -1021,6 +1110,172 @@
           }
         ]
       }
+    },
+    "/v1/vaults/{v}/commits": {
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "Push operations; each comes back accepted or conflicted (merged from phase 4).",
+        "operationId": "post_commit",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "One result per operation, in order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Below editor",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Over 1 MiB",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A forbidden path, a blob not uploaded, or an idempotency key reused with another body",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/entries": {
+      "get": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "Every live entry, by id: what `kura attach` matches local files against.",
+        "operationId": "get_entries",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "The last entry id of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "At most 1,000 entries; follow `next` for more",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangesResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1111,6 +1366,108 @@
         },
         "additionalProperties": false
       },
+      "ChangesResponse": {
+        "type": "object",
+        "description": "`GET /vaults/{v}/changes` and `GET /vaults/{v}/entries`.",
+        "required": [
+          "epoch",
+          "headSeq",
+          "items"
+        ],
+        "properties": {
+          "epoch": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Changes when the server loses history (§6.3); send it back with `since`."
+          },
+          "headSeq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The head this page was read against, in the same snapshot.",
+            "minimum": 0
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EntryState"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set when more pages follow: the next `since` (changes) or `after` (entries)."
+          }
+        }
+      },
+      "ChunkingView": {
+        "type": "object",
+        "required": [
+          "min",
+          "avg",
+          "max"
+        ],
+        "properties": {
+          "avg": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "min": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "CommitRequest": {
+        "type": "object",
+        "description": "`POST /vaults/{v}/commits`.",
+        "required": [
+          "idempotencyKey",
+          "operations"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "description": "Unique per device for 7 days; a retry reuses it with the same body."
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Operation"
+            },
+            "description": "At most 1,000."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CommitResponse": {
+        "type": "object",
+        "required": [
+          "headSeq",
+          "results"
+        ],
+        "properties": {
+          "headSeq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpResult"
+            }
+          }
+        }
+      },
       "CreateVault": {
         "type": "object",
         "required": [
@@ -1169,6 +1526,55 @@
           }
         }
       },
+      "EntryId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "A stable entry id, chosen by the client: a UUIDv7 (§6.3)."
+      },
+      "EntryState": {
+        "type": "object",
+        "description": "An entry's current state, as `changes` and commit results return it.",
+        "required": [
+          "entry",
+          "revision",
+          "seq",
+          "path",
+          "deleted",
+          "size"
+        ],
+        "properties": {
+          "blob": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absent when deleted."
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "entry": {
+            "$ref": "#/components/schemas/EntryId"
+          },
+          "path": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "MissingRequest": {
         "type": "object",
         "required": [
@@ -1199,6 +1605,113 @@
             "description": "The requested hashes the vault does not hold, in request order."
           }
         }
+      },
+      "OpResult": {
+        "type": "object",
+        "description": "The result of one operation, in request order.",
+        "required": [
+          "outcome",
+          "head"
+        ],
+        "properties": {
+          "conflict": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EntryState",
+                "description": "The conflict file holding the pushed content, when one was created."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "head": {
+            "$ref": "#/components/schemas/EntryState",
+            "description": "The pushed entry as it now stands. For a new entry unified with an\nidentical one at the same path, that other entry."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/Outcome"
+          }
+        }
+      },
+      "Operation": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Create (no `base`) or update an entry: its content, its path, or both.",
+            "required": [
+              "entry",
+              "path",
+              "blob",
+              "size",
+              "op"
+            ],
+            "properties": {
+              "base": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid",
+                "description": "The revision this edit started from; absent for a new entry."
+              },
+              "blob": {
+                "type": "string",
+                "description": "The blob address (`blob_hash`) of the content, already uploaded."
+              },
+              "entry": {
+                "$ref": "#/components/schemas/EntryId"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "put"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "size": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Delete an entry, as of the revision the client last saw.",
+            "required": [
+              "entry",
+              "base",
+              "op"
+            ],
+            "properties": {
+              "base": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "entry": {
+                "$ref": "#/components/schemas/EntryId"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "delete"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "One operation of a commit. A rename is a `put` with another path."
+      },
+      "Outcome": {
+        "type": "string",
+        "enum": [
+          "accepted",
+          "merged",
+          "conflicted"
+        ]
       },
       "ProbeStatus": {
         "type": "object",
@@ -1270,7 +1783,7 @@
         "properties": {
           "name": {
             "type": "string",
-            "description": "Shown in device lists, 1 to 64 characters."
+            "description": "Shown in device lists and conflict file names, 1 to 64 bytes."
           },
           "profile": {
             "$ref": "#/components/schemas/Profile"
@@ -1286,9 +1799,26 @@
           "namespace",
           "name",
           "role",
-          "managedBy"
+          "managedBy",
+          "chunking",
+          "epoch",
+          "headSeq"
         ],
         "properties": {
+          "chunking": {
+            "$ref": "#/components/schemas/ChunkingView",
+            "description": "FastCDC parameters in bytes; clients never use a compiled-in value (§6.4)."
+          },
+          "epoch": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Send back with `changes?since=` (§6.3)."
+          },
+          "headSeq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -1342,6 +1872,10 @@
     {
       "name": "chunks",
       "description": "Encrypted chunks and file manifests"
+    },
+    {
+      "name": "sync",
+      "description": "Commits and changes"
     }
   ]
 }

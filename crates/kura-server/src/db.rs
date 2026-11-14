@@ -100,6 +100,26 @@ pub async fn begin_tenant(
     Ok(tx)
 }
 
+/// [`begin_tenant`] in one `REPEATABLE READ` snapshot, taken before any read:
+/// a pull reads its entries and the `head_seq` it returns together (§5.4).
+pub async fn begin_tenant_snapshot(
+    pool: &PgPool,
+    tenant: Uuid,
+    subject: &str,
+) -> Result<Transaction<'static, Postgres>, DbError> {
+    let mut tx = pool
+        .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .await?;
+    sqlx::query(
+        "SELECT set_config('kura.tenant_id', $1, true), set_config('kura.subject', $2, true)",
+    )
+    .bind(tenant.to_string())
+    .bind(subject)
+    .execute(&mut *tx)
+    .await?;
+    Ok(tx)
+}
+
 /// A transaction that sees only the caller's own devices.
 pub async fn begin_subject(
     pool: &PgPool,

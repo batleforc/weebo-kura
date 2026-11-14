@@ -3,7 +3,7 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/kura-api", "crates/kura-core", "crates/kura-server"]
+members = ["crates/kura-api", "crates/kura-core", "crates/kura-server", "crates/kura-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,6 +15,7 @@ repository = "https://github.com/batleforc/weebo-kura"
 [workspace.dependencies]
 kura-api = { path = "crates/kura-api" }
 kura-core = { path = "crates/kura-core" }
+kura-cli = { path = "crates/kura-cli" }
 # weebo-operator-kit, pinned by tag (RFC 0001 §4.1, decision 49; plan P1).
 weebo-kit-api = { git = "https://github.com/batleforc/weebo-operator-kit", tag = "v0.31.0" }
 weebo-kit-domain = { git = "https://github.com/batleforc/weebo-operator-kit", tag = "v0.31.0" }
@@ -48,6 +49,9 @@ jsonwebtoken = { version = "12", default-features = false, features = ["aws_lc_r
 # Chunk addressing and content-defined chunking (§6.4).
 blake3 = { version = "1", default-features = false, features = ["std"] }
 fastcdc = { version = "5", default-features = false }
+# Vault paths are NFC (§6.3); case folding for path_key on the server.
+unicode-normalization = { version = "0.1", default-features = false, features = ["std"] }
+caseless = "0.2"
 # Chunk encryption (§6.6): AES-256-GCM from aws-lc-rs, already linked by
 # jsonwebtoken and rustls, instead of the `aes-gcm` crate (plan D38).
 aws-lc-rs = "1"
@@ -62,6 +66,8 @@ vaultrs = { version = "0.8", default-features = false, features = ["rustls"] }
 # Outbound HTTP to Authentik (discovery, JWKS, userinfo), rustls only.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 time = { version = "0.3", features = ["serde", "formatting"] }
+# kura-cli argument parsing (§4.5).
+clap = { version = "4", features = ["derive"] }
 # CIDR parsing for trustedProxies (plan P4).
 ipnet = { version = "2", features = ["serde"] }
 

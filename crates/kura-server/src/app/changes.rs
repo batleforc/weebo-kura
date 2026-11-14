@@ -1,0 +1,171 @@
+//! `GET /v1/vaults/{v}/changes` and `GET /v1/vaults/{v}/entries` (RFC 0001
+//! §6.3): one item per entry, its current state, read with the `head_seq` it
+//! is returned with in one `REPEATABLE READ` snapshot, so a client that
+//! advances its cursor never skips a change (§5.4).
+
+use axum::Json;
+use axum::extract::rejection::QueryRejection;
+use axum::extract::{Path, Query, State};
+use kura_api::VaultRole;
+use kura_core::wire::ChangesResponse;
+use serde::Deserialize;
+use sqlx::Row as _;
+use utoipa::IntoParams;
+use uuid::Uuid;
+
+use super::SharedState;
+use super::commits::{head_from_row, head_select};
+use super::device::DeviceCaller;
+use crate::authz;
+use crate::db;
+use crate::problem::{ApiError, Problem, ProblemType};
+
+/// Items per page (§4.4).
+pub const PAGE: i64 = 1000;
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ChangesQuery {
+    /// The last `seq` this device applied; 0 for a first sync.
+    pub since: u64,
+    /// The epoch the cursor was read under; a different one answers 410.
+    pub epoch: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct EntriesQuery {
+    /// The last entry id of the previous page.
+    pub after: Option<Uuid>,
+}
+
+fn query<T>(q: Result<Query<T>, QueryRejection>) -> Result<T, ApiError> {
+    q.map(|Query(v)| v)
+        .map_err(|e| ApiError::with_detail(ProblemType::InvalidRequest, e.body_text()))
+}
+
+struct Head {
+    epoch: Uuid,
+    head_seq: i64,
+    horizon_seq: i64,
+}
+
+async fn open(
+    state: &SharedState,
+    caller: &DeviceCaller,
+    v: Uuid,
+) -> Result<(sqlx::Transaction<'static, sqlx::Postgres>, Head), ApiError> {
+    let snap = state
+        .snapshot()
+        .ok_or(ApiError::of(ProblemType::Unavailable))?;
+    let p = &caller.caller.principal;
+    let a = authz::require_role(&state.db, &snap, p, v, VaultRole::Viewer).await?;
+    let mut tx = db::begin_tenant_snapshot(&state.db, a.tenant, &p.sub).await?;
+    let row = sqlx::query("SELECT epoch, head_seq, horizon_seq FROM vault WHERE id = $1")
+        .bind(v)
+        .fetch_one(&mut *tx)
+        .await?;
+    let head = Head {
+        epoch: row.try_get("epoch")?,
+        head_seq: row.try_get("head_seq")?,
+        horizon_seq: row.try_get("horizon_seq")?,
+    };
+    Ok((tx, head))
+}
+
+fn response(
+    head: &Head,
+    rows: &[sqlx::postgres::PgRow],
+    next: impl Fn(&super::commits::Head) -> String,
+) -> Result<ChangesResponse, ApiError> {
+    let mut heads = rows
+        .iter()
+        .map(head_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    let more = heads.len() > usize::try_from(PAGE).unwrap_or(usize::MAX);
+    heads.truncate(usize::try_from(PAGE).unwrap_or(usize::MAX));
+    Ok(ChangesResponse {
+        epoch: head.epoch,
+        head_seq: u64::try_from(head.head_seq).unwrap_or_default(),
+        next: if more { heads.last().map(next) } else { None },
+        items: heads
+            .iter()
+            .map(super::commits::Head::state)
+            .collect::<Result<_, _>>()?,
+    })
+}
+
+/// Entries changed after a cursor, oldest first.
+#[utoipa::path(
+    get,
+    path = "/vaults/{v}/changes",
+    tag = "sync",
+    params(("v" = Uuid, Path, description = "Vault id"), ChangesQuery, ("X-Kura-Device" = Uuid, Header, description = "This device")),
+    responses(
+        (status = 200, description = "At most 1,000 entries; follow `next` for more", body = ChangesResponse),
+        (status = 404, description = "No such vault", body = Problem, content_type = "application/problem+json"),
+        (status = 410, description = "cursor_expired, or history_rewound: run a full resync", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("bearer_token" = [])),
+)]
+pub async fn get_changes(
+    State(state): State<SharedState>,
+    caller: DeviceCaller,
+    Path(v): Path<Uuid>,
+    q: Result<Query<ChangesQuery>, QueryRejection>,
+) -> Result<Json<ChangesResponse>, ApiError> {
+    let q = query(q)?;
+    let since = i64::try_from(q.since).map_err(|_| ApiError::of(ProblemType::HistoryRewound))?;
+    let (mut tx, head) = open(&state, &caller, v).await?;
+    // The server lost history this device has seen (§6.3, decision 32).
+    if q.epoch.is_some_and(|e| e != head.epoch) || since > head.head_seq {
+        return Err(ApiError::of(ProblemType::HistoryRewound));
+    }
+    if since > 0 && since < head.horizon_seq {
+        return Err(ApiError::of(ProblemType::CursorExpired));
+    }
+    let rows = sqlx::query(concat!(
+        head_select!(),
+        " WHERE e.vault_id = $1 AND e.last_seq > $2 ORDER BY e.last_seq LIMIT $3"
+    ))
+    .bind(v)
+    .bind(since)
+    .bind(PAGE.saturating_add(1))
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Json(response(&head, &rows, |h| h.seq.to_string())?))
+}
+
+/// Every live entry, by id: what `kura attach` matches local files against.
+#[utoipa::path(
+    get,
+    path = "/vaults/{v}/entries",
+    tag = "sync",
+    params(("v" = Uuid, Path, description = "Vault id"), EntriesQuery, ("X-Kura-Device" = Uuid, Header, description = "This device")),
+    responses(
+        (status = 200, description = "At most 1,000 entries; follow `next` for more", body = ChangesResponse),
+        (status = 404, description = "No such vault", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("bearer_token" = [])),
+)]
+pub async fn get_entries(
+    State(state): State<SharedState>,
+    caller: DeviceCaller,
+    Path(v): Path<Uuid>,
+    q: Result<Query<EntriesQuery>, QueryRejection>,
+) -> Result<Json<ChangesResponse>, ApiError> {
+    let q = query(q)?;
+    let (mut tx, head) = open(&state, &caller, v).await?;
+    let rows = sqlx::query(concat!(
+        head_select!(),
+        " WHERE e.vault_id = $1 AND NOT e.deleted AND ($2::uuid IS NULL OR e.id > $2) ORDER BY e.id LIMIT $3"
+    ))
+    .bind(v)
+    .bind(q.after)
+    .bind(PAGE.saturating_add(1))
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Json(response(&head, &rows, |h| h.id.to_string())?))
+}

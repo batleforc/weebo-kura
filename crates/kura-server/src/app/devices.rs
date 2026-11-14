@@ -39,7 +39,7 @@ impl Profile {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RegisterDevice {
-    /// Shown in device lists, 1 to 64 characters.
+    /// Shown in device lists and conflict file names, 1 to 64 bytes.
     pub name: String,
     pub profile: Profile,
 }
@@ -111,10 +111,10 @@ pub async fn register_device(
         .check(&caller.principal.sub, "POST", "/v1/devices")
         .map_err(ApiError::RateLimited)?;
     let name = body.name.trim();
-    if name.is_empty() || name.chars().count() > 64 {
+    if name.is_empty() || name.len() > 64 {
         return Err(ApiError::with_detail(
             ProblemType::InvalidRequest,
-            "name: 1 to 64 characters",
+            "name: 1 to 64 bytes",
         ));
     }
     let tenants = members(&state, &caller)?;
@@ -273,7 +273,7 @@ pub async fn revoke_device(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Purges devices idle 180 days, daily, until `shutdown` (§6.1).
+/// Purges devices idle 180 days and commit records older than 7 days, daily, until `shutdown` (§6.1).
 pub async fn purge_loop(pool: sqlx::PgPool, shutdown: tokio_util::sync::CancellationToken) {
     loop {
         match sqlx::query_scalar::<_, i64>("SELECT kura_device_purge()")
@@ -283,6 +283,15 @@ pub async fn purge_loop(pool: sqlx::PgPool, shutdown: tokio_util::sync::Cancella
             Ok(n) if n > 0 => tracing::info!(purged = n, "idle devices purged"),
             Ok(_) => {}
             Err(e) => tracing::warn!(error = %e, "device purge failed, retried tomorrow"),
+        }
+        // Idempotency records live 7 days (§6.1).
+        match sqlx::query_scalar::<_, i64>("SELECT kura_commit_purge()")
+            .fetch_one(&pool)
+            .await
+        {
+            Ok(n) if n > 0 => tracing::info!(purged = n, "old commit records purged"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "commit record purge failed, retried tomorrow"),
         }
         tokio::select! {
             () = shutdown.cancelled() => return,

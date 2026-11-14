@@ -96,6 +96,8 @@ entries:
       client_id: kura-cli
       grant_types: [authorization_code, refresh_token, "urn:ietf:params:oauth:grant-type:device_code"]
       include_claims_in_id_token: true
+      # The device code lives as long as this (60 s by default: too short to type it).
+      access_code_validity: minutes=10
       access_token_validity: minutes=15
       refresh_token_validity: days=30
       authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-explicit-consent]]

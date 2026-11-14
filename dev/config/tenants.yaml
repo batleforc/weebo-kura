@@ -16,3 +16,12 @@ spec:
   tenantRef: { name: dev }
   bindings:
     - { role: editor, claimValue: kura-dev }
+---
+# Members only read this one: `kura sync` here exits 3 (§6.P observation 2).
+apiVersion: kura.weebo.io/v1alpha1
+kind: KuraVault
+metadata: { name: shared, namespace: dev }
+spec:
+  tenantRef: { name: dev }
+  bindings:
+    - { role: viewer, claimValue: kura-dev }

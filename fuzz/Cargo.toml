@@ -16,6 +16,7 @@ kura-api = { path = "../crates/kura-api" }
 kura-core = { path = "../crates/kura-core" }
 arbitrary = "1"
 serde_norway = "0.9"
+serde_json = "1"
 
 # One [[bin]] per target; `cargo fuzz list` and the CI loop read them from here.
 [[bin]]
@@ -27,5 +28,17 @@ doc = false
 [[bin]]
 name = "fuzz_chunking"
 path = "fuzz_targets/fuzz_chunking.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_vault_path"
+path = "fuzz_targets/fuzz_vault_path.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_commit_body"
+path = "fuzz_targets/fuzz_commit_body.rs"
 test = false
 doc = false

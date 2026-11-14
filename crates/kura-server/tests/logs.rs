@@ -42,6 +42,20 @@ async fn logs_name_routes_and_audit_every_denial() {
     assert_eq!(s, StatusCode::FORBIDDEN);
     let (s, _) = e.call("GET", "/v1/vaults", "forged", Some(&d), None).await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
+    // T19 on the sync routes: the cursor in `?since=` stays out of the logs.
+    let knowledge = vault_id(&e, "knowledge").await;
+    let (s, _) = e
+        .call(
+            "GET",
+            &format!(
+                "/v1/vaults/{knowledge}/changes?since=0&epoch=8f3e2b6a-91c4-4f7d-b2a5-7c1d9e4f6a83"
+            ),
+            &member,
+            Some(&d),
+            None,
+        )
+        .await;
+    assert_eq!(s, StatusCode::GONE);
 
     let logs = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
     assert!(logs.contains(r#"route="/v1/vaults/{v}""#), "{logs}");
@@ -50,6 +64,12 @@ async fn logs_name_routes_and_audit_every_denial() {
         "the vault id leaked into the logs: {logs}"
     );
     assert!(!logs.contains(&member), "the token leaked");
+    assert!(logs.contains(r#"route="/v1/vaults/{v}/changes""#), "{logs}");
+    assert!(
+        !logs.contains("8f3e2b6a"),
+        "the query string leaked: {logs}"
+    );
+    assert!(!logs.contains(&knowledge), "the vault id leaked");
     let denials: Vec<&str> = logs
         .lines()
         .filter(|l| l.contains(r#"event="authz_denied""#))

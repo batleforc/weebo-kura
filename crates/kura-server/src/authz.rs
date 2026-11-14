@@ -91,6 +91,10 @@ pub struct VaultAccess {
     pub tenant_role: Option<TenantRole>,
     /// The highest of the tenant role's grant and every matching binding (§4.2).
     pub role: VaultRole,
+    /// Fixed at creation; clients read it from `GET /vaults` (§6.4).
+    pub chunking: kura_api::Chunking,
+    pub epoch: Uuid,
+    pub head_seq: i64,
 }
 
 pub fn parse_role(s: &str) -> Option<VaultRole> {
@@ -126,7 +130,7 @@ pub async fn vault_access_in(
         .map(|m| m.role);
     let mut tx = db::begin_tenant(pool, tenant, Some(&p.sub)).await?;
     let Some(row) = sqlx::query(
-        "SELECT namespace, name, managed_by FROM vault WHERE id = $1 AND disabled_at IS NULL",
+        "SELECT namespace, name, managed_by, chunking_params, epoch, head_seq FROM vault WHERE id = $1 AND disabled_at IS NULL",
     )
     .bind(vault)
     .fetch_optional(&mut *tx)
@@ -171,6 +175,10 @@ pub async fn vault_access_in(
         managed_by: row.try_get("managed_by")?,
         tenant_role,
         role,
+        chunking: serde_json::from_value(row.try_get("chunking_params")?)
+            .map_err(|e| ApiError::Unavailable(format!("stored chunking refused: {e}")))?,
+        epoch: row.try_get("epoch")?,
+        head_seq: row.try_get("head_seq")?,
     }))
 }
 
