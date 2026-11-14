@@ -2,7 +2,7 @@
 // after the last local change; one run at a time, a request during a run
 // queues one more. The state it reports drives the status words of §4.5.
 import type { Problem, Report } from "./types";
-import { isProblem, parseOutcome } from "./types";
+import { deletionsToConfirm, isProblem, parseOutcome } from "./types";
 import type { Situation } from "./status";
 
 /** Edits coalesce this long before a push, so autosave does not exhaust
@@ -11,7 +11,10 @@ export const QUIET_MS = 5_000;
 
 export interface ControllerOptions {
   /** One run of the core: resolves to its `{ state, report }`. */
-  run: (state: string, dryRun: boolean) => Promise<unknown>;
+  run: (state: string, dryRun: boolean, allowDeletions: boolean) => Promise<unknown>;
+  /** A full resync would move `deletions` of `files` local files to the
+   * trash: asked once per manual sync, never on every notice (§6.3). */
+  confirmDeletions: (deletions: number, files: number) => Promise<boolean>;
   loadState: () => Promise<string>;
   timers: { set(fn: () => void, ms: number): number; clear(id: number): void };
   onChange: (s: Situation) => void;
@@ -23,6 +26,8 @@ export class Controller {
   private running = false;
   private again = false;
   private quiet: number | null = null;
+  /** The user said no to a resync's deletions: not asked again until a manual sync. */
+  private declined = false;
   private situation: Situation;
 
   constructor(private readonly o: ControllerOptions) {
@@ -58,14 +63,16 @@ export class Controller {
   /** Counts local changes without sending anything (the "syncing N" word). */
   async pending(): Promise<number> {
     try {
-      const out = parseOutcome(await this.o.run(await this.o.loadState(), true));
+      const out = parseOutcome(await this.o.run(await this.o.loadState(), true, false));
       return out.report.pushed;
     } catch {
       return 0;
     }
   }
 
-  async sync(): Promise<Report | null> {
+  /** `manual`: the user asked (ribbon, command), so a pending deletion
+   * question may be asked again. */
+  async sync(manual = false): Promise<Report | null> {
     if (!this.o.signedIn()) {
       this.set({ error: null });
       return null;
@@ -80,13 +87,23 @@ export class Controller {
       do {
         this.again = false;
         this.set({ syncing: true, pending: await this.pending() });
-        try {
-          const out = parseOutcome(await this.o.run(await this.o.loadState(), false));
-          last = out.report;
-          this.set({ syncing: false, last, error: null, online: true, pending: out.report.refused === null ? 0 : out.report.pushed });
-        } catch (e) {
-          const error: Problem | null = isProblem(e) ? e : null;
-          this.set({ syncing: false, error, online: error !== null });
+        let allow = false;
+        for (;;) {
+          try {
+            const out = parseOutcome(await this.o.run(await this.o.loadState(), false, allow));
+            last = out.report;
+            this.set({ syncing: false, last, error: null, online: true, pending: out.report.refused === null ? 0 : out.report.pushed });
+          } catch (e) {
+            const ask = deletionsToConfirm(e);
+            if (ask !== null && !allow && (manual || !this.declined)) {
+              allow = await this.o.confirmDeletions(ask.deletions, ask.files);
+              this.declined = !allow;
+              if (allow) continue;
+            }
+            const error: Problem | null = isProblem(e) ? e : null;
+            this.set({ syncing: false, error, online: error !== null });
+          }
+          break;
         }
       } while (this.queued());
     } finally {

@@ -479,11 +479,16 @@ pub(super) async fn store_blob(
     let raw: Vec<Vec<u8>> = chunks.iter().map(|h| h.as_bytes().to_vec()).collect();
     let size = i64::try_from(size).map_err(|_| ApiError::of(ProblemType::PayloadTooLarge))?;
     let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
-    let rows = sqlx::query("SELECT hash, size FROM chunk WHERE vault_id = $1 AND hash = ANY($2)")
-        .bind(v)
-        .bind(&raw)
-        .fetch_all(&mut *tx)
-        .await?;
+    // FOR KEY SHARE: garbage collection skips these rows until this commits,
+    // and a row it already took is not returned, so the client re-uploads
+    // (decision 24).
+    let rows = sqlx::query(
+        "SELECT hash, size FROM chunk WHERE vault_id = $1 AND hash = ANY($2) FOR KEY SHARE",
+    )
+    .bind(v)
+    .bind(&raw)
+    .fetch_all(&mut *tx)
+    .await?;
     let mut total: i64 = 0;
     for h in &raw {
         let row = rows
@@ -502,7 +507,11 @@ pub(super) async fn store_blob(
         ));
     }
     let inserted: Option<bool> = sqlx::query_scalar(
-        "INSERT INTO blob (vault_id, tenant_id, hash, size) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING RETURNING true",
+        // A manifest stored again is touched, so it is not collected before
+        // the commit that follows (§6.9); xmax = 0 only on a fresh insert.
+        "INSERT INTO blob (vault_id, tenant_id, hash, size) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (vault_id, hash) DO UPDATE SET last_touched = now()
+         RETURNING xmax::text = '0'",
     )
     .bind(v)
     .bind(a.tenant)
@@ -510,7 +519,7 @@ pub(super) async fn store_blob(
     .bind(size)
     .fetch_optional(&mut *tx)
     .await?;
-    if inserted.is_some() {
+    if inserted == Some(true) {
         let positions: Vec<i32> = (0..raw.len())
             .filter_map(|i| i32::try_from(i).ok())
             .collect();

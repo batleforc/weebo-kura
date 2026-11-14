@@ -47,12 +47,67 @@ impl From<sqlx::Error> for crate::problem::ApiError {
 }
 
 /// The pool of the application role, `kura_app`.
-pub async fn connect(url: &str, max_connections: u32) -> Result<PgPool, DbError> {
+/// `epochs` counts the vault epochs its connections regenerate.
+pub async fn connect(
+    url: &str,
+    max_connections: u32,
+    epochs: Option<prometheus::IntCounter>,
+) -> Result<PgPool, DbError> {
     Ok(PgPoolOptions::new()
         .max_connections(max_connections)
         .acquire_timeout(ACQUIRE_TIMEOUT)
+        // A failover breaks every connection: checking the cluster identity on
+        // each new one means no commit lands under an epoch the promotion made
+        // stale (decision 32).
+        .after_connect(move |conn, _| {
+            let epochs = epochs.clone();
+            Box::pin(async move {
+                match epoch_check(&mut *conn).await {
+                    Ok(0) => {}
+                    Ok(n) => {
+                        if let Some(c) = epochs {
+                            c.inc_by(n);
+                        }
+                        tracing::warn!(
+                            vaults = n,
+                            "cluster identity changed: vault epochs regenerated"
+                        );
+                    }
+                    // Before migration 0011 (the `migrate` job's own pool).
+                    Err(sqlx::Error::Database(d)) if d.code().as_deref() == Some("42883") => {}
+                    // A connection that could not check may run under a stale
+                    // epoch: it is refused, and the pool tries a new one.
+                    Err(e) => {
+                        tracing::warn!(error = %e, "epoch check failed, connection refused");
+                        return Err(e);
+                    }
+                }
+                Ok(())
+            })
+        })
         .connect(url)
         .await?)
+}
+
+/// Regenerates every vault's epoch when PostgreSQL's system identifier or
+/// timeline changed since the last check; returns how many (§6.3).
+pub async fn epoch_check<'c, E>(conn: E) -> Result<u64, sqlx::Error>
+where
+    E: sqlx::Executor<'c, Database = Postgres>,
+{
+    let n: i64 = sqlx::query_scalar("SELECT kura_epoch_check()")
+        .fetch_one(conn)
+        .await?;
+    Ok(u64::try_from(n).unwrap_or_default())
+}
+
+/// The restore runbook's step: a new epoch for every vault, so every device
+/// resyncs without deleting (decision 32). Run as the migration owner.
+pub async fn epoch_reset(pool: &PgPool) -> Result<u64, sqlx::Error> {
+    let n: i64 = sqlx::query_scalar("SELECT kura_epoch_reset()")
+        .fetch_one(pool)
+        .await?;
+    Ok(u64::try_from(n).unwrap_or_default())
 }
 
 /// Applies the migrations, connected as the migration owner (a separate job

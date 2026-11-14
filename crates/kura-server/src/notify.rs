@@ -199,6 +199,15 @@ pub async fn listen(
                     if let Err(e) = sent {
                         tracing::warn!(error = %e, "heartbeat not sent");
                     }
+                    // A promotion the pool did not see as a reconnect (§6.3).
+                    match crate::db::epoch_check(&pool).await {
+                        Ok(0) => {}
+                        Ok(n) => {
+                            hub.metrics.vault_epoch_changes_total.inc_by(n);
+                            tracing::warn!(vaults = n, "cluster identity changed: vault epochs regenerated");
+                        }
+                        Err(e) => tracing::warn!(error = %e, "epoch check failed"),
+                    }
                 }
                 n = listener.try_recv() => match n {
                     Ok(Some(n)) => hub_ref.handle(n.payload(), &mut last_beat),

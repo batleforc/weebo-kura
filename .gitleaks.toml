@@ -1,0 +1,10 @@
+# The default rules, plus one allowlist: Spectral's OWASP rule names
+# (`owasp:api2:2023-no-api-keys-in-url`, in .spectral.yaml and the graphify
+# index built from it) match `generic-api-key` without being secrets.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Spectral OWASP rule names"
+regexTarget = "match"
+regexes = ['''api\d+:2023-[a-z-]+''']

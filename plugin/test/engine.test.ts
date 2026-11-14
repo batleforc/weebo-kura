@@ -22,8 +22,8 @@ function device(server: FakeServer, id: string, open: string[] = []) {
     random: () => crypto.getRandomValues(new Uint8Array(16)),
   });
   const api = new Api({ server: "https://kura.test", token: () => Promise.resolve("t"), device: () => id, fetch: server.fetch, sleep: () => Promise.resolve() });
-  const run = async (dryRun = false) => {
-    const options = JSON.stringify({ device: id, vault: VAULT, min: 64, avg: 256, max: 1024, maxFileSize: 1 << 20, dryRun });
+  const run = async (dryRun = false, allowDeletions = false) => {
+    const options = JSON.stringify({ device: id, vault: VAULT, min: 64, avg: 256, max: 1024, maxFileSize: 1 << 20, dryRun, allowDeletions });
     return parseOutcome(await core.sync(host, api.remote(VAULT), await host.loadState(), options));
   };
   return { adapter, run };
@@ -65,6 +65,31 @@ describe("the WASM core through the plugin's host and remote", () => {
     open.pop();
     expect((await b.run()).report.pulled).toBe(1);
     expect(b.adapter.text("note.md")).toBe("remote text\n");
+  });
+
+  it("resyncs past the horizon, asking before trashing most files (§6.3)", async () => {
+    const server = new FakeServer();
+    const a = device(server, "0193a9f0-0000-7000-8000-0000000000a3");
+    const b = device(server, "0193a9f0-0000-7000-8000-0000000000b3");
+    a.adapter.put("gone.md", "deleted elsewhere\n");
+    a.adapter.put("kept.md", "stays\n");
+    await a.run();
+    await b.run();
+    b.adapter.put("new.md", "written while away\n");
+    await a.adapter.remove("gone.md");
+    await a.run();
+    a.adapter.put("later.md", "moves the cursor past the purge\n");
+    await a.run();
+    server.purgeDeleted();
+    // One of three local files, 33%: over the guard, nothing changes.
+    await expect(b.run()).rejects.toMatchObject({ kind: "too_many_deletions", deletions: 1, files: 3 });
+    expect(b.adapter.text("gone.md")).toBe("deleted elsewhere\n");
+    const r = await b.run(false, true);
+    expect(r.report).toMatchObject({ resynced: "cursor_expired", trashed: 1 });
+    expect(b.adapter.text("gone.md")).toBeUndefined();
+    expect(b.adapter.text(".trash/gone.md")).toBe("deleted elsewhere\n");
+    expect(b.adapter.text("later.md")).toBe("moves the cursor past the purge\n");
+    expect([...server.entries.values()].map((e) => e.path).sort()).toEqual(["kept.md", "later.md", "new.md"]);
   });
 
   it("rejects with the server's problem, and checks paths like the server", async () => {

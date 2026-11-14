@@ -1,0 +1,394 @@
+//! Phase 5 on PostgreSQL (RFC 0001 §6.3, §6.9, decision 32): epochs, history
+//! and restore, retention pruning and the horizon. Blobs are inserted as rows
+//! only: nothing here reads content. Opt-in: KURA_TEST_DATABASE_URL.
+
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "test helpers fail the test on purpose"
+)]
+
+mod common;
+
+use axum::http::StatusCode;
+use common::app::{Env, env, problem, vault_id};
+use kura_core::{ChunkHash, blob_hash};
+use kura_server::maintenance::{Settings, pass};
+use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+struct S {
+    e: Env,
+    tok: String,
+    d: String,
+    v: String,
+}
+
+async fn setup(test: &str) -> Option<S> {
+    let e = env(test).await?;
+    let tok = e.key.token("u1", "s1", &["maxime-members"]);
+    let d = e.register(&tok, "desk").await;
+    let v = vault_id(&e, "knowledge").await;
+    Some(S { e, tok, d, v })
+}
+
+fn eid() -> String {
+    Uuid::now_v7().to_string()
+}
+
+impl S {
+    /// A blob row for `text` (no chunks: nothing reads it here).
+    async fn blob(&self, text: &str) -> (String, u64) {
+        let size = text.len() as u64;
+        let b = blob_hash(size, &[ChunkHash::of(text.as_bytes())]);
+        sqlx::query("INSERT INTO blob (vault_id, tenant_id, hash, size) SELECT id, tenant_id, $2, $3 FROM vault WHERE id = $1::uuid ON CONFLICT DO NOTHING")
+            .bind(&self.v)
+            .bind(b.as_bytes().as_slice())
+            .bind(i64::try_from(size).unwrap())
+            .execute(&self.e.t.owner)
+            .await
+            .unwrap();
+        (b.to_string(), size)
+    }
+
+    async fn commit(&self, ops: Value, epoch: Option<&str>) -> (StatusCode, Value) {
+        let mut body = json!({ "idempotencyKey": Uuid::new_v4().to_string(), "operations": ops });
+        if let Some(e) = epoch {
+            body["epoch"] = json!(e);
+        }
+        self.e
+            .call(
+                "POST",
+                &format!("/v1/vaults/{}/commits", self.v),
+                &self.tok,
+                Some(&self.d),
+                Some(body),
+            )
+            .await
+    }
+
+    /// Puts `text` at `path`; returns the new head.
+    async fn put(&self, entry: &str, path: &str, text: &str, base: Option<&str>) -> Value {
+        let (h, size) = self.blob(text).await;
+        let mut op = json!({ "op": "put", "entry": entry, "path": path, "blob": h, "size": size });
+        if let Some(b) = base {
+            op["base"] = json!(b);
+        }
+        let (st, b) = self.commit(json!([op]), None).await;
+        assert_eq!(st, StatusCode::OK, "{b}");
+        b["results"][0]["head"].clone()
+    }
+
+    async fn delete(&self, entry: &str, base: &str) -> Value {
+        let (st, b) = self
+            .commit(
+                json!([{ "op": "delete", "entry": entry, "base": base }]),
+                None,
+            )
+            .await;
+        assert_eq!(st, StatusCode::OK, "{b}");
+        b["results"][0]["head"].clone()
+    }
+
+    async fn get(&self, uri: &str) -> (StatusCode, Value) {
+        self.e
+            .call("GET", uri, &self.tok, Some(&self.d), None)
+            .await
+    }
+
+    async fn changes(&self, q: &str) -> (StatusCode, Value) {
+        self.get(&format!("/v1/vaults/{}/changes?{q}", self.v))
+            .await
+    }
+
+    async fn revisions(&self, entry: &str) -> Vec<Value> {
+        let (st, b) = self
+            .get(&format!("/v1/vaults/{}/entries/{entry}/revisions", self.v))
+            .await;
+        assert_eq!(st, StatusCode::OK, "{b}");
+        b["items"].as_array().unwrap().clone()
+    }
+
+    async fn sql(&self, q: &'static str) {
+        sqlx::query(q).execute(&self.e.t.owner).await.unwrap();
+    }
+
+    async fn pass(&self) -> kura_server::maintenance::Report {
+        let fast = Settings {
+            pause: std::time::Duration::ZERO,
+            orphan_grace: time::Duration::ZERO,
+        };
+        pass(&self.e.state, fast, &CancellationToken::new())
+            .await
+            .unwrap()
+            .expect("no other pass runs")
+    }
+}
+
+/// Decision 32: a new system identifier or timeline gives every vault a new
+/// epoch, once across replicas; a commit or a pull under the old one is 410.
+#[tokio::test]
+async fn epochs_change_once_with_the_cluster_identity() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    let pool = &s.e.t.app;
+    assert_eq!(
+        kura_server::db::epoch_check(pool).await.unwrap(),
+        0,
+        "first record"
+    );
+    assert_eq!(
+        kura_server::db::epoch_check(pool).await.unwrap(),
+        0,
+        "unchanged"
+    );
+    let a = eid();
+    s.put(&a, "a.md", "one", None).await;
+    let (_, p) = s.changes("since=0").await;
+    let old = p["epoch"].as_str().unwrap().to_owned();
+    // As after a promotion: the stored timeline is behind the server's.
+    s.sql("UPDATE cluster_identity SET timeline = timeline - 1")
+        .await;
+    let (r1, r2) = tokio::join!(
+        kura_server::db::epoch_check(pool),
+        kura_server::db::epoch_check(pool)
+    );
+    let mut n = [r1.unwrap(), r2.unwrap()];
+    n.sort_unstable();
+    assert_eq!(n, [0, 2], "two vaults, regenerated by one replica");
+    let (st, b) = s.changes(&format!("since=1&epoch={old}")).await;
+    assert_eq!(
+        (st, problem(&b)),
+        (StatusCode::GONE, "/v1/problems/history_rewound")
+    );
+    let (h, size) = s.blob("two").await;
+    let op = json!([{ "op": "put", "entry": eid(), "path": "b.md", "blob": h, "size": size }]);
+    let (st, b) = s.commit(op.clone(), Some(&old)).await;
+    assert_eq!(
+        (st, problem(&b)),
+        (StatusCode::GONE, "/v1/problems/history_rewound")
+    );
+    let (_, p) = s.changes("since=0").await;
+    let new = p["epoch"].as_str().unwrap().to_owned();
+    assert_ne!(new, old);
+    let (st, b) = s.commit(op, Some(&new)).await;
+    assert_eq!(st, StatusCode::OK, "{b}");
+}
+
+/// §6.9: count and age pruning keep every head, a deletion's included, so
+/// the deletion still reaches every device; a pruned base becomes a conflict.
+#[tokio::test]
+async fn retention_prunes_history_but_never_a_head() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    let a = eid();
+    let mut head = s.put(&a, "a.md", "v1", None).await;
+    let first = head["revision"].as_str().unwrap().to_owned();
+    for v in ["v2", "v3", "v4"] {
+        head = s
+            .put(&a, "a.md", v, Some(head["revision"].as_str().unwrap()))
+            .await;
+    }
+    let b = eid();
+    let bh = s.put(&b, "b.md", "doomed", None).await;
+    let tomb = s.delete(&b, bh["revision"].as_str().unwrap()).await;
+    s.sql(r#"UPDATE tenant SET retention_policy = '{"maxRevisionsPerEntry": 2}' WHERE slug = 'maxime'"#)
+        .await;
+    let r = s.pass().await;
+    assert_eq!(r.revisions, 2, "{r:?}");
+    let revs = s.revisions(&a).await;
+    assert_eq!(revs.len(), 2);
+    assert_eq!(
+        revs[0]["revision"], head["revision"],
+        "newest first, head kept"
+    );
+    // Everything older than a day, now: only heads stay.
+    s.sql(
+        r#"UPDATE tenant SET retention_policy = '{"maxRevisionAge": "1d"}' WHERE slug = 'maxime'"#,
+    )
+    .await;
+    s.sql("UPDATE revision SET created_at = now() - interval '2 days'")
+        .await;
+    let r = s.pass().await;
+    assert_eq!(r.revisions, 2, "a's second, b's put: {r:?}");
+    assert_eq!(s.revisions(&a).await.len(), 1);
+    let tomb_left = s.revisions(&b).await;
+    assert_eq!(tomb_left.len(), 1);
+    assert_eq!(tomb_left[0]["revision"], tomb["revision"]);
+    assert_eq!(r.entries, 0, "the deletion is younger than deletedEntryTtl");
+    let (_, p) = s.changes("since=0").await;
+    assert!(
+        p["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["entry"] == b.as_str() && i["deleted"] == true),
+        "the deletion still reaches devices: {p}"
+    );
+    // The functions refuse a policy that would empty history (review 5 L5).
+    for q in [
+        "SELECT kura_prune_revisions($1::uuid, NULL, 0, 1000)",
+        "SELECT kura_prune_revisions($1::uuid, interval '-1 year', NULL, 1000)",
+        "SELECT kura_purge_deleted($1::uuid, interval '-100 years', 1000)",
+    ] {
+        let n: i64 = sqlx::query_scalar(q)
+            .bind(&s.v)
+            .fetch_one(&s.e.t.app)
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "{q}");
+    }
+    // A device still on a pruned base: overlapping edits, never a refusal.
+    let (h, size) = s.blob("stale edit").await;
+    let (st, body) = s
+        .commit(
+            json!([{ "op": "put", "entry": a, "path": "a.md", "base": first, "blob": h, "size": size }]),
+            None,
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK, "{body}");
+    assert_eq!(body["results"][0]["outcome"], "conflicted");
+}
+
+/// §6.3: purging deletions past deletedEntryTtl moves the horizon; an older
+/// cursor, and a commit naming a purged entry with a base, get 410
+/// cursor_expired, so the device resyncs instead of being refused forever.
+#[tokio::test]
+async fn purged_deletions_move_the_horizon() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    let keep = eid();
+    s.put(&keep, "keep.md", "kept", None).await;
+    let b = eid();
+    let bh = s.put(&b, "gone.md", "doomed", None).await;
+    let base = bh["revision"].as_str().unwrap().to_owned();
+    let tomb = s.delete(&b, &base).await;
+    let horizon = tomb["seq"].as_i64().unwrap();
+    s.put(&eid(), "later.md", "after", None).await;
+    // The default deletedEntryTtl is 90 days.
+    s.sql("UPDATE revision SET created_at = now() - interval '100 days'")
+        .await;
+    let r = s.pass().await;
+    assert_eq!(r.entries, 1, "{r:?}");
+    let stored: i64 = sqlx::query_scalar("SELECT horizon_seq FROM vault WHERE id = $1::uuid")
+        .bind(&s.v)
+        .fetch_one(&s.e.t.owner)
+        .await
+        .unwrap();
+    assert_eq!(stored, horizon);
+    let (st, b410) = s.changes("since=1").await;
+    assert_eq!(
+        (st, problem(&b410)),
+        (StatusCode::GONE, "/v1/problems/cursor_expired")
+    );
+    let (st, _) = s.changes(&format!("since={horizon}")).await;
+    assert_eq!(st, StatusCode::OK);
+    let (st, p) = s.changes("since=0").await;
+    assert_eq!(st, StatusCode::OK, "a first sync is never expired");
+    assert!(
+        p["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["entry"] != b.as_str())
+    );
+    // An edit, or a delete, of the purged entry against its old base.
+    let (h, size) = s.blob("edited while away").await;
+    for op in [
+        json!({ "op": "put", "entry": b, "path": "gone.md", "base": base, "blob": h, "size": size }),
+        json!({ "op": "delete", "entry": b, "base": base }),
+    ] {
+        let (st, body) = s.commit(json!([op]), None).await;
+        assert_eq!(
+            (st, problem(&body)),
+            (StatusCode::GONE, "/v1/problems/cursor_expired")
+        );
+    }
+    // The same edit pushed as a new entry, as the resync does, is accepted.
+    let (st, body) = s
+        .commit(
+            json!([{ "op": "put", "entry": eid(), "path": "gone.md", "blob": h, "size": size }]),
+            None,
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK, "{body}");
+}
+
+/// §6.9: history newest first, paged; a restore is a new revision through
+/// the commit path, for a live or a deleted entry, never of a deletion.
+#[tokio::test]
+async fn history_and_restore() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    let a = eid();
+    let v1 = s.put(&a, "notes/a.md", "first", None).await;
+    let v2 = s
+        .put(
+            &a,
+            "notes/a.md",
+            "second",
+            Some(v1["revision"].as_str().unwrap()),
+        )
+        .await;
+    let revs = s.revisions(&a).await;
+    assert_eq!(revs.len(), 2);
+    assert_eq!(revs[0]["revision"], v2["revision"]);
+    assert_eq!(revs[1]["seq"], 1);
+    assert!(revs[1]["createdAt"].as_str().unwrap().ends_with('Z'));
+    let (st, b) = s
+        .get(&format!(
+            "/v1/vaults/{}/entries/{a}/revisions?before=2",
+            s.v
+        ))
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(b["items"].as_array().unwrap().len(), 1, "{b}");
+    let restore = |rev: Value| {
+        let s = &s;
+        let a = a.clone();
+        async move {
+            s.e.call(
+                "POST",
+                &format!("/v1/vaults/{}/entries/{a}/restore", s.v),
+                &s.tok,
+                Some(&s.d),
+                Some(json!({ "revision": rev })),
+            )
+            .await
+        }
+    };
+    let (st, r) = restore(v1["revision"].clone()).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(
+        (r["outcome"].as_str(), &r["head"]["blob"]),
+        (Some("accepted"), &v1["blob"])
+    );
+    assert_eq!(r["head"]["seq"], 3);
+    // Restoring the head again writes nothing.
+    let (_, again) = restore(v1["revision"].clone()).await;
+    assert_eq!(again["head"]["seq"], 3);
+    // A deleted entry comes back at its path; a deletion is not restorable.
+    let tomb = s.delete(&a, r["head"]["revision"].as_str().unwrap()).await;
+    let (st, b) = restore(tomb["revision"].clone()).await;
+    assert_eq!(
+        (st, problem(&b)),
+        (StatusCode::BAD_REQUEST, "/v1/problems/invalid_request")
+    );
+    let (st, r) = restore(v2["revision"].clone()).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(r["head"]["path"], "notes/a.md");
+    assert_eq!(r["head"]["deleted"], false);
+    // Unknown revision, or an entry of another vault: 404.
+    let (st, _) = restore(json!(Uuid::now_v7())).await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    let (st, _) = s
+        .get(&format!("/v1/vaults/{}/entries/{}/revisions", s.v, eid()))
+        .await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+}

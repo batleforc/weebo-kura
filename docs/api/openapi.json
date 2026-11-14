@@ -1277,6 +1277,183 @@
         ]
       }
     },
+    "/v1/vaults/{v}/entries/{e}/restore": {
+      "post": {
+        "tags": [
+          "history"
+        ],
+        "summary": "Restores a revision: a new revision with its content, through the commit\npath, so the vault lock, `seq`, notifications and the conflict rules all\napply (§6.9). A deletion is not restorable: restore the revision before it.",
+        "operationId": "restore_revision",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "e",
+            "in": "path",
+            "description": "Entry id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The entry's new head",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The revision is a deletion",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Below editor",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault, entry or revision",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/entries/{e}/revisions": {
+      "get": {
+        "tags": [
+          "history"
+        ],
+        "summary": "An entry's history, newest first (§4.4, §6.9).",
+        "operationId": "get_revisions",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "e",
+            "in": "path",
+            "description": "Entry id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "The last `seq` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "At most 1,000 revisions; follow `next` for older ones",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault or entry",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/v1/vaults/{v}/events": {
       "get": {
         "tags": [
@@ -1552,6 +1729,14 @@
           "operations"
         ],
         "properties": {
+          "epoch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The epoch this device's state was built under: another one answers\n`410 history_rewound` (§6.3). Absent on a first push."
+          },
           "idempotencyKey": {
             "type": "string",
             "description": "Unique per device for 7 days; a retry reuses it with the same body."
@@ -1909,6 +2094,88 @@
         },
         "additionalProperties": false
       },
+      "RestoreRequest": {
+        "type": "object",
+        "description": "`POST /vaults/{v}/entries/{e}/restore`: a new revision with this one's content.",
+        "required": [
+          "revision"
+        ],
+        "properties": {
+          "revision": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RevisionInfo": {
+        "type": "object",
+        "description": "One stored revision of an entry (`GET …/entries/{e}/revisions`, §4.4).",
+        "required": [
+          "revision",
+          "seq",
+          "path",
+          "deleted",
+          "size",
+          "createdAt"
+        ],
+        "properties": {
+          "blob": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "RevisionsResponse": {
+        "type": "object",
+        "description": "An entry's history, newest first.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevisionInfo"
+            }
+          },
+          "next": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Set when older revisions follow: the next `before`.",
+            "minimum": 0
+          }
+        }
+      },
       "Ticket": {
         "type": "object",
         "required": [
@@ -2018,6 +2285,10 @@
     {
       "name": "sync",
       "description": "Commits and changes"
+    },
+    {
+      "name": "history",
+      "description": "Revisions and restore"
     }
   ]
 }

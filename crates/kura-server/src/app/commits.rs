@@ -6,10 +6,12 @@
 use std::collections::{HashMap, HashSet};
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::rejection::QueryRejection;
+use axum::extract::{Path, Query, State};
 use kura_api::VaultRole;
 use kura_core::wire::{
-    CommitRequest, CommitResponse, EntryState, OpResult, Operation, Outcome, RevisionId,
+    CommitRequest, CommitResponse, EntryState, OpResult, Operation, Outcome, RestoreRequest,
+    RevisionId, RevisionInfo, RevisionsResponse,
 };
 use kura_core::{ChunkHash, EntryId, VaultPath};
 use sqlx::Row as _;
@@ -17,7 +19,7 @@ use unicode_normalization::UnicodeNormalization as _;
 use uuid::Uuid;
 
 use super::SharedState;
-use super::body::Raw;
+use super::body::{Body, Raw};
 use super::chunks::{read_blob, store_content};
 use super::device::DeviceCaller;
 use crate::authz::{self, VaultAccess};
@@ -145,6 +147,8 @@ struct Commit<'a> {
     merges: &'a HashMap<usize, Prepared>,
     allow_retry: bool,
     head_moved: bool,
+    /// Above 0 once deleted entries were purged (§6.9).
+    horizon_seq: i64,
 }
 
 impl Commit<'_> {
@@ -430,10 +434,13 @@ async fn decide(
     let (state, a, v, req, sub) = (cx.state, cx.a, cx.v, cx.req, cx.sub);
     let request_hash = cx.request_hash;
     let mut tx = db::begin_tenant(&state.db, a.tenant, Some(sub)).await?;
-    let head_seq: i64 = sqlx::query_scalar("SELECT head_seq FROM vault WHERE id = $1 FOR UPDATE")
-        .bind(v)
-        .fetch_one(&mut *tx)
-        .await?;
+    let vault =
+        sqlx::query("SELECT head_seq, epoch, horizon_seq FROM vault WHERE id = $1 FOR UPDATE")
+            .bind(v)
+            .fetch_one(&mut *tx)
+            .await?;
+    let head_seq: i64 = vault.try_get("head_seq")?;
+    let horizon_seq: i64 = vault.try_get("horizon_seq")?;
     // Under the lock, so two retries racing see one stored result (§6.3).
     let stored = sqlx::query("SELECT request_hash, result FROM commit_record WHERE vault_id = $1 AND device_id = $2 AND idempotency_key = $3")
         .bind(v)
@@ -449,6 +456,14 @@ async fn decide(
         let result: sqlx::types::Json<CommitResponse> = row.try_get("result")?;
         tx.commit().await?;
         return Ok(Decided::Done(result.0));
+    }
+    // The device's state predates history this server lost (§6.3).
+    if req.epoch.is_some_and(|e| {
+        vault
+            .try_get::<Uuid, _>("epoch")
+            .is_ok_and(|ours| ours != e)
+    }) {
+        return Err(ApiError::of(ProblemType::HistoryRewound));
     }
 
     let device_name: String = sqlx::query_scalar("SELECT name FROM device WHERE id = $1")
@@ -512,6 +527,7 @@ async fn decide(
         merges,
         allow_retry,
         head_moved: false,
+        horizon_seq,
     };
     let mut results = Vec::with_capacity(req.operations.len());
     for (i, op) in req.operations.iter().enumerate() {
@@ -630,7 +646,8 @@ async fn check_blobs(tx: &mut Tx, v: Uuid, req: &CommitRequest) -> Result<(), Ap
         .map(|(_, h, _)| h.as_bytes().to_vec())
         .collect();
     let sizes: HashMap<Vec<u8>, i64> =
-        sqlx::query("SELECT hash, size FROM blob WHERE vault_id = $1 AND hash = ANY($2)")
+        // FOR KEY SHARE: garbage collection cannot take a blob this commit uses.
+        sqlx::query("SELECT hash, size FROM blob WHERE vault_id = $1 AND hash = ANY($2) FOR KEY SHARE")
             .bind(v)
             .bind(&raw)
             .fetch_all(&mut **tx)
@@ -676,6 +693,13 @@ async fn apply(
         None => None,
         Some(b) => match (bases.get(&b), &existing) {
             (Some(r), Some(_)) if r.entry == id => Some(r),
+            // Pruned by retention: handled as overlapping edits (§6.5).
+            (None, Some(_)) => None,
+            // Its entry was purged while this device was away: it resyncs
+            // first, instead of being refused on every push (§6.3).
+            (None, None) if c.horizon_seq > 0 => {
+                return Err(ApiError::of(ProblemType::CursorExpired));
+            }
             _ => {
                 return Err(refused(
                     i,
@@ -730,6 +754,11 @@ async fn apply(
                 // A rename; of two renames, the later commit wins.
                 let p = c.free_path(i, path, id).await?;
                 return accepted(c.write(id, p, false, Some(*blob), size, base));
+            }
+            // Nothing changed since its base, which is not the head: a device
+            // resending after a rewind (§6.3). The head stays.
+            if base_rev.is_some_and(|r| r.blob == Some(*blob) && r.path == path.as_str()) {
+                return accepted(h);
             }
             let content_unchanged_since_base = base_rev.is_some_and(|r| r.blob == h.blob);
             if base == Some(h.revision) || content_unchanged_since_base {
@@ -917,7 +946,8 @@ async fn prepare_inner(
         .map(|h| h.as_bytes().to_vec())
         .collect();
     let sizes: HashMap<Vec<u8>, i64> =
-        sqlx::query("SELECT hash, size FROM blob WHERE vault_id = $1 AND hash = ANY($2)")
+        // FOR KEY SHARE: garbage collection cannot take a blob this commit uses.
+        sqlx::query("SELECT hash, size FROM blob WHERE vault_id = $1 AND hash = ANY($2) FOR KEY SHARE")
             .bind(cx.v)
             .bind(&involved)
             .fetch_all(&mut *tx)
@@ -1069,6 +1099,199 @@ async fn store(
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+/// An entry's history, newest first (§4.4, §6.9).
+#[utoipa::path(
+    get,
+    path = "/vaults/{v}/entries/{e}/revisions",
+    tag = "history",
+    params(
+        ("v" = Uuid, Path, description = "Vault id"),
+        ("e" = Uuid, Path, description = "Entry id"),
+        RevisionsQuery,
+        ("X-Kura-Device" = Uuid, Header, description = "This device"),
+    ),
+    responses(
+        (status = 200, description = "At most 1,000 revisions; follow `next` for older ones", body = RevisionsResponse),
+        (status = 404, description = "No such vault or entry", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("bearer_token" = [])),
+)]
+pub async fn get_revisions(
+    State(state): State<SharedState>,
+    caller: DeviceCaller,
+    Path((v, e)): Path<(Uuid, Uuid)>,
+    q: Result<Query<RevisionsQuery>, QueryRejection>,
+) -> Result<Json<RevisionsResponse>, ApiError> {
+    let q = q
+        .map(|Query(q)| q)
+        .map_err(|e| ApiError::with_detail(ProblemType::InvalidRequest, e.body_text()))?;
+    let snap = state
+        .snapshot()
+        .ok_or(ApiError::of(ProblemType::Unavailable))?;
+    let p = &caller.caller.principal;
+    let a = authz::require_role(&state.db, &snap, p, v, VaultRole::Viewer).await?;
+    let before = q
+        .before
+        .map_or(i64::MAX, |b| i64::try_from(b).unwrap_or(i64::MAX));
+    let mut tx = db::begin_tenant_snapshot(&state.db, a.tenant, &p.sub).await?;
+    let known: Option<bool> =
+        sqlx::query_scalar("SELECT true FROM entry WHERE vault_id = $1 AND id = $2")
+            .bind(v)
+            .bind(e)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if known.is_none() {
+        return Err(ApiError::of(ProblemType::NotFound));
+    }
+    let rows = sqlx::query(
+        "SELECT id, seq, path, deleted, blob_hash, size, created_at FROM revision
+         WHERE vault_id = $1 AND entry_id = $2 AND seq < $3 ORDER BY seq DESC LIMIT $4",
+    )
+    .bind(v)
+    .bind(e)
+    .bind(before)
+    .bind(REVISIONS_PAGE.saturating_add(1))
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let mut items = rows
+        .iter()
+        .map(|r| {
+            let created: time::OffsetDateTime = r.try_get("created_at")?;
+            Ok(RevisionInfo {
+                revision: r.try_get("id")?,
+                seq: u64::try_from(r.try_get::<i64, _>("seq")?).unwrap_or_default(),
+                path: stored_path(&r.try_get::<String, _>("path")?)?,
+                deleted: r.try_get("deleted")?,
+                blob: hash_of(r.try_get("blob_hash")?)?,
+                size: u64::try_from(r.try_get::<i64, _>("size")?).unwrap_or_default(),
+                created_at: created
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .map_err(|e| ApiError::Unavailable(e.to_string()))?,
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let page = usize::try_from(REVISIONS_PAGE).unwrap_or(usize::MAX);
+    let more = items.len() > page;
+    items.truncate(page);
+    Ok(Json(RevisionsResponse {
+        next: if more {
+            items.last().map(|i| i.seq)
+        } else {
+            None
+        },
+        items,
+    }))
+}
+
+/// Revisions per page (§4.4).
+const REVISIONS_PAGE: i64 = 1000;
+
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct RevisionsQuery {
+    /// The last `seq` of the previous page.
+    pub before: Option<u64>,
+}
+
+/// Restores a revision: a new revision with its content, through the commit
+/// path, so the vault lock, `seq`, notifications and the conflict rules all
+/// apply (§6.9). A deletion is not restorable: restore the revision before it.
+#[utoipa::path(
+    post,
+    path = "/vaults/{v}/entries/{e}/restore",
+    tag = "history",
+    params(
+        ("v" = Uuid, Path, description = "Vault id"),
+        ("e" = Uuid, Path, description = "Entry id"),
+        ("X-Kura-Device" = Uuid, Header, description = "This device"),
+    ),
+    request_body = RestoreRequest,
+    responses(
+        (status = 200, description = "The entry's new head", body = OpResult),
+        (status = 403, description = "Below editor", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "No such vault, entry or revision", body = Problem, content_type = "application/problem+json"),
+        (status = 400, description = "The revision is a deletion", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("bearer_token" = [])),
+)]
+pub async fn restore_revision(
+    State(state): State<SharedState>,
+    caller: DeviceCaller,
+    Path((v, e)): Path<(Uuid, Uuid)>,
+    Body(body): Body<RestoreRequest>,
+) -> Result<Json<OpResult>, ApiError> {
+    let snap = state
+        .snapshot()
+        .ok_or(ApiError::of(ProblemType::Unavailable))?;
+    let p = &caller.caller.principal;
+    let a = authz::require_role(&state.db, &snap, p, v, VaultRole::Editor).await?;
+    let entry = EntryId::from_uuid(e).ok_or(ApiError::of(ProblemType::NotFound))?;
+    let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
+    let rev = sqlx::query(
+        "SELECT path, blob_hash, size FROM revision WHERE vault_id = $1 AND entry_id = $2 AND id = $3",
+    )
+    .bind(v)
+    .bind(e)
+    .bind(body.revision)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(ApiError::of(ProblemType::NotFound))?;
+    let head = sqlx::query(concat!(
+        head_select!(),
+        " WHERE e.vault_id = $1 AND e.id = $2"
+    ))
+    .bind(v)
+    .bind(e)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(ApiError::of(ProblemType::NotFound))
+    .and_then(|r| head_from_row(&r))?;
+    tx.commit().await?;
+    let blob = hash_of(rev.try_get("blob_hash")?)?.ok_or_else(|| {
+        ApiError::with_detail(
+            ProblemType::InvalidRequest,
+            "this revision is a deletion; restore the revision before it",
+        )
+    })?;
+    // A deleted entry comes back where it was; a live one stays where it is.
+    let path = if head.deleted {
+        stored_path(&rev.try_get::<String, _>("path")?)?
+    } else {
+        head.path.clone()
+    };
+    let size = u64::try_from(rev.try_get::<i64, _>("size")?).unwrap_or_default();
+    let req = CommitRequest {
+        idempotency_key: format!("restore-{}", Uuid::new_v4()),
+        operations: vec![Operation::Put {
+            entry,
+            path,
+            base: Some(head.revision),
+            blob,
+            size,
+        }],
+        epoch: None,
+    };
+    let canonical = serde_json::to_vec(&req).map_err(|e| ApiError::Unavailable(e.to_string()))?;
+    let cx = Cx {
+        state: &state,
+        a: &a,
+        v,
+        device: caller.device,
+        sub: &p.sub,
+        req: &req,
+        request_hash: ChunkHash::of(&canonical),
+    };
+    match decide(&cx, &HashMap::new(), false).await? {
+        Decided::Done(r) => {
+            r.results.into_iter().next().map(Json).ok_or_else(|| {
+                ApiError::Unavailable("a commit of one operation returned none".into())
+            })
+        }
+        Decided::HeadMoved => Err(ApiError::Unavailable("restore raced a merge".into())),
+    }
 }
 
 #[cfg(test)]

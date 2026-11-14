@@ -104,6 +104,8 @@ struct Scripted {
     page: usize,
     /// The answer to a commit; unreachable when absent.
     reply: Option<CommitResponse>,
+    /// Restored from a backup: a cursor from another epoch than nil is 410.
+    rewound: bool,
 }
 
 impl Remote for Scripted {
@@ -152,7 +154,18 @@ impl Remote for Scripted {
             .clone()
             .ok_or_else(|| RemoteError::Unavailable("scripted".into()))
     }
-    async fn changes(&self, since: u64, _: Option<Uuid>) -> Result<ChangesResponse, RemoteError> {
+    async fn changes(
+        &self,
+        since: u64,
+        epoch: Option<Uuid>,
+    ) -> Result<ChangesResponse, RemoteError> {
+        if self.rewound && epoch.is_some_and(|e| !e.is_nil()) {
+            return Err(RemoteError::Problem {
+                status: 410,
+                kind: "history_rewound".into(),
+                detail: None,
+            });
+        }
         let all: Vec<EntryState> = self
             .serve
             .iter()
@@ -180,6 +193,7 @@ fn opts(dry_run: bool) -> Options {
         params: ChunkParams::new(256 << 10, 1 << 20, 4 << 20).unwrap(),
         max_file_size: 100,
         dry_run,
+        allow_deletions: false,
     }
 }
 
@@ -324,6 +338,7 @@ async fn a_path_held_by_another_known_entry_is_handed_over() {
                 blob: st.blob.unwrap(),
                 size: st.size,
                 stamp: Some(kura_core::sync::Stamp::from(&meta)),
+                resend: false,
             },
         );
     }
@@ -446,6 +461,7 @@ async fn a_merged_push_writes_the_merged_head() {
             blob: base.blob.unwrap(),
             size: base.size,
             stamp: Some(kura_core::sync::Stamp::from(&meta)),
+            resend: false,
         },
     );
     s.cursor = 1;
@@ -493,6 +509,7 @@ async fn a_conflict_on_an_open_note_fails_that_file_only() {
             blob: base.blob.unwrap(),
             size: base.size,
             stamp: Some(kura_core::sync::Stamp::from(&meta)),
+            resend: false,
         },
     );
     s.cursor = 1;
@@ -524,4 +541,40 @@ async fn a_conflict_on_an_open_note_fails_that_file_only() {
         s.entries[&base.entry].revision, base.revision,
         "the old base is kept for the retry"
     );
+}
+
+/// Review 5: after `history_rewound`, a file the server holds in another
+/// version is resent; a viewer's refused push forgets it rather than letting
+/// the pull write over it or a later resync trash it.
+#[tokio::test]
+async fn a_refused_resend_keeps_the_local_version() {
+    let host = Mem::default();
+    let (mine, data) = served_as("n.md", b"mine, lost by the server", 1, 7);
+    let meta = host.write(&mine.path, &data).await.unwrap();
+    let mut s = state();
+    s.epoch = Some(Uuid::from_u128(9));
+    s.cursor = 7;
+    s.entries.insert(
+        mine.entry,
+        kura_core::sync::Known {
+            path: mine.path.clone(),
+            revision: mine.revision,
+            blob: mine.blob.unwrap(),
+            size: mine.size,
+            stamp: Some(kura_core::sync::Stamp::from(&meta)),
+            resend: false,
+        },
+    );
+    let remote = Scripted {
+        refuse: true,
+        rewound: true,
+        serve: vec![served_as("n.md", b"older", 1, 3)],
+        ..Scripted::default()
+    };
+    let r = sync(&host, &remote, &mut s, &opts(false)).await.unwrap();
+    assert_eq!(r.resynced.as_deref(), Some("history_rewound"));
+    assert!(r.refused.is_some(), "{r:?}");
+    assert_eq!(host.files.borrow()["n.md"], b"mine, lost by the server");
+    assert!(s.entries.is_empty(), "forgotten, not resent forever");
+    assert_eq!(r.trashed, 0);
 }

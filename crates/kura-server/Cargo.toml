@@ -7,6 +7,8 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Already in the tree (axum, sqlx); lists bucket objects for the orphan sweep.
+futures-util = "0.3"
 bytes = { workspace = true }
 object_store = { workspace = true }
 base64 = { workspace = true }
@@ -44,8 +46,6 @@ utoipa-scalar = { workspace = true }
 uuid = { workspace = true, features = ["v4", "v7"] }
 
 [dev-dependencies]
-# Already in the tree (axum, sqlx); lists bucket objects in tests.
-futures-util = "0.3"
 # The CLI commands, driven over real HTTP against the app (tests/cli.rs).
 kura-cli = { workspace = true }
 # A WebSocket client for the notification tests, the version axum already links.

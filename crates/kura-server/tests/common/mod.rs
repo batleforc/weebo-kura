@@ -64,6 +64,30 @@ pub async fn test_db(test: &str) -> Option<TestDb> {
     .await
     .unwrap();
     tx.commit().await.unwrap();
+    // Databases of test runs that have ended: a database per test would
+    // otherwise pile up in a long-lived local cluster. Another binary may
+    // drop the same one first: errors are ignored.
+    #[cfg(target_os = "linux")]
+    {
+        let names: Vec<String> = sqlx::query_scalar(
+            "SELECT datname FROM pg_database WHERE datname LIKE 'kura\\_test\\_%'",
+        )
+        .fetch_all(&admin)
+        .await
+        .unwrap();
+        for d in names {
+            let pid = d.split('_').nth(2).unwrap_or("");
+            if !pid.is_empty() && !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                drop(
+                    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                        "DROP DATABASE IF EXISTS \"{d}\" WITH (FORCE)"
+                    )))
+                    .execute(&admin)
+                    .await,
+                );
+            }
+        }
+    }
 
     let name = format!(
         "kura_test_{}_{}_{}",

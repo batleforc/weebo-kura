@@ -258,6 +258,7 @@ pub async fn attach(ctx: &Ctx, vault: &str, folder: PathBuf, yes: bool) -> Resul
                         blob: b,
                         size: it.size,
                         stamp: Some(Stamp::from(&f)),
+                        resend: false,
                     },
                 );
             }
@@ -286,7 +287,7 @@ pub async fn attach(ctx: &Ctx, vault: &str, folder: PathBuf, yes: bool) -> Resul
         },
     );
     cfg.save(&ctx.home).map_err(Fail::local)?;
-    let code = sync_one(ctx, &api, &mut cfg, vault, false).await?;
+    let code = sync_one(ctx, &api, &mut cfg, vault, false, false).await?;
     if code == 0 {
         println!("Attached. {vault} is in sync.");
     }
@@ -301,7 +302,13 @@ fn confirm(question: &str) -> bool {
     std::io::stdin().lock().read_line(&mut line).is_ok() && matches!(line.trim(), "y" | "Y" | "yes")
 }
 
-pub async fn sync_cmd(ctx: &Ctx, vault: Option<&str>, dry_run: bool) -> Result<u8, Fail> {
+/// `yes`: a full resync may move files to `.trash` past the guard without asking.
+pub async fn sync_cmd(
+    ctx: &Ctx,
+    vault: Option<&str>,
+    dry_run: bool,
+    yes: bool,
+) -> Result<u8, Fail> {
     let mut cfg = config(ctx)?;
     let names: Vec<String> = match vault {
         Some(v) if cfg.vaults.contains_key(v) => vec![v.to_owned()],
@@ -320,7 +327,7 @@ pub async fn sync_cmd(ctx: &Ctx, vault: Option<&str>, dry_run: bool) -> Result<u
     let api = session(ctx, &mut cfg).await?;
     let mut worst = 0u8;
     for name in names {
-        let code = match sync_one(ctx, &api, &mut cfg, &name, dry_run).await {
+        let code = match sync_one(ctx, &api, &mut cfg, &name, dry_run, yes).await {
             Ok(c) => c,
             Err(Fail(c, msg)) => {
                 eprintln!("error: {name}: {msg}");
@@ -338,6 +345,7 @@ async fn sync_one(
     cfg: &mut Config,
     name: &str,
     dry_run: bool,
+    yes: bool,
 ) -> Result<u8, Fail> {
     let a = cfg
         .vaults
@@ -355,17 +363,60 @@ async fn sync_one(
         .ok_or_else(|| Fail(2, "no device: run `kura login`".into()))?;
     let host = FsHost::new(a.path.clone());
     let mut state = LocalState::adopt(host.load_state(), device, a.id);
-    let opts = Options {
+    let mut opts = Options {
         params: params(v.chunking)?,
         max_file_size: MAX_FILE,
         dry_run,
+        allow_deletions: yes,
     };
-    let r = sync(&host, &api.vault(a.id), &mut state, &opts)
-        .await
-        .map_err(|e| match e {
-            kura_core::sync::SyncError::Remote(r) => Fail::from(r),
-            other => Fail::local(other),
-        })?;
+    let r = loop {
+        match sync(&host, &api.vault(a.id), &mut state, &opts).await {
+            Ok(r) => break r,
+            // A full resync stops before trashing many files (§6.3).
+            Err(kura_core::sync::SyncError::TooManyDeletions { deletions, files }) => {
+                let share = deletions
+                    .saturating_mul(100)
+                    .checked_div(files)
+                    .unwrap_or(100);
+                println!(
+                    "resync: {name}: {deletions} local files ({share}%) were deleted elsewhere."
+                );
+                if std::io::IsTerminal::is_terminal(&std::io::stdin())
+                    && confirm("Move them to .trash?")
+                {
+                    opts.allow_deletions = true;
+                    continue;
+                }
+                return Err(Fail(
+                    3,
+                    format!(
+                        "Nothing removed. Run `kura sync {name}` again to decide, or with --yes."
+                    ),
+                ));
+            }
+            Err(kura_core::sync::SyncError::Remote(r)) => return Err(Fail::from(r)),
+            Err(other) => return Err(Fail::local(other)),
+        }
+    };
+    // The words of the §4.5 mocks.
+    match r.resynced.as_deref() {
+        Some("history_rewound") => {
+            println!(
+                "resync: {name}: the server lost recent history. Nothing is removed on this device."
+            );
+            println!("Re-pushed {} files the server no longer had.", r.pushed);
+        }
+        Some(_) => {
+            println!(
+                "resync: {name}: this device was offline longer than the vault keeps deletions."
+            );
+            println!(
+                "Removed {} local files deleted elsewhere (moved to .trash). Pushed {} files changed here.",
+                r.trashed, r.pushed
+            );
+        }
+        None => {}
+    }
     let mut code = 0u8;
     if dry_run {
         println!("{name}: would push {} files.", r.pushed);
@@ -449,6 +500,7 @@ pub async fn status(ctx: &Ctx) -> Result<u8, Fail> {
             params: params(v.chunking)?,
             max_file_size: MAX_FILE,
             dry_run: true,
+            allow_deletions: false,
         };
         let r = sync(&host, &api.vault(a.id), &mut state, &opts)
             .await
@@ -620,7 +672,7 @@ async fn connect_and_watch(
     stop: &mut std::pin::Pin<&mut impl std::future::Future<Output = ()>>,
 ) -> Result<Watched, Fail> {
     let api = session(ctx, cfg).await?;
-    if sync_one(ctx, &api, cfg, name, false).await? == 2 {
+    if sync_one(ctx, &api, cfg, name, false, false).await? == 2 {
         return Err(Fail(2, "sign in again: run `kura login`".into()));
     }
     let id = cfg
@@ -673,7 +725,7 @@ async fn on_socket(
                     last_notice = tokio::time::Instant::now();
                     let kind = serde_json::from_str::<serde_json::Value>(&t).ok().and_then(|v| v.get("type").and_then(|k| k.as_str()).map(str::to_owned));
                     if matches!(kind.as_deref(), Some("change" | "pull")) {
-                        let code = sync_one(ctx, api, cfg, name, false).await?;
+                        let code = sync_one(ctx, api, cfg, name, false, false).await?;
                         if code == 2 {
                             return Err(Fail(2, "sign in again: run `kura login`".into()));
                         }
@@ -693,12 +745,75 @@ async fn on_socket(
                     changed_at = Some(tokio::time::Instant::now());
                 } else if changed_at.is_some_and(|t| t.elapsed() >= QUIET) {
                     changed_at = None;
-                    sync_one(ctx, api, cfg, name, false).await?;
+                    sync_one(ctx, api, cfg, name, false, false).await?;
                     seen = fingerprint(&host).await;
                 }
             }
         }
     }
+}
+
+/// The entry a path of an attached vault names, from this device's state.
+fn entry_of(cfg: &Config, vault: &str, path: &str) -> Result<(Uuid, Uuid), Fail> {
+    let a = cfg
+        .vaults
+        .get(vault)
+        .ok_or_else(|| Fail(3, format!("{vault} is not attached")))?;
+    let p = VaultPath::from_local(path).map_err(|e| Fail(4, format!("{path}: {e}")))?;
+    let device = cfg.device.unwrap_or_default();
+    let host = FsHost::new(a.path.clone());
+    let state = LocalState::adopt(host.load_state(), device, a.id);
+    let entry = state
+        .entries
+        .iter()
+        .find(|(_, k)| k.path == p)
+        .map(|(e, _)| *e.as_uuid())
+        .ok_or_else(|| {
+            Fail(
+                3,
+                format!("{path} is not synced here: run `kura sync {vault}` first"),
+            )
+        })?;
+    Ok((a.id, entry))
+}
+
+/// `kura history <vault> <path>`: the file's revisions, newest first (§6.9).
+pub async fn history(ctx: &Ctx, vault: &str, path: &str) -> Result<u8, Fail> {
+    let mut cfg = config(ctx)?;
+    let (id, entry) = entry_of(&cfg, vault, path)?;
+    let api = session(ctx, &mut cfg).await?;
+    let revs = api.revisions(id, entry).await?;
+    println!(
+        "{:<36} {:>7} {:<20} {:>10}  PATH",
+        "REVISION", "SEQ", "WHEN (UTC)", "SIZE"
+    );
+    for r in &revs {
+        let when: String = r.created_at.chars().take(19).collect();
+        let size = if r.deleted {
+            "deleted".to_owned()
+        } else {
+            r.size.to_string()
+        };
+        println!(
+            "{:<36} {:>7} {:<20} {:>10}  {}",
+            r.revision, r.seq, when, size, r.path
+        );
+    }
+    Ok(0)
+}
+
+/// `kura restore <vault> <path> <revision>`: that revision's content becomes
+/// a new revision, then the vault syncs to bring it here (§6.9).
+pub async fn restore(ctx: &Ctx, vault: &str, path: &str, revision: Uuid) -> Result<u8, Fail> {
+    let mut cfg = config(ctx)?;
+    let (id, entry) = entry_of(&cfg, vault, path)?;
+    let api = session(ctx, &mut cfg).await?;
+    let r = api.restore(id, entry, revision).await?;
+    println!(
+        "{path}: revision {revision} restored as {} (seq {}).",
+        r.head.path, r.head.seq
+    );
+    sync_one(ctx, &api, &mut cfg, vault, false, false).await
 }
 
 #[cfg(test)]

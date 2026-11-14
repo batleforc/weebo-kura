@@ -126,3 +126,87 @@ async fn refuses_a_bad_address_and_a_bad_token() {
             .is_err()
     );
 }
+
+/// T18: with `deploy/vault/kura-server.hcl`, the server creates and unwraps
+/// data keys, and can neither delete a tenant's Transit key nor make it
+/// deletable (decision 33).
+#[tokio::test]
+async fn server_policy_cannot_delete_key() {
+    let Some((addr, token)) = env() else { return };
+    let mount = format!("mp{}", std::process::id());
+    let a = admin(&addr, &token, &mount).await;
+    let transit = format!("{mount}-transit");
+    vaultrs::transit::key::create(&a, &transit, "kura-maxime", None)
+        .await
+        .unwrap();
+    let policy = include_str!("../../../deploy/vault/kura-server.hcl")
+        .replace("\"mv/", &format!("\"{mount}/"))
+        .replace("\"transit/", &format!("\"{transit}/"));
+    let name = format!("kura-server-{mount}");
+    vaultrs::sys::policy::set(&a, &name, &policy).await.unwrap();
+    let issued = vaultrs::token::new(
+        &a,
+        Some(
+            &mut vaultrs::api::token::requests::CreateTokenRequestBuilder::default()
+                .policies(vec![name])
+                .no_default_policy(true),
+        ),
+    )
+    .await
+    .unwrap();
+    let server = Vault::connect_with(&config(&addr, &mount), Some(issued.client_token.clone()))
+        .await
+        .unwrap();
+    let (plain, wrapped) = server.new_data_key("kura-maxime").await.unwrap();
+    assert_eq!(
+        *server
+            .unwrap_data_key("kura-maxime", &wrapped)
+            .await
+            .unwrap(),
+        *plain
+    );
+    let http = reqwest::Client::new();
+    let call = |method: reqwest::Method, path: String, body: Option<serde_json::Value>| {
+        let mut r = http
+            .request(method, format!("{addr}/v1/{path}"))
+            .header("x-vault-token", &issued.client_token);
+        if let Some(b) = body {
+            r = r.json(&b);
+        }
+        r.send()
+    };
+    let config_key = call(
+        reqwest::Method::POST,
+        format!("{transit}/keys/kura-maxime/config"),
+        Some(serde_json::json!({ "deletion_allowed": true })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        config_key.status().as_u16(),
+        403,
+        "making the key deletable"
+    );
+    let delete = call(
+        reqwest::Method::DELETE,
+        format!("{transit}/keys/kura-maxime"),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(delete.status().as_u16(), 403, "deleting the key");
+    let trim = call(
+        reqwest::Method::POST,
+        format!("{transit}/keys/kura-maxime/trim"),
+        Some(serde_json::json!({ "min_available_version": 1 })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(trim.status().as_u16(), 403, "trimming old key versions");
+    // The key is still there for the admin.
+    assert!(
+        vaultrs::transit::key::read(&a, &transit, "kura-maxime")
+            .await
+            .is_ok()
+    );
+}

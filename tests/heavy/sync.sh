@@ -4,6 +4,8 @@
 # Phase 3 observations: 2 (a viewer's push is refused and stores nothing),
 # 7 (two offline edits of one paragraph: both versions kept as files),
 # 11 (a dot-path note is refused by the server and reaches no device).
+# Phase 4: 1 (a change reaches a watching device within 5 s). Phase 5: 6 (a
+# device past the horizon resyncs, and a note deleted meanwhile is gone).
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -90,6 +92,30 @@ as alice sync notes >/dev/null
 as bob sync notes >/dev/null
 [ ! -e "$work/b/.obsidian/plugins/x/main.js" ] || fail "11: the plugin reached bob"
 pass "11: dot-path refused by the server (422 invalid_path), not synced by the client"
+
+# 6. Bob is away past deletedEntryTtl: the deletion is purged, his next sync
+# gets 410, resyncs, and the note is gone on both devices (in his .trash).
+away="away-$$.md"
+printf 'deleted while bob is away\n' > "$work/a/$away"
+as alice sync notes >/dev/null
+as bob sync notes >/dev/null
+[ -f "$work/b/$away" ] || fail "6: bob did not receive $away"
+rm "$work/a/$away"
+as alice sync notes >/dev/null
+printf 'after the deletion\n' > "$work/a/after-$$.md"
+as alice sync notes >/dev/null
+sql "UPDATE revision SET created_at = now() - interval '100 days' WHERE entry_id IN (SELECT entry_id FROM revision WHERE path = '$away')" >/dev/null
+(cd "$root" && KURA_VAULT_TOKEN=kura-dev SSL_CERT_FILE=dev/certs/ca.pem cargo run -q -p kura-server -- maintain --config dev/server.yaml) >"$work/maintain" 2>&1 \
+  || fail "6: maintenance pass: $(cat "$work/maintain")"
+[ "$(sql "SELECT count(*) FROM revision WHERE path = '$away'")" = 0 ] || fail "6: the deletion was not purged: $(cat "$work/maintain")"
+out=$(as bob sync notes --yes)
+grep -q "^resync: notes: this device was offline longer" <<<"$out" || fail "6: no resync: $out"
+[ ! -e "$work/b/$away" ] || fail "6: $away is still on bob's device"
+[ -f "$work/b/.trash/$away" ] || fail "6: $away is not in bob's .trash"
+[ -f "$work/b/after-$$.md" ] || fail "6: bob missed a later note"
+as alice sync notes >/dev/null
+[ ! -e "$work/a/$away" ] || fail "6: $away came back to alice"
+pass "6: 410 cursor_expired, full resync, the deleted note gone on both devices"
 
 # D34 with Authentik's refresh: a real sign-in, commands on refreshed tokens
 # (no `sid`, the session's `auth_time`), then revocation refuses them (exit 2).

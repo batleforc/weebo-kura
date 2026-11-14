@@ -93,9 +93,42 @@ class CodeModal extends Modal {
   }
 }
 
+/** A full resync would trash many files: the user decides (§6.3). */
+class ConfirmModal extends Modal {
+  private answer: (yes: boolean) => void = () => undefined;
+  constructor(app: App, private readonly deletions: number, private readonly files: number) {
+    super(app);
+  }
+  ask(): Promise<boolean> {
+    return new Promise((resolve) => {
+      this.answer = resolve;
+      this.open();
+    });
+  }
+  override onOpen(): void {
+    this.setTitle("Kura: files deleted elsewhere");
+    const share = this.files === 0 ? 100 : Math.round((this.deletions * 100) / this.files);
+    this.contentEl.createEl("p", {
+      text: `This device was away longer than the vault keeps deletions. ${String(this.deletions)} local files (${String(share)}%) were deleted on other devices. Move them to the trash?`,
+    });
+    this.contentEl.createEl("button", { text: "Move to trash", cls: "mod-warning" }).onclick = () => {
+      this.answer(true);
+      this.answer = () => undefined;
+      this.close();
+    };
+    this.contentEl.createEl("button", { text: "Not now" }).onclick = () => {
+      this.close();
+    };
+  }
+  override onClose(): void {
+    this.answer(false);
+  }
+}
+
 export default class KuraPlugin extends Plugin {
   config: Settings = { ...DEFAULTS };
   latest: Situation | null = null;
+  private resyncAnnounced = false;
   vaults: VaultView[] = [];
   private core: Core | null = null;
   private session: Session | null = null;
@@ -112,11 +145,11 @@ export default class KuraPlugin extends Plugin {
     if (!Platform.isMobile) this.statusEl = this.addStatusBarItem();
     // Mobile has no plugin status bar: the ribbon label carries the state (§4.5).
     this.ribbonEl = this.addRibbonIcon("refresh-cw", "Kura", () => {
-      void this.controller?.sync();
+      void this.controller?.sync(true);
     });
     this.tab = new KuraSettingTab(this.app, this);
     this.addSettingTab(this.tab);
-    this.addCommand({ id: "sync-now", name: "Sync now", callback: () => void this.controller?.sync() });
+    this.addCommand({ id: "sync-now", name: "Sync now", callback: () => void this.controller?.sync(true) });
     this.addCommand({ id: "sign-in", name: "Sign in", callback: () => void this.signIn() });
     const touched = (): void => this.controller?.touched();
     this.registerEvent(this.app.vault.on("create", touched));
@@ -153,6 +186,16 @@ export default class KuraPlugin extends Plugin {
   }
 
   render(s: Situation): void {
+    // Announced once per session: a run held below the horizon (a note
+    // left open) resyncs again on every sync until the note closes.
+    if (!this.resyncAnnounced && s.last !== null && s.last !== this.latest?.last && s.last.resynced !== null) {
+      this.resyncAnnounced = true;
+      new Notice(
+        s.last.resynced === "history_rewound"
+          ? "Kura: the server lost recent history. Nothing was removed here; files it no longer had were pushed again."
+          : `Kura: full resync. ${String(s.last.trashed)} files deleted elsewhere were moved to the trash.`,
+      );
+    }
     this.latest = s;
     const text = label(s);
     this.statusEl?.setText(text);
@@ -191,7 +234,7 @@ export default class KuraPlugin extends Plugin {
     let vault = this.vaults.find((v) => v.id === s.vault) ?? null;
     const core = this.core;
     const controller = new Controller({
-      run: async (state, dryRun) => {
+      run: async (state, dryRun, allowDeletions) => {
         // Never sync with guessed chunking: identical content would get
         // another address (review 4 L4). Fetched again until known.
         if (vault === null) {
@@ -200,10 +243,11 @@ export default class KuraPlugin extends Plugin {
         }
         if (vault === null) throw new Error("this vault is not visible to you");
         const c = vault.chunking;
-        const options = JSON.stringify({ device: s.device, vault: s.vault, ...c, maxFileSize: s.maxFileMiB * 1024 * 1024, dryRun });
+        const options = JSON.stringify({ device: s.device, vault: s.vault, ...c, maxFileSize: s.maxFileMiB * 1024 * 1024, dryRun, allowDeletions });
         return core.sync(host, api.remote(s.vault), state, options);
       },
       loadState: () => host.loadState(),
+      confirmDeletions: (deletions, files) => new ConfirmModal(this.app, deletions, files).ask(),
       timers,
       onChange: (st) => { this.render(st); },
       signedIn: () => session.signedIn(),

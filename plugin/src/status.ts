@@ -18,6 +18,7 @@ export function word(s: Situation): string {
   if (!s.signedIn || s.error?.kind === "invalid_token" || s.error?.kind === "device_revoked") return "sign in";
   if (s.error?.kind === "client_too_old") return "update required";
   if (s.error?.kind === "history_rewound" || s.error?.kind === "cursor_expired") return "resyncing";
+  if (s.error?.kind === "too_many_deletions") return "confirm deletions";
   if (!s.online) return "offline";
   if (s.syncing) return s.pending > 0 ? `syncing ${String(s.pending)}` : "syncing";
   const refused = s.last?.refused ?? null;

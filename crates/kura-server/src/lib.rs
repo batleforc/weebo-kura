@@ -6,6 +6,7 @@ pub mod authz;
 pub mod config;
 pub mod db;
 pub mod limits;
+pub mod maintenance;
 pub mod metrics;
 pub mod net;
 pub mod notify;

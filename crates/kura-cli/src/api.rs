@@ -193,6 +193,47 @@ impl Api {
         self.json(r).await
     }
 
+    /// An entry's revisions, newest first, every page (§4.4).
+    pub async fn revisions(
+        &self,
+        vault: Uuid,
+        entry: Uuid,
+    ) -> Result<Vec<kura_core::wire::RevisionInfo>, RemoteError> {
+        let mut out = Vec::new();
+        let mut before: Option<u64> = None;
+        loop {
+            let mut r = self.req(
+                reqwest::Method::GET,
+                &format!("/vaults/{vault}/entries/{entry}/revisions"),
+            );
+            if let Some(b) = before {
+                r = r.query(&[("before", b.to_string())]);
+            }
+            let page: kura_core::wire::RevisionsResponse = self.json(r).await?;
+            out.extend(page.items);
+            match page.next {
+                Some(n) if before.is_none_or(|b| n < b) => before = Some(n),
+                _ => return Ok(out),
+            }
+        }
+    }
+
+    /// Restores a revision as the entry's new head (§6.9).
+    pub async fn restore(
+        &self,
+        vault: Uuid,
+        entry: Uuid,
+        revision: Uuid,
+    ) -> Result<kura_core::wire::OpResult, RemoteError> {
+        let r = self
+            .req(
+                reqwest::Method::POST,
+                &format!("/vaults/{vault}/entries/{entry}/restore"),
+            )
+            .json(&json!({ "revision": revision }));
+        self.json(r).await
+    }
+
     /// A single-use ticket for the vault's notifications (§6.3).
     pub async fn ticket(&self, vault: Uuid) -> Result<String, RemoteError> {
         #[derive(Deserialize)]

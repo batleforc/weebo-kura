@@ -48,11 +48,22 @@ enum Command {
         /// Only list what would be pushed and what cannot sync.
         #[arg(long)]
         dry_run: bool,
+        /// Let a full resync move many files to .trash without asking.
+        #[arg(long)]
+        yes: bool,
     },
     /// Keep a vault in sync: pull on every notification, push local edits.
     Watch { vault: Option<String> },
     /// The state of every attached vault.
     Status,
+    /// The revisions of a file, newest first.
+    History { vault: String, path: String },
+    /// Bring back a revision of a file as its new version.
+    Restore {
+        vault: String,
+        path: String,
+        revision: uuid::Uuid,
+    },
     /// List devices, or revoke one by name.
     Devices {
         #[command(subcommand)]
@@ -82,9 +93,11 @@ async fn main() -> ExitCode {
             device_name,
         } => commands::login(ctx, server, issuer, client_id, device_name).await,
         Command::Attach { vault, folder, yes } => commands::attach(ctx, &vault, folder, yes).await,
-        Command::Sync { vault, dry_run } => {
-            commands::sync_cmd(ctx, vault.as_deref(), dry_run).await
-        }
+        Command::Sync {
+            vault,
+            dry_run,
+            yes,
+        } => commands::sync_cmd(ctx, vault.as_deref(), dry_run, yes).await,
         Command::Watch { vault } => {
             let stop = async {
                 drop(tokio::signal::ctrl_c().await);
@@ -92,6 +105,12 @@ async fn main() -> ExitCode {
             commands::watch(ctx, vault.as_deref(), stop).await
         }
         Command::Status => commands::status(ctx).await,
+        Command::History { vault, path } => commands::history(ctx, &vault, &path).await,
+        Command::Restore {
+            vault,
+            path,
+            revision,
+        } => commands::restore(ctx, &vault, &path, revision).await,
         Command::Devices { action } => commands::devices(ctx, action).await,
     };
     match result {

@@ -102,6 +102,10 @@ pub struct CommitRequest {
     pub idempotency_key: String,
     /// At most 1,000.
     pub operations: Vec<Operation>,
+    /// The epoch this device's state was built under: another one answers
+    /// `410 history_rewound` (§6.3). Absent on a first push.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,6 +174,43 @@ pub struct ChangesResponse {
     /// Set when more pages follow: the next `since` (changes) or `after` (entries).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+}
+
+/// One stored revision of an entry (`GET …/entries/{e}/revisions`, §4.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct RevisionInfo {
+    pub revision: Uuid,
+    pub seq: u64,
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
+    pub path: VaultPath,
+    pub deleted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub blob: Option<ChunkHash>,
+    pub size: u64,
+    /// RFC 3339, UTC.
+    pub created_at: String,
+}
+
+/// An entry's history, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct RevisionsResponse {
+    pub items: Vec<RevisionInfo>,
+    /// Set when older revisions follow: the next `before`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<u64>,
+}
+
+/// `POST /vaults/{v}/entries/{e}/restore`: a new revision with this one's content.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct RestoreRequest {
+    pub revision: Uuid,
 }
 
 #[cfg(test)]

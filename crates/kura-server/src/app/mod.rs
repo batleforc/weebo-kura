@@ -36,6 +36,7 @@ use crate::reconcile::snapshot::Snapshot;
         (name = "vaults", description = "Vaults and their role bindings"),
         (name = "chunks", description = "Encrypted chunks and file manifests"),
         (name = "sync", description = "Commits and changes"),
+        (name = "history", description = "Revisions and restore"),
     ),
     components(schemas(Problem)),
     modifiers(&SecurityAddon),
@@ -226,6 +227,8 @@ fn v1_router() -> OpenApiRouter<SharedState> {
         .routes(routes!(chunks::missing_chunks))
         .routes(routes!(changes::get_changes))
         .routes(routes!(changes::get_entries))
+        .routes(routes!(commits::get_revisions))
+        .routes(routes!(commits::restore_revision))
         .routes(routes!(events::create_ticket))
         .routes(routes!(events::events))
         .routes(routes!(chunks::put_blob, chunks::get_blob))

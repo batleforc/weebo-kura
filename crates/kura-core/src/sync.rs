@@ -55,6 +55,11 @@ pub struct Known {
     pub blob: ChunkHash,
     pub size: u64,
     pub stamp: Option<Stamp>,
+    /// Pushed again against `revision` even if unchanged, and never written
+    /// over by a pull until then: after `history_rewound`, the server may
+    /// have lost this version (§6.3).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resend: bool,
 }
 
 /// A remote version about to be written, recorded first (§6.8 journal).
@@ -140,6 +145,11 @@ pub enum SyncError {
     Remote(#[from] RemoteError),
     #[error("the server sent content that does not match its address")]
     Corrupt,
+    /// A full resync would move this many of the local files to the trash;
+    /// nothing was changed. Run again with [`Options::allow_deletions`] once
+    /// the user agreed (§6.3).
+    #[error("a full resync would move {deletions} of {files} local files to the trash")]
+    TooManyDeletions { deletions: usize, files: usize },
 }
 
 /// The local side: files, the persisted state, time and randomness.
@@ -204,6 +214,9 @@ pub struct Report {
     pub refused: Option<RemoteError>,
     /// Remote files this device could not write, with why; retried next run.
     pub failed: Vec<(VaultPath, String)>,
+    /// A full resync ran, after this answer: `cursor_expired` or
+    /// `history_rewound` (§6.3).
+    pub resynced: Option<String>,
 }
 
 pub struct Options {
@@ -212,7 +225,14 @@ pub struct Options {
     pub max_file_size: u64,
     /// Only report what would be pushed; nothing is uploaded or pulled.
     pub dry_run: bool,
+    /// The user agreed that a full resync may trash more than the guard allows.
+    pub allow_deletions: bool,
 }
+
+/// A full resync asks first above this share of the local files, or this
+/// many files (§6.3).
+pub const GUARD_PERCENT: usize = 10;
+pub const GUARD_FILES: usize = 50;
 
 /// A local edit waiting for its commit result.
 struct Pushed {
@@ -231,7 +251,37 @@ pub async fn sync<H: Host, R: Remote>(
 ) -> Result<Report, SyncError> {
     let mut report = Report::default();
     recover(host, state, opts.params).await?;
-    match push(host, remote, state, opts, &mut report).await {
+    loop {
+        match run(host, remote, state, opts, &mut report).await {
+            // The server lost or purged history this device holds: once per
+            // run, match everything again, then push and pull (§6.3).
+            Err(SyncError::Remote(RemoteError::Problem {
+                status: 410, kind, ..
+            })) if report.resynced.is_none() && !opts.dry_run => {
+                resync(
+                    host,
+                    remote,
+                    state,
+                    opts,
+                    kind == "history_rewound",
+                    &mut report,
+                )
+                .await?;
+                report.resynced = Some(kind);
+            }
+            other => return other.map(|()| report),
+        }
+    }
+}
+
+async fn run<H: Host, R: Remote>(
+    host: &H,
+    remote: &R,
+    state: &mut LocalState,
+    opts: &Options,
+    report: &mut Report,
+) -> Result<(), SyncError> {
+    match push(host, remote, state, opts, report).await {
         Ok(()) => {}
         Err(SyncError::Remote(
             e @ RemoteError::Problem {
@@ -239,13 +289,124 @@ pub async fn sync<H: Host, R: Remote>(
             },
         )) => {
             report.refused = Some(e);
+            // Files waiting to be resent after a rewind cannot go up: they
+            // are forgotten, so the file stays as an unsynced local file,
+            // never written over, instead of holding every later pull.
+            state.entries.retain(|_, k| !k.resend);
         }
         Err(e) => return Err(e),
     }
     if !opts.dry_run {
-        pull(host, remote, state, opts, &mut report).await?;
+        pull(host, remote, state, opts, report).await?;
     }
-    Ok(report)
+    Ok(())
+}
+
+/// Full resync (§6.3, decision 32): every entry the server holds, matched to
+/// the local state by entry id, never by path. A known entry the server no
+/// longer has was purged after its deletion (`cursor_expired`): its file goes
+/// to the trash if unchanged here, otherwise it is pushed as new. After
+/// `history_rewound` the server lost history this device saw: nothing local
+/// is deleted, and what the server lacks or holds older is pushed back.
+/// Above the guard, nothing changes until the user agrees.
+async fn resync<H: Host, R: Remote>(
+    host: &H,
+    remote: &R,
+    state: &mut LocalState,
+    opts: &Options,
+    rewound: bool,
+    report: &mut Report,
+) -> Result<(), SyncError> {
+    let mut server: HashMap<EntryId, EntryState> = HashMap::new();
+    let mut pos = 0;
+    let epoch = loop {
+        let page = remote.changes(pos, None).await?;
+        let before = pos;
+        for item in page.items {
+            pos = pos.max(item.seq);
+            server.insert(item.entry, item);
+        }
+        if page.next.is_none() {
+            break page.epoch;
+        }
+        if pos <= before {
+            return Err(
+                RemoteError::Unavailable("the server's changes do not advance".into()).into(),
+            );
+        }
+    };
+    // What each known entry becomes: forgotten (its file, if any, is pushed
+    // as new), resent against its base, trashed, or left to the pull below.
+    let mut forget = Vec::new();
+    let mut resend = Vec::new();
+    let mut trash = Vec::new();
+    for (e, k) in &state.entries {
+        let exists = host.stat(&k.path).await?.is_some();
+        match server.get(e) {
+            None if rewound => forget.push(*e),
+            None => {
+                if exists && !k.resend && untouched(host, k).await? {
+                    trash.push(*e);
+                } else {
+                    forget.push(*e);
+                }
+            }
+            // A deletion the server holds, or a version other than this
+            // device's: never applied over the file after a rewind. Resent,
+            // it restores a deletion and becomes a conflict file if the
+            // server lost it; unchanged since a base the server knows, it
+            // takes the server's head.
+            Some(s)
+                if rewound
+                    && (s.deleted || (s.revision != k.revision && s.blob != Some(k.blob))) =>
+            {
+                if exists {
+                    resend.push(*e);
+                } else {
+                    forget.push(*e);
+                }
+            }
+            // A file still to be resent holds a version the server may lack.
+            Some(s) if s.deleted && exists && !k.resend && untouched(host, k).await? => {
+                trash.push(*e);
+            }
+            Some(_) => {}
+        }
+    }
+    if !trash.is_empty() && !opts.allow_deletions {
+        let files = host
+            .list()
+            .await?
+            .iter()
+            .filter(|f| VaultPath::from_local(&f.path).is_ok())
+            .count();
+        let deletions = trash.len();
+        if deletions > GUARD_FILES
+            || deletions.saturating_mul(100) > files.saturating_mul(GUARD_PERCENT)
+        {
+            return Err(SyncError::TooManyDeletions { deletions, files });
+        }
+    }
+    for e in forget {
+        state.entries.remove(&e);
+    }
+    for e in resend {
+        if let Some(k) = state.entries.get_mut(&e) {
+            k.resend = true;
+        }
+    }
+    for e in trash {
+        if let Some(k) = state.entries.remove(&e) {
+            host.trash(&k.path).await?;
+            report.trashed = report.trashed.saturating_add(1);
+        }
+    }
+    // Everything is pulled again from 0 under the new epoch; entries already
+    // in place are skipped by revision.
+    state.epoch = Some(epoch);
+    state.cursor = 0;
+    host.save(state).await?;
+    Ok(())
 }
 
 /// A write interrupted by a crash: adopt the file if it holds the new content.
@@ -270,6 +431,7 @@ async fn recover<H: Host>(
                     blob,
                     size: s.size,
                     stamp: Some(Stamp::from(&meta)),
+                    resend: false,
                 },
             );
         }
@@ -332,6 +494,7 @@ async fn push<H: Host, R: Remote>(
         let known_id = by_path.get(path).copied();
         if let Some(k) = known_id.and_then(|e| state.entries.get(&e))
             && k.stamp == Some(stamp)
+            && !k.resend
         {
             continue;
         }
@@ -339,7 +502,7 @@ async fn push<H: Host, R: Remote>(
         let (blob, _) = blob_of(&data, opts.params);
         let size = data.len() as u64;
         let (entry, base) = match known_id.and_then(|e| state.entries.get_mut(&e).map(|k| (e, k))) {
-            Some((_, k)) if k.blob == blob => {
+            Some((_, k)) if k.blob == blob && !k.resend => {
                 k.stamp = Some(stamp);
                 continue;
             }
@@ -404,6 +567,7 @@ async fn push<H: Host, R: Remote>(
         let req = CommitRequest {
             idempotency_key: hex(&host.random()),
             operations: batch.iter().map(|(o, _)| (*o).clone()).collect(),
+            epoch: state.epoch,
         };
         let resp = commit(remote, &req).await?;
         for (&(op, pushed), result) in batch.iter().zip(resp.results) {
@@ -554,6 +718,7 @@ async fn settle<H: Host, R: Remote>(
                     size: p.size,
                     // Edited since the scan: no stamp, so the next run rehashes it.
                     stamp: (Stamp::from(&moved) == p.stamp).then_some(p.stamp),
+                    resend: false,
                 },
             );
             // For an edit, the head keeps the old base and is applied below as
@@ -585,6 +750,7 @@ async fn settle<H: Host, R: Remote>(
                     blob: p.blob,
                     size: p.size,
                     stamp: Some(p.stamp),
+                    resend: false,
                 },
             );
             apply(host, remote, state, &head, opts, report).await?;
@@ -610,6 +776,7 @@ async fn settle<H: Host, R: Remote>(
                     blob: p.blob,
                     size: head.size,
                     stamp,
+                    resend: false,
                 },
             );
         }
@@ -692,7 +859,7 @@ async fn apply<H: Host, R: Remote>(
 ) -> Result<Applied, SyncError> {
     let known = state.entries.get(&item.entry).cloned();
     if let Some(k) = &known
-        && !untouched(host, k).await?
+        && (k.resend || !untouched(host, k).await?)
     {
         // Changed here since: keep the old base, so the next push conflicts
         // instead of overwriting either side.
@@ -767,6 +934,7 @@ async fn apply<H: Host, R: Remote>(
             blob,
             size: item.size,
             stamp: Some(Stamp::from(&meta)),
+            resend: false,
         },
     );
     report.pulled = report.pulled.saturating_add(1);

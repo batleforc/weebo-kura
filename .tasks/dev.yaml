@@ -39,7 +39,7 @@ tasks:
       - task: dev:network
       - cmd: |
           podman container exists {{.PG_CONTAINER}} || \
-          podman run -d --name {{.PG_CONTAINER}} --network {{.NET}} -p 127.0.0.1:{{.PG_PORT}}:5432 -e POSTGRES_PASSWORD=kura-dev {{.PG_IMAGE}}
+          podman run -d --name {{.PG_CONTAINER}} --network {{.NET}} -p 127.0.0.1:{{.PG_PORT}}:5432 --shm-size 256m -e POSTGRES_PASSWORD=kura-dev {{.PG_IMAGE}}
           podman start {{.PG_CONTAINER}} >/dev/null
       - '{{.WAIT}} podman exec {{.PG_CONTAINER}} pg_isready -U postgres'
       - echo "export KURA_TEST_DATABASE_URL=postgres://postgres:kura-dev@127.0.0.1:{{.PG_PORT}}/postgres"
@@ -171,6 +171,14 @@ tasks:
       SSL_CERT_FILE: dev/certs/ca.pem
     cmds:
       - cargo run -p kura-server -- --config dev/server.yaml
+
+  dev:maintain:
+    desc: "Run one maintenance pass now against the local stack (retention, garbage collection, the Delete purge), outside the off-peak window"
+    env:
+      KURA_VAULT_TOKEN: kura-dev
+      SSL_CERT_FILE: dev/certs/ca.pem
+    cmds:
+      - cargo run -q -p kura-server -- maintain --config dev/server.yaml
 
   dev:token:
     desc: "Print an access token for a dev user from the local Authentik, by the device code flow with no browser (usage: task dev:token [AS=alice], alice, bob or carol)"

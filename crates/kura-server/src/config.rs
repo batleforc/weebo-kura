@@ -37,6 +37,18 @@ pub struct ServerConfig {
     pub vault: Option<VaultConfig>,
     #[serde(default)]
     pub listen: ListenConfig,
+    #[serde(default)]
+    pub maintenance: MaintenanceConfig,
+}
+
+/// Retention, garbage collection and the `Delete` purge (§6.9).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaintenanceConfig {
+    /// Off-peak window, `HH:MM-HH:MM` in UTC; `01:00-05:00` by default, and
+    /// equal ends mean all day.
+    #[serde(default)]
+    pub window: crate::maintenance::Window,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

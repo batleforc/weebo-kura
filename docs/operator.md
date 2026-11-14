@@ -16,11 +16,13 @@ chart arrives in phase 6.
 kura-server [--config /etc/kura/server.yaml]   serve (default config path shown)
 kura-server migrate                             apply the database migrations, then exit
 kura-server dump-spec                           print the OpenAPI document
+kura-server maintain [--config …]               one maintenance pass now (§12), then exit
+kura-server reset-epochs                        restore runbook: a new epoch for every vault (§12), as the owner
 ```
 
 | Variable | Read by | Value |
 | --- | --- | --- |
-| `KURA_DATABASE_URL` | serve, migrate | PostgreSQL URL. `migrate` always reads it (the owner's credentials). `serve` reads the `kura_app` URL from Vault KV when `vault` is configured; this variable overrides it for local runs |
+| `KURA_DATABASE_URL` | serve, migrate, reset-epochs | PostgreSQL URL. `migrate` always reads it (the owner's credentials). `serve` reads the `kura_app` URL from Vault KV when `vault` is configured; this variable overrides it for local runs |
 | `KURA_VAULT_TOKEN` | serve | Local runs only: a Vault token instead of Kubernetes auth |
 | `KURA_CONFIG_DIR` | serve | The directory of resource documents, mounted from a ConfigMap without `subPath` |
 | `RUST_LOG` | serve | Log filter, `info` by default. Logs are JSON; audit events use the target `audit` |
@@ -64,6 +66,8 @@ vault:            # accepted now, read from phase 2 on
   address: https://vault.vault:8200
   kubernetesAuth: { mount: kubernetes, role: kura }
   secrets: { database: mv/data/kura/database, bucket: mv/data/kura/bucket }
+maintenance:
+  window: "01:00-05:00"   # UTC, the default; equal ends mean all day (§12)
 ```
 
 Unknown fields are refused, so a typo stops the server instead of being
@@ -139,6 +143,12 @@ service account (`vault.kubernetesAuth`) and needs a policy allowing only:
 - `datakey`, `decrypt` and `rewrap` on the Transit keys `kura-<tenant slug>`
   of the mount `vault.transit.mount` (default `transit`).
 
+That policy is [`deploy/vault/kura-server.hcl`](../deploy/vault/kura-server.hcl)
+(edit the mount names if yours differ). It grants no delete and no key
+configuration: the test `server_policy_cannot_delete_key` checks that this
+token gets 403 on deleting a key, on `deletion_allowed` and on trimming
+versions (T18).
+
 The Vault login is renewed every 5 minutes: give the Kubernetes auth role a
 token TTL of at least 10 minutes.
 
@@ -199,6 +209,11 @@ revocation. Devices idle 180 days are purged daily; revoked ones are kept.
 | `kura_chunk_corrupt_total` | stored chunks failing their check on read: alert on any |
 | `QuotaBelowUsage` condition | in `GET /v1/admin/status`, a tenant storing more than its quota |
 | `429` with `Retry-After` | per-device rate limits (§4.4), held in each replica's memory |
+| `kura_vault_epoch_changes_total` | epochs regenerated after a promotion or a restore: alert on any (every device resyncs) |
+| `kura_maintenance_failures_total` | vaults whose maintenance failed in a pass (the others went on): alert on a rise |
+| `kura_maintenance_deleted_total{outcome}` | revisions, entries, blobs, chunks, objects, orphans and purged vaults removed by maintenance |
+| `kura_tenants_awaiting_key_destruction` | tenants purged by `Delete` whose Transit key an operator must destroy: alert on any |
+| Log target `audit`, `vault_purged` | a vault purged after its `Delete` grace period |
 
 ## 9. The `kura` CLI
 
@@ -209,7 +224,17 @@ kura sync [notes] [--dry-run]
 kura status
 kura devices [revoke <name>]
 kura watch [notes]             # stays in sync: pulls on every notification, pushes edits once quiet
+kura sync notes --yes          # a full resync may move many files to .trash without asking
+kura history notes a.md        # the file's revisions, newest first
+kura restore notes a.md <rev>  # that revision's content becomes a new revision, then syncs
 ```
+
+A full resync follows a `410`: `cursor_expired` (the device was away longer
+than `deletedEntryTtl`) moves files deleted elsewhere to `.trash` and pushes
+local edits as new files; above 10% of the files or 50 it asks first (exit 3
+when it cannot ask). `history_rewound` (the server was restored or failed
+over) deletes nothing and pushes back what the server lost; a lost version
+comes back as a conflict file beside the older one.
 
 Exit codes: 0 done, 1 unexpected (server unreachable, local I/O), 2 sign in
 again, 3 refused by the server (role, quota, client too old; local changes
@@ -231,7 +256,8 @@ application's OIDC URL, e.g. `https://auth.example.org/application/o/kura-plugin
 then **Sign in** (device code), then the vault. The refresh token is kept in
 Obsidian's `SecretStorage` under an id naming the server and the vault; the
 sync state in the plugin's folder; neither syncs. A note open in the editor
-is not overwritten: the remote change waits until it is closed.
+is not overwritten: the remote change waits until it is closed. A full
+resync that would trash many files asks once; "Sync now" asks again.
 
 ## 11. Local stack
 
@@ -260,3 +286,44 @@ T=$(task dev:token AS=alice)          # in another
 curl -H "authorization: Bearer $T" -H 'content-type: application/json' \
   -d '{"name":"laptop","profile":"desktop"}' http://127.0.0.1:58080/v1/devices
 ```
+
+## 12. Maintenance, backups and restore
+
+Inside `maintenance.window`, each replica tries one pass an hour; one runs at
+a time (an advisory lock). A pass, per vault, in batches of 1,000 with a 1 s
+pause:
+
+1. prunes revisions past the tenant's `retention` (`maxRevisionAge`,
+   `maxRevisionsPerEntry`); a file's current version, or its deletion, is
+   never pruned;
+2. purges entries deleted longer than `deletedEntryTtl` (default 90 days)
+   and moves the vault's horizon: a device away longer resyncs (§9);
+3. collects blobs and chunks nothing references, untouched 24 hours, rows
+   first, then their objects, and sweeps objects with no row older than 24
+   hours;
+4. purges vaults whose `Delete` grace period (30 days) passed: rows, then
+   every object under the vault's prefix, then the vault row (kept while an
+   object remains, retried next pass). The first batch gives the vault a new
+   epoch: if its document comes back mid-purge, devices push their copies
+   back. A force-orphan vault is never purged with its tenant. A tenant's
+   Transit key is kept: destroy it under the operator role, then the tenant
+   leaves `kura_tenants_awaiting_key_destruction`.
+
+`kura-server maintain` runs one pass at once (`task dev:maintain` locally).
+
+**Backups.** PostgreSQL first, then the bucket copy, then Vault's Raft
+snapshot (§10.3). The backup job, connected to the `kura` database
+(advisory locks are per database), holds the PostgreSQL advisory lock
+`7743220896921379691` (`0x6b7572616261636b`) for the whole run, on one
+session, with `pg_advisory_lock`: steps 3 and 4 delete nothing while it is
+held, so the bucket copy has every object the dump names.
+
+**Restore.** Restore all three together, run `kura-server migrate`, then
+`kura-server reset-epochs` as the owner. Every device then gets
+`410 history_rewound` and pushes back what the backup lacked, deleting
+nothing. A failover to a standby needs no step: the new timeline changes the
+epochs by itself (`kura_vault_epoch_changes_total`). A planned switchover
+changes the timeline too, so every device resyncs under `history_rewound`
+then: nothing is deleted, but an edit the old primary had not replicated
+comes back as a conflict file, and a deletion it had not replicated is
+undone.

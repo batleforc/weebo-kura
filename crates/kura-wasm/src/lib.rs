@@ -333,6 +333,9 @@ struct SyncOptions {
     max_file_size: u64,
     #[serde(default)]
     dry_run: bool,
+    /// The user agreed to a full resync above the deletion guard (§6.3).
+    #[serde(default)]
+    allow_deletions: bool,
 }
 
 fn report(r: &Report) -> Value {
@@ -353,6 +356,7 @@ fn report(r: &Report) -> Value {
         "deferred": r.deferred,
         "failed": r.failed,
         "refused": r.refused.as_ref().map(problem),
+        "resynced": r.resynced,
     })
 }
 
@@ -376,6 +380,7 @@ pub async fn sync(
         params,
         max_file_size: o.max_file_size,
         dry_run: o.dry_run,
+        allow_deletions: o.allow_deletions,
     };
     let r = kura_core::sync::sync(&HostAdapter(host), &RemoteAdapter(remote), &mut st, &opts).await;
     match r {
@@ -388,6 +393,11 @@ pub async fn sync(
             detail,
         })) => Err(
             to_js(&json!({ "status": status, "kind": kind, "detail": detail }))
+                .unwrap_or_else(|e| JsValue::from_str(&e)),
+        ),
+        // The shell asks the user, then runs again with `allowDeletions`.
+        Err(e @ kura_core::sync::SyncError::TooManyDeletions { deletions, files }) => Err(
+            to_js(&json!({ "status": 0, "kind": "too_many_deletions", "detail": e.to_string(), "deletions": deletions, "files": files }))
                 .unwrap_or_else(|e| JsValue::from_str(&e)),
         ),
         Err(e) => Err(JsValue::from_str(&e.to_string())),

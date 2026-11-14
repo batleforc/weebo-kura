@@ -25,6 +25,15 @@ pub struct Metrics {
     pub commits_total: IntCounter,
     /// Three-way merges attempted, by `outcome`: `merged` or `conflict` (§10.1).
     pub merge_total: IntCounterVec,
+    /// Vault epochs regenerated after a promotion or a restore (§10.1 alert).
+    pub vault_epoch_changes_total: IntCounter,
+    /// Rows and objects removed by maintenance, by `outcome`: `revision`,
+    /// `entry`, `blob`, `chunk`, `object`, `orphan`, `purged` (§6.9).
+    pub maintenance_deleted_total: IntCounterVec,
+    /// Tenants purged by `Delete` whose Transit key awaits an operator (§10.1).
+    pub tenants_awaiting_key_destruction: IntGauge,
+    /// Vaults whose maintenance failed in a pass (§6.9).
+    pub maintenance_failures_total: IntCounter,
 }
 
 impl Metrics {
@@ -52,6 +61,29 @@ impl Metrics {
             &["outcome"],
         )?;
         registry.register(Box::new(merge_total.clone()))?;
+        let vault_epoch_changes_total = IntCounter::new(
+            "vault_epoch_changes_total",
+            "Vault epochs regenerated after a promotion or a restore",
+        )?;
+        registry.register(Box::new(vault_epoch_changes_total.clone()))?;
+        let maintenance_deleted_total = IntCounterVec::new(
+            Opts::new(
+                "maintenance_deleted_total",
+                "Rows and objects removed by maintenance",
+            ),
+            &["outcome"],
+        )?;
+        registry.register(Box::new(maintenance_deleted_total.clone()))?;
+        let tenants_awaiting_key_destruction = IntGauge::new(
+            "tenants_awaiting_key_destruction",
+            "Tenants purged by Delete whose Transit key awaits an operator",
+        )?;
+        registry.register(Box::new(tenants_awaiting_key_destruction.clone()))?;
+        let maintenance_failures_total = IntCounter::new(
+            "maintenance_failures_total",
+            "Vaults whose maintenance failed in a pass",
+        )?;
+        registry.register(Box::new(maintenance_failures_total.clone()))?;
         Ok(Self {
             registry,
             ready,
@@ -61,6 +93,10 @@ impl Metrics {
             chunk_corrupt_total,
             commits_total,
             merge_total,
+            vault_epoch_changes_total,
+            maintenance_deleted_total,
+            tenants_awaiting_key_destruction,
+            maintenance_failures_total,
         })
     }
 }

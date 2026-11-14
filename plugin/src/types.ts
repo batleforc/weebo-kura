@@ -17,6 +17,8 @@ export interface Report {
   deferred: string[];
   failed: [string, string][];
   refused: Problem | null;
+  /** A full resync ran after this answer (§6.3). */
+  resynced: string | null;
 }
 
 /** A refusal thrown to the core: its enumerable `status`, `kind` and
@@ -71,6 +73,13 @@ export function parseOutcome(v: unknown): { state: string; report: Report } {
       deferred: strings(r.deferred),
       failed: pairs(r.failed),
       refused: isProblem(r.refused) ? r.refused : null,
+      resynced: typeof r.resynced === "string" ? r.resynced : null,
     },
   };
+}
+
+/** A full resync stopped before trashing more than the guard allows (§6.3). */
+export function deletionsToConfirm(v: unknown): { deletions: number; files: number } | null {
+  if (!isProblem(v) || v.kind !== "too_many_deletions" || !isRecord(v)) return null;
+  return { deletions: count(v.deletions), files: count(v.files) };
 }

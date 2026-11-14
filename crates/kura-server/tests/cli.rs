@@ -81,7 +81,7 @@ async fn the_cli_syncs_two_devices_and_maps_exit_codes() {
     let issuer = "https://auth.example.org/application/o/kura/".to_owned();
 
     // Before any login: sign in first (2).
-    assert_eq!(code(commands::sync_cmd(&a, None, false).await), 2);
+    assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 2);
     for (ctx, name) in [(&a, "desk-a"), (&b, "phone-b")] {
         let r = commands::login(
             ctx,
@@ -125,11 +125,11 @@ async fn the_cli_syncs_two_devices_and_maps_exit_codes() {
     std::fs::write(fa.join("notes/hello.md"), "# Hello\nfrom a\n").unwrap();
     std::fs::write(fb.join("notes/hello.md"), "# Hello\nfrom b\n").unwrap();
     assert_eq!(
-        code(commands::sync_cmd(&a, Some("knowledge"), false).await),
+        code(commands::sync_cmd(&a, Some("knowledge"), false, false).await),
         0
     );
-    assert_eq!(code(commands::sync_cmd(&b, None, false).await), 0);
-    assert_eq!(code(commands::sync_cmd(&a, None, false).await), 0);
+    assert_eq!(code(commands::sync_cmd(&b, None, false, false).await), 0);
+    assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
     let (la, lb) = (files(&fa), files(&fb));
     assert_eq!(la, lb);
     assert_eq!(la.len(), 3, "{la:?}");
@@ -140,9 +140,12 @@ async fn the_cli_syncs_two_devices_and_maps_exit_codes() {
 
     // A name that cannot sync: the rest syncs, exit 4; a dry run sends nothing.
     std::fs::write(fa.join("Q3: budget.md"), "x").unwrap();
-    assert_eq!(code(commands::sync_cmd(&a, None, true).await), 4);
-    assert_eq!(code(commands::sync_cmd(&a, None, false).await), 4);
-    assert_eq!(code(commands::sync_cmd(&a, Some("other"), false).await), 3);
+    assert_eq!(code(commands::sync_cmd(&a, None, true, false).await), 4);
+    assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 4);
+    assert_eq!(
+        code(commands::sync_cmd(&a, Some("other"), false, false).await),
+        3
+    );
     assert_eq!(code(commands::status(&a).await), 0);
     assert_eq!(code(commands::devices(&a, None).await), 0);
 
@@ -151,7 +154,7 @@ async fn the_cli_syncs_two_devices_and_maps_exit_codes() {
     let revoke = |name: &str| Some(DeviceAction::Revoke { name: name.into() });
     assert_eq!(code(commands::devices(&a, revoke("phone-b")).await), 3);
     assert_eq!(code(commands::devices(&b, revoke("phone-b")).await), 0);
-    assert_eq!(code(commands::sync_cmd(&b, None, false).await), 2);
+    assert_eq!(code(commands::sync_cmd(&b, None, false, false).await), 2);
 }
 
 /// A fake identity provider: discovery, the device code grant (pending once),
@@ -314,7 +317,7 @@ async fn watch_pulls_on_notification_and_pushes_when_quiet() {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     std::fs::write(fa.join("from-a.md"), "hello b\n").unwrap();
     let pushed = tokio::time::Instant::now();
-    assert_eq!(code(commands::sync_cmd(&a, None, false).await), 0);
+    assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
     let arrived = async {
         while !fb.join("from-a.md").exists() {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -328,7 +331,7 @@ async fn watch_pulls_on_notification_and_pushes_when_quiet() {
     std::fs::write(fb.join("from-b.md"), "hello a\n").unwrap();
     let back = async {
         loop {
-            assert_eq!(code(commands::sync_cmd(&a, None, false).await), 0);
+            assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
             if fa.join("from-b.md").exists() {
                 break;
             }
@@ -340,4 +343,198 @@ async fn watch_pulls_on_notification_and_pushes_when_quiet() {
         .expect("b's edit was pushed by watch");
     stop.cancel();
     assert_eq!(watcher.await.unwrap(), Ok(0));
+}
+
+/// §6.P observation 6 and §14 "horizon and full resync": a device away past
+/// `deletedEntryTtl` gets 410, resyncs, and a note deleted meanwhile is gone
+/// everywhere (in its `.trash` here); its own edit to that note survives as a
+/// new file; history and restore work through the CLI.
+#[tokio::test]
+async fn a_long_absence_resyncs_and_history_restores() {
+    let Some(st) = storage(module_path!()).await else {
+        return;
+    };
+    let Some(e) = env_with(module_path!(), Some(st)).await else {
+        return;
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = format!("http://{}", listener.local_addr().unwrap());
+    let router = app(e.state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    let issuer = "https://auth.example.org/application/o/kura/".to_owned();
+    let (a, b) = (
+        Ctx {
+            home: dir("resync-home-a"),
+            access_token: Some(e.key.token("u1", "ra", &["maxime-members"])),
+        },
+        Ctx {
+            home: dir("resync-home-b"),
+            access_token: Some(e.key.token("u1", "rb", &["maxime-members"])),
+        },
+    );
+    for (ctx, name) in [(&a, "desk"), (&b, "laptop")] {
+        let r = commands::login(
+            ctx,
+            server.clone(),
+            issuer.clone(),
+            "kura-cli".into(),
+            Some(name.into()),
+        )
+        .await;
+        assert_eq!(code(r), 0);
+    }
+    let (fa, fb) = (dir("resync-a"), dir("resync-b"));
+    for i in 0..10 {
+        std::fs::write(fa.join(format!("n{i}.md")), format!("note {i}\n")).unwrap();
+    }
+    std::fs::write(fa.join("gone.md"), "deleted elsewhere\n").unwrap();
+    std::fs::write(fa.join("edited.md"), "v1\n").unwrap();
+    assert_eq!(
+        code(commands::attach(&a, "knowledge", fa.clone(), true).await),
+        0
+    );
+    assert_eq!(
+        code(commands::attach(&b, "knowledge", fb.clone(), true).await),
+        0
+    );
+    // b goes away; a deletes two notes, one of which b edits meanwhile.
+    std::fs::remove_file(fa.join("gone.md")).unwrap();
+    std::fs::remove_file(fa.join("edited.md")).unwrap();
+    assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
+    std::fs::write(fa.join("later.md"), "written after\n").unwrap();
+    assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
+    std::fs::write(fb.join("edited.md"), "v2, written while away\n").unwrap();
+    // 100 days later, retention purges the deletions.
+    sqlx::query("UPDATE revision SET created_at = now() - interval '100 days'")
+        .execute(&e.t.owner)
+        .await
+        .unwrap();
+    let fast = kura_server::maintenance::Settings {
+        pause: std::time::Duration::ZERO,
+        orphan_grace: time::Duration::hours(24),
+    };
+    let r =
+        kura_server::maintenance::pass(&e.state, fast, &tokio_util::sync::CancellationToken::new())
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(r.entries, 2, "{r:?}");
+    // One of twelve files to trash: under the guard, no question asked.
+    assert_eq!(code(commands::sync_cmd(&b, None, false, false).await), 0);
+    assert!(!fb.join("gone.md").exists());
+    assert_eq!(
+        std::fs::read_to_string(fb.join(".trash/gone.md")).unwrap(),
+        "deleted elsewhere\n"
+    );
+    assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
+    assert_eq!(files(&fa), files(&fb));
+    assert!(files(&fa).contains(&("edited.md".into(), "v2, written while away\n".into())));
+    assert!(files(&fa).contains(&("later.md".into(), "written after\n".into())));
+
+    // History and restore of one note.
+    std::fs::write(fa.join("n0.md"), "note 0, edited\n").unwrap();
+    assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
+    assert_eq!(code(commands::history(&a, "knowledge", "n0.md").await), 0);
+    assert_eq!(code(commands::history(&a, "knowledge", "nope.md").await), 3);
+    let v = uuid::Uuid::parse_str(&common::app::vault_id(&e, "knowledge").await).unwrap();
+    let first: uuid::Uuid = sqlx::query_scalar(
+        "SELECT r.id FROM revision r JOIN entry n ON n.id = r.entry_id WHERE r.vault_id = $1 AND n.path = 'n0.md' ORDER BY r.seq LIMIT 1",
+    )
+    .bind(v)
+    .fetch_one(&e.t.owner)
+    .await
+    .unwrap();
+    assert_eq!(
+        code(commands::restore(&a, "knowledge", "n0.md", first).await),
+        0
+    );
+    assert_eq!(
+        std::fs::read_to_string(fa.join("n0.md")).unwrap(),
+        "note 0\n"
+    );
+}
+
+/// Decision 32: the server is restored from a backup older than what the
+/// devices hold (`history_rewound`). Nothing local is deleted: an entry the
+/// server lost is pushed again, and a version it lost comes back, as a
+/// conflict file beside the older head when the server cannot tell they
+/// follow each other.
+#[tokio::test]
+async fn a_rewound_server_gets_everything_back() {
+    let Some(st) = storage(module_path!()).await else {
+        return;
+    };
+    let Some(e) = env_with(module_path!(), Some(st)).await else {
+        return;
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = format!("http://{}", listener.local_addr().unwrap());
+    let router = app(e.state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    let issuer = "https://auth.example.org/application/o/kura/".to_owned();
+    let (a, b) = (
+        Ctx {
+            home: dir("rewind-home-a"),
+            access_token: Some(e.key.token("u1", "wa", &["maxime-members"])),
+        },
+        Ctx {
+            home: dir("rewind-home-b"),
+            access_token: Some(e.key.token("u1", "wb", &["maxime-members"])),
+        },
+    );
+    for (ctx, name) in [(&a, "desk"), (&b, "laptop")] {
+        let r = commands::login(
+            ctx,
+            server.clone(),
+            issuer.clone(),
+            "kura-cli".into(),
+            Some(name.into()),
+        )
+        .await;
+        assert_eq!(code(r), 0);
+    }
+    let (fa, fb) = (dir("rewind-a"), dir("rewind-b"));
+    std::fs::write(fa.join("n.md"), "v1\n").unwrap();
+    std::fs::write(fa.join("old.md"), "kept\n").unwrap();
+    assert_eq!(
+        code(commands::attach(&a, "knowledge", fa.clone(), true).await),
+        0
+    );
+    // What the backup holds: seq 1 and 2.
+    std::fs::write(fa.join("n.md"), "v2\n").unwrap();
+    std::fs::write(fa.join("m.md"), "new\n").unwrap();
+    std::fs::remove_file(fa.join("old.md")).unwrap();
+    assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
+    assert_eq!(
+        code(commands::attach(&b, "knowledge", fb.clone(), true).await),
+        0
+    );
+    assert_eq!(files(&fa), files(&fb));
+    // Restore: the commits after seq 2 are lost, then the runbook's step.
+    let v = uuid::Uuid::parse_str(&common::app::vault_id(&e, "knowledge").await).unwrap();
+    let mut tx = e.t.owner.begin().await.unwrap();
+    for q in [
+        "DELETE FROM revision WHERE vault_id = $1 AND seq > 2",
+        "DELETE FROM entry e WHERE vault_id = $1 AND NOT EXISTS (SELECT 1 FROM revision r WHERE r.vault_id = e.vault_id AND r.entry_id = e.id)",
+        "UPDATE entry e SET (head_revision, last_seq, deleted, path, path_key) = (SELECT r.id, r.seq, r.deleted, r.path, lower(r.path) FROM revision r WHERE r.vault_id = e.vault_id AND r.entry_id = e.id ORDER BY r.seq DESC LIMIT 1) WHERE vault_id = $1",
+        "UPDATE vault SET head_seq = 2 WHERE id = $1",
+    ] {
+        sqlx::query(q).bind(v).execute(&mut *tx).await.unwrap();
+    }
+    tx.commit().await.unwrap();
+    assert_eq!(kura_server::db::epoch_reset(&e.t.owner).await.unwrap(), 2);
+    // Each device: nothing deleted, everything it held is on the server again.
+    assert_eq!(code(commands::sync_cmd(&b, None, false, false).await), 0);
+    assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
+    assert_eq!(code(commands::sync_cmd(&b, None, false, false).await), 0);
+    let (la, lb) = (files(&fa), files(&fb));
+    assert_eq!(la, lb);
+    let texts: Vec<&str> = la.iter().map(|(_, t)| t.as_str()).collect();
+    for t in ["v2\n", "new\n"] {
+        assert!(texts.contains(&t), "{t:?} lost: {la:?}");
+    }
+    assert!(
+        !fb.join(".trash").exists() && !fa.join(".trash").exists(),
+        "nothing trashed"
+    );
 }

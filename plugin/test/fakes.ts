@@ -116,6 +116,18 @@ export class FakeServer {
   entries = new Map<string, Entry>();
   seq = 0;
   epoch = "00000000-0000-4000-8000-000000000000";
+  /** Deleted entries purged up to here: an older cursor gets 410 (§6.3). */
+  horizon = 0;
+
+  /** Retention: deleted entries leave, the horizon moves past them. */
+  purgeDeleted(): void {
+    for (const [id, e] of this.entries) {
+      if (e.deleted) {
+        this.entries.delete(id);
+        this.horizon = Math.max(this.horizon, e.seq);
+      }
+    }
+  }
   calls: string[] = [];
 
   fetch = async (url: string, init: RequestInit): Promise<Response> => {
@@ -171,6 +183,7 @@ export class FakeServer {
     }
     if (method === "GET" && path === "/changes") {
       const since = Number(u.searchParams.get("since") ?? "0");
+      if (since > 0 && since < this.horizon) return json(410, { type: "/v1/problems/cursor_expired" });
       const items = [...this.entries.values()].filter((e) => e.seq > since).sort((a, b) => a.seq - b.seq);
       return json(200, { epoch: this.epoch, headSeq: this.seq, items });
     }
