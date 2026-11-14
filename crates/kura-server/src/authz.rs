@@ -125,8 +125,34 @@ pub async fn vault_access_in(
     tenant: Uuid,
     vault: Uuid,
 ) -> Result<Option<VaultAccess>, ApiError> {
+    Ok(vault_accesses(pool, snapshot, p, tenant, Some(vault), 1)
+        .await?
+        .into_iter()
+        .next())
+}
+
+/// Every enabled vault of a tenant the caller reads, by namespace and name, at
+/// most `limit`: two queries in one transaction, whatever the count (review R6).
+pub async fn vault_accesses_in(
+    pool: &sqlx::PgPool,
+    snapshot: &Snapshot,
+    p: &Principal,
+    tenant: Uuid,
+    limit: i64,
+) -> Result<Vec<VaultAccess>, ApiError> {
+    vault_accesses(pool, snapshot, p, tenant, None, limit).await
+}
+
+async fn vault_accesses(
+    pool: &sqlx::PgPool,
+    snapshot: &Snapshot,
+    p: &Principal,
+    tenant: Uuid,
+    only: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<VaultAccess>, ApiError> {
     let Some((slug, _)) = snapshot.tenant_ids.iter().find(|(_, id)| **id == tenant) else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
     let claim = snapshot
         .config
@@ -139,58 +165,69 @@ pub async fn vault_access_in(
         .find(|m| m.tenant == tenant)
         .map(|m| m.role);
     let mut tx = db::begin_tenant(pool, tenant, Some(&p.sub)).await?;
-    let Some(row) = sqlx::query(
-        "SELECT namespace, name, managed_by, chunking_params, epoch, head_seq, config_sync FROM vault WHERE id = $1 AND disabled_at IS NULL",
+    let rows = sqlx::query(
+        "SELECT id, namespace, name, managed_by, chunking_params, epoch, head_seq, config_sync FROM vault
+         WHERE disabled_at IS NULL AND ($1::uuid IS NULL OR id = $1) ORDER BY namespace, name LIMIT $2",
     )
-    .bind(vault)
-    .fetch_optional(&mut *tx)
-    .await?
-    else {
-        return Ok(None);
-    };
-    let bindings =
-        sqlx::query("SELECT subject_kind, subject, role FROM role_binding WHERE vault_id = $1")
-            .bind(vault)
-            .fetch_all(&mut *tx)
-            .await?;
+    .bind(only)
+    .bind(limit)
+    .fetch_all(&mut *tx)
+    .await?;
+    let ids: Vec<Uuid> = rows
+        .iter()
+        .map(|r| r.try_get("id"))
+        .collect::<Result<_, _>>()?;
+    let bindings = sqlx::query(
+        "SELECT vault_id, subject_kind, subject, role FROM role_binding WHERE vault_id = ANY($1)",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *tx)
+    .await?;
     tx.commit().await?;
     let values = claim
         .as_deref()
         .map(|c| p.claim_values(c))
         .unwrap_or_default();
-    let mut role = tenant_role.and_then(tenant_vault_role);
-    for b in &bindings {
-        let (kind, subject, r): (String, String, String) = (
-            b.try_get("subject_kind")?,
-            b.try_get("subject")?,
-            b.try_get("role")?,
-        );
-        let matches = match kind.as_str() {
-            "claim" => values.contains(&subject.as_str()),
-            "user" => subject == p.sub,
-            _ => false,
-        };
-        if matches {
-            role = role.max(parse_role(&r));
+    let mut out = Vec::new();
+    for row in &rows {
+        let vault: Uuid = row.try_get("id")?;
+        let mut role = tenant_role.and_then(tenant_vault_role);
+        for b in &bindings {
+            let (v, kind, subject, r): (Uuid, String, String, String) = (
+                b.try_get("vault_id")?,
+                b.try_get("subject_kind")?,
+                b.try_get("subject")?,
+                b.try_get("role")?,
+            );
+            let matches = v == vault
+                && match kind.as_str() {
+                    "claim" => values.contains(&subject.as_str()),
+                    "user" => subject == p.sub,
+                    _ => false,
+                };
+            if matches {
+                role = role.max(parse_role(&r));
+            }
         }
+        let Some(role) = role else { continue };
+        out.push(VaultAccess {
+            vault,
+            tenant,
+            tenant_slug: slug.clone(),
+            claim: claim.clone(),
+            namespace: row.try_get("namespace")?,
+            name: row.try_get("name")?,
+            managed_by: row.try_get("managed_by")?,
+            tenant_role,
+            role,
+            chunking: serde_json::from_value(row.try_get("chunking_params")?)
+                .map_err(|e| ApiError::Unavailable(format!("stored chunking refused: {e}")))?,
+            epoch: row.try_get("epoch")?,
+            head_seq: row.try_get("head_seq")?,
+            config: config_of(row)?,
+        });
     }
-    let Some(role) = role else { return Ok(None) };
-    Ok(Some(VaultAccess {
-        vault,
-        tenant,
-        tenant_slug: slug.clone(),
-        claim,
-        namespace: row.try_get("namespace")?,
-        name: row.try_get("name")?,
-        managed_by: row.try_get("managed_by")?,
-        tenant_role,
-        role,
-        chunking: serde_json::from_value(row.try_get("chunking_params")?)
-            .map_err(|e| ApiError::Unavailable(format!("stored chunking refused: {e}")))?,
-        epoch: row.try_get("epoch")?,
-        head_seq: row.try_get("head_seq")?,
-        config: config_of(&row)?,
-    }))
+    Ok(out)
 }
 
 /// `authz::require_role`: checked on the vault before any work. A vault the

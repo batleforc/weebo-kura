@@ -135,18 +135,8 @@ pub async fn list_vaults(
     let mut out = Vec::new();
     // Every enabled tenant: a binding may open a vault without any tenant role.
     for &tenant in snap.tenant_ids.values() {
-        let mut tx = db::begin_tenant(&state.db, tenant, Some(&p.sub)).await?;
-        let ids: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM vault WHERE disabled_at IS NULL ORDER BY namespace, name LIMIT $1",
-        )
-        .bind(MAX_LISTED)
-        .fetch_all(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        for id in ids {
-            if let Some(a) = authz::vault_access_in(&state.db, &snap, p, tenant, id).await? {
-                out.push(Vault::from(&a));
-            }
+        for a in authz::vault_accesses_in(&state.db, &snap, p, tenant, MAX_LISTED).await? {
+            out.push(Vault::from(&a));
         }
     }
     Ok(Json(out))

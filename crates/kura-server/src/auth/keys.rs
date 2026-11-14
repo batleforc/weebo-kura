@@ -162,10 +162,17 @@ impl Keys {
         {
             return Ok(None);
         }
+        // Marked before the fetch, and the lock released during it: other
+        // callers keep verifying with the cached keys instead of waiting up to
+        // the provider timeout, and none starts a second fetch (review R5).
         cache.last_fetch = Some(Instant::now());
-        match self.fetch().await {
+        drop(cache);
+        let fetched = self.fetch().await;
+        let mut cache = self.cache.lock().await;
+        match fetched {
             Ok((set, raw)) => {
                 cache.keys = decode_set(&set);
+                drop(cache);
                 if let Some(pool) = &self.pool {
                     // Best effort: verification works from memory either way.
                     if let Err(e) = sqlx::query("SELECT kura_jwks_replace($1)")
@@ -178,9 +185,12 @@ impl Keys {
                 }
             }
             // Authentik unreachable: keys already cached keep working; an unknown key id is refused (§10.2).
-            Err(e) => tracing::warn!(error = %e, "JWKS refetch failed"),
+            Err(e) => {
+                drop(cache);
+                tracing::warn!(error = %e, "JWKS refetch failed");
+            }
         }
-        Ok(cache.keys.get(kid).cloned())
+        Ok(self.cache.lock().await.keys.get(kid).cloned())
     }
 
     async fn discovery(&self) -> Result<Option<&Discovery>, AuthError> {

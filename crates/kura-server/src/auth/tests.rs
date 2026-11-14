@@ -309,3 +309,58 @@ async fn a_retired_key_stops_verifying_after_max_age() {
         "invalid token: unknown key id"
     );
 }
+
+/// Review R5: while the provider is slow to answer, other callers are not
+/// held on the cache's lock for up to the provider timeout, and no second
+/// fetch starts.
+#[tokio::test]
+async fn a_slow_fetch_does_not_hold_other_callers() {
+    use axum::routing::get;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let k = TestKey::new("k1");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let jwks = json!({ "keys": [k.jwk.clone()] });
+    let issuer = format!("{base}/application/o/kura/");
+    let discovery = json!({ "issuer": issuer.clone(), "jwks_uri": format!("{base}/jwks/"), "userinfo_endpoint": format!("{base}/userinfo/") });
+    let calls = Arc::new(AtomicUsize::new(0));
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let (c, s, r) = (calls.clone(), started.clone(), release.clone());
+    let app = axum::Router::new()
+        .route(
+            "/application/o/kura/.well-known/openid-configuration",
+            get(move || async move { axum::Json(discovery) }),
+        )
+        .route(
+            "/jwks/",
+            get(move || {
+                let (c, s, r, jwks) = (c.clone(), s.clone(), r.clone(), jwks.clone());
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    s.notify_one();
+                    r.notified().await;
+                    axum::Json(jwks)
+                }
+            }),
+        );
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let keys = Arc::new(Keys::new(
+        KeySource::http(&issuer).unwrap().expecting(&issuer),
+        None,
+    ));
+    let k2 = keys.clone();
+    let slow = tokio::spawn(async move { k2.get("k1").await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+        .await
+        .expect("the fetch reached the provider");
+    // Answered at once (nothing cached yet, a fetch under way), not after it.
+    let other = tokio::time::timeout(std::time::Duration::from_secs(2), keys.get("k1")).await;
+    assert!(matches!(other, Ok(Ok(None))), "not held on the lock");
+    assert!(!slow.is_finished());
+    release.notify_one();
+    assert!(slow.await.unwrap().unwrap().is_some());
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "one fetch, not two");
+    assert!(keys.get("k1").await.unwrap().is_some());
+}
