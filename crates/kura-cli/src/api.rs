@@ -438,6 +438,14 @@ impl VaultRemote<'_> {
     }
 }
 
+/// A `chunks/batch` answer: 4 MiB of chunks and a header per record.
+const MAX_RECORDS: usize = MAX_CHUNK + 1000 * kura_core::wire::RECORD_HEADER;
+
+/// A server without the batch routes answers `405` (RFC 0002 decision 2).
+fn older_server(e: &RemoteError) -> bool {
+    matches!(e, RemoteError::Problem { status: 405, .. })
+}
+
 impl Remote for VaultRemote<'_> {
     async fn missing(&self, hashes: &[ChunkHash]) -> Result<Vec<ChunkHash>, RemoteError> {
         #[derive(Deserialize)]
@@ -489,6 +497,49 @@ impl Remote for VaultRemote<'_> {
             .json(self.req(reqwest::Method::GET, &format!("/blobs/{hash}")))
             .await?;
         Ok((m.size, m.chunks))
+    }
+
+    async fn get_blobs(
+        &self,
+        hashes: &[ChunkHash],
+    ) -> Result<Option<Vec<(ChunkHash, u64, Vec<ChunkHash>)>>, RemoteError> {
+        #[derive(Deserialize)]
+        struct Manifest {
+            hash: ChunkHash,
+            size: u64,
+            chunks: Vec<ChunkHash>,
+        }
+        #[derive(Deserialize)]
+        struct Batch {
+            manifests: Vec<Manifest>,
+        }
+        let r = self
+            .req(reqwest::Method::POST, "/blobs/batch")
+            .json(&json!({ "blobs": hashes }));
+        match self.api.json::<Batch>(r).await {
+            Ok(b) => Ok(Some(
+                b.manifests
+                    .into_iter()
+                    .map(|m| (m.hash, m.size, m.chunks))
+                    .collect(),
+            )),
+            Err(e) if older_server(&e) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn get_chunk_records(
+        &self,
+        hashes: &[ChunkHash],
+    ) -> Result<Option<Vec<u8>>, RemoteError> {
+        let r = self
+            .req(reqwest::Method::POST, "/chunks/batch")
+            .json(&json!({ "chunks": hashes }));
+        match self.api.exchange(r).await {
+            Ok(r) => body(r, MAX_RECORDS).await.map(Some),
+            Err(e) if older_server(&e) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     async fn commit(&self, req: &CommitRequest) -> Result<CommitResponse, RemoteError> {
@@ -685,5 +736,34 @@ pub mod oidc {
         v.get("preferred_username")
             .and_then(Value::as_str)
             .map(str::to_owned)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// RFC 0002 decision 2: a `405` (an older server's answer to the batch
+    /// routes) means "read one by one"; a problem `404` is still an error.
+    #[tokio::test]
+    async fn a_405_is_an_older_server_and_a_404_is_not() {
+        let answer = |status: u16, body: &'static str| {
+            reqwest::Response::from(
+                http::Response::builder()
+                    .status(status)
+                    .body(body)
+                    .unwrap_or_default(),
+            )
+        };
+        let e = check(answer(405, "")).await.err();
+        assert!(e.as_ref().is_some_and(older_server), "{e:?}");
+        let e = check(answer(404, r#"{"type":"/v1/problems/not_found"}"#))
+            .await
+            .err();
+        assert!(
+            e.as_ref()
+                .is_some_and(|e| !older_server(e) && e.kind() == "not_found"),
+            "{e:?}"
+        );
     }
 }

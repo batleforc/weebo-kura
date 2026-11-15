@@ -653,6 +653,84 @@
         ]
       }
     },
+    "/v1/vaults/{v}/blobs/batch": {
+      "post": {
+        "tags": [
+          "chunks"
+        ],
+        "summary": "Many file manifests in one call (RFC 0002 §4.4).",
+        "operationId": "batch_blobs",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlobBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Manifests found, and the hashes that were not",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobBatchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No hash, more than 1,000, or one malformed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/v1/vaults/{v}/blobs/{hash}": {
       "get": {
         "tags": [
@@ -891,6 +969,109 @@
           },
           "410": {
             "description": "cursor_expired, or history_rewound: run a full resync",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/chunks/batch": {
+      "post": {
+        "tags": [
+          "chunks"
+        ],
+        "summary": "Many chunks in one answer, decrypted, at most 4 MiB of them (RFC 0002\n§4.4): records `hash[32] status[1] length[4, big-endian] bytes`, status\n0 found, 1 missing (unknown or not visible). Hashes past the budget are\nleft out; the client asks for them again.",
+        "operationId": "batch_chunks",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChunkBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Records in request order, up to 4 MiB of chunks",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No hash, more than 1,000, or one malformed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over 60 calls a minute, or this replica already builds 8 answers; retry after `Retry-After`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage failing; retry after `Retry-After`",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1973,6 +2154,45 @@
           }
         }
       },
+      "BlobBatchRequest": {
+        "type": "object",
+        "required": [
+          "blobs"
+        ],
+        "properties": {
+          "blobs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Blob hashes, 64 lowercase hex characters each, 1 to 1,000."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlobBatchResponse": {
+        "type": "object",
+        "required": [
+          "manifests",
+          "missing"
+        ],
+        "properties": {
+          "manifests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HashedManifest"
+            },
+            "description": "The manifests found, in request order."
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Unknown or not visible to the caller: the same answer for both."
+          }
+        }
+      },
       "BlobManifest": {
         "type": "object",
         "required": [
@@ -2030,6 +2250,22 @@
             "description": "Set when more pages follow: the next `since` (changes) or `after` (entries)."
           }
         }
+      },
+      "ChunkBatchRequest": {
+        "type": "object",
+        "required": [
+          "chunks"
+        ],
+        "properties": {
+          "chunks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Chunk hashes, 64 lowercase hex characters each, 1 to 1,000."
+          }
+        },
+        "additionalProperties": false
       },
       "ChunkingView": {
         "type": "object",
@@ -2243,6 +2479,32 @@
           "size": {
             "type": "integer",
             "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "HashedManifest": {
+        "type": "object",
+        "required": [
+          "hash",
+          "size",
+          "chunks"
+        ],
+        "properties": {
+          "chunks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ordered chunk hashes."
+          },
+          "hash": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "File size in bytes.",
             "minimum": 0
           }
         }

@@ -2,7 +2,7 @@
 # Decision 42 (RFC 0001 §10.3): how long a new device takes to attach a
 # 10,000-note vault, with the real `kura` CLI against the dev stack. Device A
 # pushes the notes into a new vault, device B attaches it from nothing; above
-# 5 minutes for B, the batch chunk download RFC opens. The vault is deleted
+# 5 minutes for B fails: RFC 0002's batch routes must keep it under that. The vault is deleted
 # afterwards (purged after its 30 days) and the devices revoked.
 # usage: perf/attach.sh [notes]   (default 10000)
 set -euo pipefail
@@ -63,11 +63,15 @@ as b attach "$name" "$work/notes-b" --yes >/dev/null
 t2=$(date +%s)
 got=$(find "$work/notes-b" -name '*.md' | wc -l)
 [ "$got" = "$count" ] || { echo "FAIL: device B has $got of $count notes"; exit 1; }
+# The server holds exactly device B's folder, content included (§13).
+as b verify "$name" >/dev/null || { echo "FAIL: kura verify: device B differs from the server"; exit 1; }
 push=$((t1 - t0)); attach=$((t2 - t1))
 mkdir -p "$root/perf/results"
 printf '{"notes":%d,"bytes":%d,"pushSeconds":%d,"attachSeconds":%d}\n' "$count" "$bytes" "$push" "$attach" | tee "$root/perf/results/attach.json"
+# RFC 0002 observation 1: what came through the batch routes.
+curl -sf "${KURA_DEV_METRICS:-http://127.0.0.1:59090}/metrics" | grep '^kura_batch_items_total' || true
 if [ "$attach" -gt 300 ]; then
-  echo "decision 42: the first attach took ${attach}s, above 5 minutes: the batch chunk download RFC opens"
-else
-  echo "decision 42: the first attach took ${attach}s, under 5 minutes: no batch endpoint"
+  echo "FAIL: the first attach took ${attach}s, above decision 42's 5 minutes (RFC 0002 aims at 60 s)"
+  exit 1
 fi
+echo "decision 42: the first attach took ${attach}s, under 5 minutes (RFC 0002 aims at 60 s)"

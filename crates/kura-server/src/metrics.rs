@@ -28,6 +28,11 @@ pub struct Metrics {
     pub commits_total: IntCounter,
     /// Three-way merges attempted, by `outcome`: `merged` or `conflict` (§10.1).
     pub merge_total: IntCounterVec,
+    /// Items of the batch routes (RFC 0002), by `route` (`blobs`, `chunks`)
+    /// and `outcome`: `found` (fetched and sent) or `missing` (nothing fetched).
+    pub batch_items_total: IntCounterVec,
+    /// Body size of each `chunks/batch` answer (RFC 0002 §10.1).
+    pub batch_response_bytes: Histogram,
     /// Vault epochs regenerated after a promotion or a restore (§10.1 alert).
     pub vault_epoch_changes_total: IntCounter,
     /// Rows and objects removed by maintenance, by `outcome`: `revision`,
@@ -92,6 +97,24 @@ impl Metrics {
             &["outcome"],
         )?;
         registry.register(Box::new(merge_total.clone()))?;
+        let batch_items_total = IntCounterVec::new(
+            Opts::new("batch_items_total", "Items asked of the batch routes"),
+            &["route", "outcome"],
+        )?;
+        registry.register(Box::new(batch_items_total.clone()))?;
+        let batch_response_bytes = Histogram::with_opts(
+            HistogramOpts::new("batch_response_bytes", "Body size of chunks/batch answers")
+                .buckets(vec![
+                    4096.0,
+                    65536.0,
+                    262_144.0,
+                    1_048_576.0,
+                    2_097_152.0,
+                    4_194_304.0,
+                    4_500_000.0,
+                ]),
+        )?;
+        registry.register(Box::new(batch_response_bytes.clone()))?;
         let vault_epoch_changes_total = IntCounter::new(
             "vault_epoch_changes_total",
             "Vault epochs regenerated after a promotion or a restore",
@@ -186,6 +209,8 @@ impl Metrics {
             chunk_corrupt_total,
             commits_total,
             merge_total,
+            batch_items_total,
+            batch_response_bytes,
             vault_epoch_changes_total,
             maintenance_deleted_total,
             tenants_awaiting_key_destruction,

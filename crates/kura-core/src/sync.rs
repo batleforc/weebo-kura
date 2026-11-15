@@ -189,6 +189,25 @@ pub trait Remote {
         chunks: &[ChunkHash],
     ) -> Result<(), RemoteError>;
     async fn get_blob(&self, hash: &ChunkHash) -> Result<(u64, Vec<ChunkHash>), RemoteError>;
+    /// Many manifests at once (RFC 0002): those the server has, by blob
+    /// hash; `None` when it has no batch route (an older server answers
+    /// `405`), and the engine reads one by one for the rest of the run.
+    async fn get_blobs(
+        &self,
+        hashes: &[ChunkHash],
+    ) -> Result<Option<Vec<(ChunkHash, u64, Vec<ChunkHash>)>>, RemoteError> {
+        let _ = hashes;
+        Ok(None)
+    }
+    /// The raw `chunks/batch` answer for these chunks, parsed by
+    /// [`crate::wire::parse_records`]; `None` as for [`Self::get_blobs`].
+    async fn get_chunk_records(
+        &self,
+        hashes: &[ChunkHash],
+    ) -> Result<Option<Vec<u8>>, RemoteError> {
+        let _ = hashes;
+        Ok(None)
+    }
     async fn commit(&self, req: &CommitRequest) -> Result<CommitResponse, RemoteError>;
     /// `start` is the cursor the pass began from (`since` for its first
     /// page): the server checks its horizon against it.
@@ -817,14 +836,20 @@ async fn pull<H: Host, R: Remote>(
     let mut pos = state.cursor;
     let start = state.cursor;
     let mut held = false;
+    // RFC 0002: the content of the next items is fetched a window at a time.
+    let pre = Prefetch::new(remote);
     loop {
         let page = remote.changes(pos, state.epoch, start).await?;
         state.epoch = Some(page.epoch);
         let before = pos;
-        for item in &page.items {
+        let mut window_end = 0;
+        for (i, item) in page.items.iter().enumerate() {
+            if i >= window_end {
+                window_end = pre.fill(&page.items, i, state).await?;
+            }
             let current = state.entries.get(&item.entry).map(|k| k.revision);
             if current != Some(item.revision) {
-                match apply(host, remote, state, item, opts, report).await {
+                match apply(host, &pre, state, item, opts, report).await {
                     Ok(Applied::Done) => {}
                     Ok(Applied::Deferred) => held = true,
                     Err(e @ (SyncError::Host(_) | SyncError::Corrupt)) => {
@@ -995,4 +1020,167 @@ async fn download<R: Remote>(remote: &R, blob: ChunkHash, size: u64) -> Result<V
         return Err(SyncError::Corrupt);
     }
     Ok(out)
+}
+
+/// Stated bytes of content fetched ahead per window (RFC 0002 decision 4).
+pub const WINDOW: u64 = 16 << 20;
+
+/// A [`Remote`] that serves manifests and chunks fetched ahead in batches,
+/// and asks the real one for anything else (RFC 0002 §5.1). What it serves
+/// is checked by [`download`] exactly as single reads are.
+struct Prefetch<'a, R: Remote> {
+    remote: &'a R,
+    /// Off for the rest of the run once the server has no batch route.
+    batching: std::sync::atomic::AtomicBool,
+    blobs: std::sync::Mutex<HashMap<ChunkHash, (u64, Vec<ChunkHash>)>>,
+    chunks: std::sync::Mutex<HashMap<ChunkHash, Vec<u8>>>,
+}
+
+impl<'a, R: Remote> Prefetch<'a, R> {
+    fn new(remote: &'a R) -> Self {
+        Self {
+            remote,
+            batching: std::sync::atomic::AtomicBool::new(true),
+            blobs: std::sync::Mutex::default(),
+            chunks: std::sync::Mutex::default(),
+        }
+    }
+
+    fn batching(&self) -> bool {
+        self.batching.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn stop_batching(&self) {
+        self.batching
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Drops what the last window held, then fetches the content of the
+    /// items from `from` on, up to [`WINDOW`] of stated size (a larger file
+    /// alone); returns where the window ends. Memory is bounded by what
+    /// arrives, never by the stated sizes: past `WINDOW` plus one chunk of
+    /// received bytes, the rest is left to single reads.
+    async fn fill(
+        &self,
+        items: &[EntryState],
+        from: usize,
+        state: &LocalState,
+    ) -> Result<usize, SyncError> {
+        lock(&self.blobs).clear();
+        lock(&self.chunks).clear();
+        let mut end = from;
+        let mut stated = 0u64;
+        let mut wanted = Vec::new();
+        for item in items.iter().skip(from) {
+            let needed = !item.deleted
+                && state.entries.get(&item.entry).map(|k| k.revision) != Some(item.revision);
+            if let (true, Some(blob)) = (needed, item.blob) {
+                if stated > 0 && stated.saturating_add(item.size) > WINDOW {
+                    break;
+                }
+                stated = stated.saturating_add(item.size);
+                wanted.push(blob);
+            }
+            end = end.saturating_add(1);
+        }
+        wanted.sort();
+        wanted.dedup();
+        if wanted.is_empty() || !self.batching() {
+            return Ok(end.max(from.saturating_add(1)));
+        }
+        let Some(manifests) = self.remote.get_blobs(&wanted).await? else {
+            self.stop_batching();
+            return Ok(end.max(from.saturating_add(1)));
+        };
+        let mut want: Vec<ChunkHash> = Vec::new();
+        {
+            let mut blobs = lock(&self.blobs);
+            for (hash, size, list) in manifests {
+                if wanted.binary_search(&hash).is_ok() {
+                    want.extend(list.iter().copied());
+                    blobs.insert(hash, (size, list));
+                }
+            }
+        }
+        want.sort();
+        want.dedup();
+        let mut received = 0usize;
+        let cap = usize::try_from(WINDOW)
+            .unwrap_or(usize::MAX)
+            .saturating_add(crate::chunk::MAX_CHUNK);
+        while !want.is_empty() && received < cap {
+            let ask: Vec<ChunkHash> = want.iter().take(BATCH).copied().collect();
+            let Some(body) = self.remote.get_chunk_records(&ask).await? else {
+                self.stop_batching();
+                break;
+            };
+            let records = crate::wire::parse_records(&body)
+                .map_err(|e| RemoteError::Unavailable(e.to_string()))?;
+            let before = want.len();
+            let mut chunks = lock(&self.chunks);
+            for (hash, data) in records {
+                want.retain(|h| *h != hash);
+                // Only what was asked and matches its address is kept.
+                if let Some(data) = data
+                    && ask.contains(&hash)
+                    && ChunkHash::of(data) == hash
+                {
+                    received = received.saturating_add(data.len());
+                    chunks.insert(hash, data.to_vec());
+                }
+            }
+            // An answer that settles none of what was asked (empty, or only
+            // other hashes) ends the window: the rest is read one by one.
+            if want.len() == before {
+                break;
+            }
+        }
+        Ok(end.max(from.saturating_add(1)))
+    }
+}
+
+fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+impl<R: Remote> Remote for Prefetch<'_, R> {
+    async fn missing(&self, hashes: &[ChunkHash]) -> Result<Vec<ChunkHash>, RemoteError> {
+        self.remote.missing(hashes).await
+    }
+    async fn put_chunk(&self, hash: &ChunkHash, data: &[u8]) -> Result<(), RemoteError> {
+        self.remote.put_chunk(hash, data).await
+    }
+    async fn get_chunk(&self, hash: &ChunkHash) -> Result<Vec<u8>, RemoteError> {
+        let held = lock(&self.chunks).remove(hash);
+        match held {
+            Some(data) => Ok(data),
+            None => self.remote.get_chunk(hash).await,
+        }
+    }
+    async fn put_blob(
+        &self,
+        hash: &ChunkHash,
+        size: u64,
+        chunks: &[ChunkHash],
+    ) -> Result<(), RemoteError> {
+        self.remote.put_blob(hash, size, chunks).await
+    }
+    async fn get_blob(&self, hash: &ChunkHash) -> Result<(u64, Vec<ChunkHash>), RemoteError> {
+        let held = lock(&self.blobs).get(hash).cloned();
+        match held {
+            Some(m) => Ok(m),
+            None => self.remote.get_blob(hash).await,
+        }
+    }
+    async fn commit(&self, req: &CommitRequest) -> Result<CommitResponse, RemoteError> {
+        self.remote.commit(req).await
+    }
+    async fn changes(
+        &self,
+        since: u64,
+        epoch: Option<Uuid>,
+        start: u64,
+    ) -> Result<ChangesResponse, RemoteError> {
+        self.remote.changes(since, epoch, start).await
+    }
 }

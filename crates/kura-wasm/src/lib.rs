@@ -37,6 +37,10 @@ export interface KuraRemote {
   getChunk(hash: string): Promise<Uint8Array>;
   putBlob(hash: string, size: number, chunks: string[]): Promise<void>;
   getBlob(hash: string): Promise<{ size: number; chunks: string[] }>;
+  /** RFC 0002: manifests of many blobs, or null when the server has no batch route (405). */
+  getBlobs(hashes: string[]): Promise<{ hash: string; size: number; chunks: string[] }[] | null>;
+  /** RFC 0002: the raw chunks/batch body, unparsed, or null as for getBlobs. */
+  getChunkRecords(hashes: string[]): Promise<Uint8Array | null>;
   commit(request: unknown): Promise<unknown>;
   changes(since: number, epoch: string | null, start: number): Promise<unknown>;
 }
@@ -82,6 +86,10 @@ extern "C" {
     ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(method, catch, js_name = getBlob)]
     async fn get_blob(this: &JsRemote, hash: &str) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(method, catch, js_name = getBlobs)]
+    async fn get_blobs(this: &JsRemote, hashes: JsValue) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(method, catch, js_name = getChunkRecords)]
+    async fn get_chunk_records(this: &JsRemote, hashes: JsValue) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(method, catch)]
     async fn commit(this: &JsRemote, request: JsValue) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(method, catch)]
@@ -301,6 +309,35 @@ impl Remote for RemoteAdapter {
                 .map_err(remote_err)?,
         )?;
         Ok((m.size, m.chunks))
+    }
+    async fn get_blobs(
+        &self,
+        h: &[ChunkHash],
+    ) -> Result<Option<Vec<(ChunkHash, u64, Vec<ChunkHash>)>>, RemoteError> {
+        #[derive(Deserialize)]
+        struct Manifest {
+            hash: ChunkHash,
+            size: u64,
+            chunks: Vec<ChunkHash>,
+        }
+        let v = self.0.get_blobs(hashes(h)?).await.map_err(remote_err)?;
+        if v.is_null() {
+            return Ok(None);
+        }
+        let list: Vec<Manifest> = decode(&v)?;
+        Ok(Some(
+            list.into_iter()
+                .map(|m| (m.hash, m.size, m.chunks))
+                .collect(),
+        ))
+    }
+    async fn get_chunk_records(&self, h: &[ChunkHash]) -> Result<Option<Vec<u8>>, RemoteError> {
+        let v = self
+            .0
+            .get_chunk_records(hashes(h)?)
+            .await
+            .map_err(remote_err)?;
+        Ok((!v.is_null()).then(|| bytes(&v)))
     }
     async fn commit(&self, req: &CommitRequest) -> Result<CommitResponse, RemoteError> {
         let body = to_js(req).map_err(RemoteError::Unavailable)?;

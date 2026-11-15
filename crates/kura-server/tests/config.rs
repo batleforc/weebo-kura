@@ -251,6 +251,30 @@ async fn config_namespace_hidden_from_other_member() {
     };
     assert_eq!(get(&a).await, StatusCode::OK);
     assert_eq!(get(&b).await, StatusCode::NOT_FOUND);
+    // RFC 0002 T2: nor in a batch, where it reads as an unknown hash.
+    let batch = |d: &D| {
+        let uri = format!("/v1/vaults/{}/chunks/batch", s.v);
+        let (tok, id) = (d.tok.clone(), d.id.clone());
+        let state = s.e.state.clone();
+        let body = json!({ "chunks": [c.to_string()] }).to_string();
+        async move {
+            let req = Request::post(uri)
+                .header("authorization", format!("Bearer {tok}"))
+                .header("x-kura-device", id)
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap();
+            let r = app(state).oneshot(req).await.unwrap();
+            axum::body::to_bytes(r.into_body(), 1 << 20)
+                .await
+                .unwrap()
+                .to_vec()
+        }
+    };
+    assert_eq!(batch(&a).await[32], 0, "the owner gets it");
+    let theirs = batch(&b).await;
+    assert_eq!(theirs.len(), 37, "batch_hides_other_members_config");
+    assert_eq!(theirs[32..], [1, 0, 0, 0, 0]);
     // Another member cannot write over it by naming its id.
     let (bb, size) = s.upload(&b, b"evil").await;
     for space in [Some("config"), None] {

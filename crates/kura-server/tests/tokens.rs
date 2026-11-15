@@ -445,6 +445,58 @@ async fn prefix_token_cannot_fetch_outside_chunk_or_read_renamed_history() {
         };
         assert_eq!((st, sb), (want, want), "{}", String::from_utf8_lossy(data));
     }
+    // RFC 0002 T1: the same answers in one batch, outside mixed with inside.
+    let all: Vec<&[u8]> = vec![
+        b"inside",
+        b"outside",
+        b"was outside",
+        b"was inside",
+        b"now inside",
+    ];
+    let chunks: Vec<String> = all.iter().map(|d| ChunkHash::of(d).to_string()).collect();
+    let blobs: Vec<String> = all
+        .iter()
+        .map(|d| blob_hash(d.len() as u64, &[ChunkHash::of(d)]).to_string())
+        .collect();
+    let (st, body) = send(
+        &s.e,
+        "POST",
+        &format!("/v1/vaults/{}/chunks/batch", s.v),
+        &key,
+        None,
+        Some(Body::from(json!({ "chunks": chunks }).to_string())),
+        INSIDE,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let mut found = Vec::new();
+    let mut rest = body.as_slice();
+    while rest.len() >= 37 {
+        let len = u32::from_be_bytes(rest[33..37].try_into().unwrap()) as usize;
+        if rest[32] == 0 {
+            found.push(rest[37..37 + len].to_vec());
+        }
+        rest = &rest[37 + len..];
+    }
+    assert_eq!(
+        found,
+        [b"inside".to_vec(), b"now inside".to_vec()],
+        "batch_respects_token_prefix"
+    );
+    let (st, body) = send(
+        &s.e,
+        "POST",
+        &format!("/v1/vaults/{}/blobs/batch", s.v),
+        &key,
+        None,
+        Some(Body::from(json!({ "blobs": blobs }).to_string())),
+        INSIDE,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let r = json_of(&body);
+    assert_eq!(r["manifests"].as_array().unwrap().len(), 2);
+    assert_eq!(r["missing"].as_array().unwrap().len(), 3);
     // The whole-vault view of a device is untouched.
     let c = ChunkHash::of(b"outside");
     let (st, _) = send(

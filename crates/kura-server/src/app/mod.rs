@@ -91,6 +91,8 @@ pub struct AppState {
     pub storage: Option<Arc<crate::store::Storage>>,
     /// This replica's WebSocket fan-out (§6.3).
     pub hub: crate::notify::Hub,
+    /// `chunks/batch` answers this replica builds at once (RFC 0002 §7.5).
+    pub batches: tokio::sync::Semaphore,
     snapshot: RwLock<Option<Arc<Snapshot>>>,
     /// This replica's last rejected configuration, for `GET /v1/admin/status`.
     rejection: Mutex<Option<Vec<kura_api::ConfigError>>>,
@@ -108,6 +110,7 @@ impl AppState {
             http: HttpSettings::default(),
             storage: None,
             hub,
+            batches: tokio::sync::Semaphore::new(chunks::BATCHES_IN_FLIGHT),
             snapshot: RwLock::new(None),
             rejection: Mutex::new(None),
         }
@@ -245,6 +248,13 @@ fn v1_router() -> OpenApiRouter<SharedState> {
                 .layer(axum::extract::DefaultBodyLimit::max(
                     commits::MAX_COMMIT_BYTES,
                 )),
+        )
+        .merge(
+            // RFC 0002: 1,000 hashes of JSON, about 67 KB.
+            OpenApiRouter::new()
+                .routes(routes!(chunks::batch_blobs))
+                .routes(routes!(chunks::batch_chunks))
+                .layer(axum::extract::DefaultBodyLimit::max(chunks::MAX_BATCH_BODY)),
         )
         .merge(
             // 1,000 operations do not fit in 64 KiB.

@@ -129,6 +129,8 @@ export class FakeServer {
     }
   }
   calls: string[] = [];
+  /** An older server, without the batch routes of RFC 0002: 405. */
+  older = false;
 
   fetch = async (url: string, init: RequestInit): Promise<Response> => {
     const u = new URL(url);
@@ -140,6 +142,29 @@ export class FakeServer {
       const req = await body();
       const hashes = typeof req === "object" && req !== null && "hashes" in req && Array.isArray(req.hashes) ? req.hashes : [];
       return json(200, { missing: hashes.filter((h: unknown) => typeof h === "string" && !this.chunks.has(h)) });
+    }
+    if (method === "POST" && (path === "/blobs/batch" || path === "/chunks/batch")) {
+      if (this.older) return new Response(null, { status: 405 });
+      const req = await body();
+      const key = path === "/blobs/batch" ? "blobs" : "chunks";
+      const list: unknown = typeof req !== "object" || req === null ? [] : key === "blobs" ? ("blobs" in req ? req.blobs : []) : "chunks" in req ? req.chunks : [];
+      const hashes = Array.isArray(list) ? list.filter((h: unknown): h is string => typeof h === "string") : [];
+      if (key === "blobs") {
+        const manifests = hashes.flatMap((h) => {
+          const b = this.blobs.get(h);
+          return b === undefined ? [] : [{ hash: h, ...b }];
+        });
+        return json(200, { manifests, missing: hashes.filter((h) => !this.blobs.has(h)) });
+      }
+      const parts: number[] = [];
+      for (const h of hashes) {
+        const c = this.chunks.get(h);
+        for (let i = 0; i < 32; i++) parts.push(parseInt(h.slice(i * 2, i * 2 + 2), 16));
+        const len = c?.length ?? 0;
+        parts.push(c === undefined ? 1 : 0, (len >>> 24) & 255, (len >>> 16) & 255, (len >>> 8) & 255, len & 255);
+        if (c !== undefined) parts.push(...c);
+      }
+      return new Response(new Uint8Array(parts), { status: 200 });
     }
     const chunk = /^\/chunks\/([0-9a-f]{64})$/.exec(path);
     if (chunk?.[1] !== undefined) {

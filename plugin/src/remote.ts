@@ -139,6 +139,32 @@ export class Api {
         }
         throw new Error("unexpected manifest");
       },
+      // RFC 0002: an older server answers 405 to the batch routes; null
+      // makes the core read one by one for the rest of the run.
+      getBlobs: async (hashes) => {
+        let m: unknown;
+        try {
+          m = await this.json(`${v}/blobs/batch`, { method: "POST", json: { blobs: hashes } });
+        } catch (e) {
+          if (isProblem(e) && e.status === 405) return null;
+          throw e;
+        }
+        if (!isRecord(m) || !Array.isArray(m.manifests)) throw new Error("unexpected manifests");
+        return m.manifests.flatMap((x: unknown) =>
+          isRecord(x) && typeof x.hash === "string" && typeof x.size === "number" && Array.isArray(x.chunks)
+            ? [{ hash: x.hash, size: x.size, chunks: x.chunks.filter((c): c is string => typeof c === "string") }]
+            : [],
+        );
+      },
+      getChunkRecords: async (hashes) => {
+        try {
+          const r = await this.send(`${v}/chunks/batch`, { method: "POST", json: { chunks: hashes } });
+          return new Uint8Array(await r.arrayBuffer());
+        } catch (e) {
+          if (isProblem(e) && e.status === 405) return null;
+          throw e;
+        }
+      },
       commit: (request) =>
         this.json(`${v}/commits`, { method: "POST", json: isRecord(request) && space !== undefined ? { ...request, space } : request }),
       changes: (since, epoch, start) =>

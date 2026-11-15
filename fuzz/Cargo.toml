@@ -54,3 +54,9 @@ name = "fuzz_scoped_token"
 path = "fuzz_targets/fuzz_scoped_token.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "fuzz_chunk_records"
+path = "fuzz_targets/fuzz_chunk_records.rs"
+test = false
+doc = false

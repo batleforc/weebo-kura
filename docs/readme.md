@@ -13,7 +13,7 @@ Every project keeps its documentation here, either as plain markdown or as a
 | # | Title | Status | Settles |
 | --- | --- | --- | --- |
 | [0001](RFC/rfc0001-init-project.md) | weebo-kura: self-hosted sync backend for Obsidian vaults | Accepted ([implementation plan](RFC/rfc0001-implementation-plan.md)) | How vaults sync across devices through a self-hosted, multi-tenant backend authenticated by OIDC |
-| [0002](RFC/rfc0002-batched-transfers.md) | Batched chunk and manifest transfers | Draft | How a device downloads (and, in phase 3, uploads) thousands of small files without one request per chunk and per manifest |
+| [0002](RFC/rfc0002-batched-transfers.md) | Batched chunk and manifest transfers | Accepted ([implementation plan](RFC/rfc0002-implementation-plan.md)) | How a device downloads (and, in phase 3, uploads) thousands of small files without one request per chunk and per manifest |
 
 ### Planned
 

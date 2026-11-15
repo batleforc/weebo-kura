@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft |
+| Status | Accepted (2026-11-15) |
 | Short | Batched transfers |
 | Settles | How a device downloads (and, in phase 3, uploads) thousands of small files without one request per chunk and per manifest |
 | Author | Maxime (batleforc) |
@@ -520,26 +520,15 @@ measured by observation 1.
 | # | Question | Decision |
 | --- | --- | --- |
 | 1 | Route name for chunk download | **`POST /vaults/{v}/chunks/batch`, as decision 42 named it [R1].** A manifest route was not in decision 42, but without it the request count is halved, not removed. |
+| 2 | Fallback on an older server, which answers `405` to the batch paths [R20] | **Fall back to the single routes for the rest of the run on a `405`** (maintainer, 2026-11-15, as recommended). A `405` cannot be confused with a problem `404` ("vault gone"); no version coupling during an upgrade. |
+| 3 | Batched uploads (phase 3): now, or after a measurement? | **Yes, after phase 2 has run on real devices** (maintainer, 2026-11-15, as recommended). The Notion migration's first push is that push [R6]; the server-side parser (T7) waits until the download half is proven. |
+| 4 | Window size | **16 MiB of stated size per window** (maintainer, 2026-11-15, as recommended), revisited with observation 4. |
 
 ### Still open
 
-2. **Fallback on an older server.** The server at `85e4fe9` answers
-   `405 Method Not Allowed` to `POST …/chunks/batch`, `…/blobs/batch` and
-   `…/chunks/upload`, because those paths match the existing
-   `/chunks/{hash}` and `/blobs/{hash}` routes, which take only `GET` and
-   `PUT` [R20]. Should a new client fall back to the single routes, or
-   require a server version? Recommendation: fall back for the rest of the
-   run on a `405`. That status cannot be confused with a problem `404`
-   ("vault gone", as today). It costs about 20 lines and avoids version
-   coupling during an upgrade.
-3. **Phase 3 (batched uploads): now, or after a measurement?** The first
-   push measured 980 s [R2], but it happens once per migration. Upload
-   parsing is new server-side attack surface (T7). Recommendation: do it,
-   because the Notion migration of RFC 0001 phase 9 is that push [R6], but
-   only after phase 2 has run on real devices.
-4. **Window size.** 16 MiB of stated size per window is a guess that trades
-   memory on a phone against round trips. Recommendation: keep 16 MiB and
-   revisit with observation 4.
+None.
+
+---
 
 ## 16. Implementation phases
 

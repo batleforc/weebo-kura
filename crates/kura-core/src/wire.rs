@@ -272,3 +272,92 @@ mod tests {
         }
     }
 }
+
+/// Bytes before a record's payload: hash, status, big-endian length.
+pub const RECORD_HEADER: usize = 37;
+
+/// A malformed `chunks/batch` answer (RFC 0002 §4.4).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RecordError {
+    #[error("a chunk record is cut short")]
+    Truncated,
+    #[error("a chunk record of {0} bytes is larger than a chunk")]
+    TooLarge(usize),
+    #[error("a chunk record has an unknown status {0}")]
+    Status(u8),
+}
+
+/// The records of a `chunks/batch` answer, in order: a hash with its bytes,
+/// or with `None` when the server has nothing it may send. Lengths are
+/// checked against the rest of the body and the largest chunk before any
+/// slice is taken; the bytes are not checked against their hash here.
+/// A hash with its bytes, or `None` for a chunk the server may not send.
+pub type Record<'a> = (ChunkHash, Option<&'a [u8]>);
+
+pub fn parse_records(mut body: &[u8]) -> Result<Vec<Record<'_>>, RecordError> {
+    let mut out = Vec::new();
+    while !body.is_empty() {
+        let (head, rest) = body
+            .split_at_checked(RECORD_HEADER)
+            .ok_or(RecordError::Truncated)?;
+        let (hash, tail) = head.split_at(32);
+        let hash = <[u8; 32]>::try_from(hash).map_err(|_| RecordError::Truncated)?;
+        let (status, len) = tail.split_first().ok_or(RecordError::Truncated)?;
+        let len = <[u8; 4]>::try_from(len).map_err(|_| RecordError::Truncated)?;
+        let len = usize::try_from(u32::from_be_bytes(len)).map_err(|_| RecordError::Truncated)?;
+        if len > crate::chunk::MAX_CHUNK {
+            return Err(RecordError::TooLarge(len));
+        }
+        let (data, rest) = rest.split_at_checked(len).ok_or(RecordError::Truncated)?;
+        let item = match status {
+            0 => Some(data),
+            1 if len == 0 => None,
+            s => return Err(RecordError::Status(*s)),
+        };
+        out.push((ChunkHash::from_bytes(hash), item));
+        body = rest;
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod record_tests {
+    use super::*;
+
+    fn record(h: ChunkHash, status: u8, data: &[u8]) -> Vec<u8> {
+        let mut out = h.as_bytes().to_vec();
+        out.push(status);
+        out.extend_from_slice(&u32::try_from(data.len()).unwrap_or(u32::MAX).to_be_bytes());
+        out.extend_from_slice(data);
+        out
+    }
+
+    #[test]
+    fn records_round_trip_and_refuse_bad_lengths() {
+        let (a, b) = (ChunkHash::of(b"a"), ChunkHash::of(b"b"));
+        let mut body = record(a, 0, b"a");
+        body.extend(record(b, 1, b""));
+        assert_eq!(
+            parse_records(&body),
+            Ok(vec![(a, Some(&b"a"[..])), (b, None)])
+        );
+        assert_eq!(parse_records(&[]), Ok(vec![]));
+        assert_eq!(parse_records(&body[..40]), Err(RecordError::Truncated));
+        assert_eq!(parse_records(&body[..10]), Err(RecordError::Truncated));
+        let mut huge = a.as_bytes().to_vec();
+        huge.push(0);
+        huge.extend_from_slice(&u32::MAX.to_be_bytes());
+        assert!(matches!(
+            parse_records(&huge),
+            Err(RecordError::TooLarge(_))
+        ));
+        assert_eq!(
+            parse_records(&record(a, 7, b"")),
+            Err(RecordError::Status(7))
+        );
+        assert_eq!(
+            parse_records(&record(a, 1, b"x")),
+            Err(RecordError::Status(1))
+        );
+    }
+}

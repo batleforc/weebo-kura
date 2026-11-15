@@ -44,12 +44,32 @@ describe("the WASM core through the plugin's host and remote", () => {
     expect(ra.report.pushed).toBe(1);
     expect(ra.report.unsyncable.map(([p]) => p)).toEqual(["Q3: budget.md"]);
     expect(server.chunks.size).toBeGreaterThan(1);
+    server.calls = [];
     const rb = await b.run();
     expect(rb.report.pulled).toBe(1);
     expect(b.adapter.text("notes/hello.md")).toBe("# Hello\n".repeat(200));
+    // RFC 0002: read in batches, nothing one by one.
+    expect(server.calls.filter((c) => c.includes("batch"))).toEqual(["POST /blobs/batch", "POST /chunks/batch"]);
+    expect(server.calls.filter((c) => c.startsWith("GET /chunks/") || c.startsWith("GET /blobs/"))).toEqual([]);
     expect(b.adapter.text(".obsidian/app.json")).toBeUndefined();
     // The state persisted by the host is what the next run starts from.
     expect((await b.run()).report.pulled).toBe(0);
+  });
+
+  it("reads one by one from an older server without the batch routes (RFC 0002)", async () => {
+    const server = new FakeServer();
+    server.older = true;
+    const a = device(server, "0193a9f0-0000-7000-8000-0000000000a9");
+    const b = device(server, "0193a9f0-0000-7000-8000-0000000000b9");
+    a.adapter.put("one.md", "first\n".repeat(100));
+    a.adapter.put("two.md", "second\n".repeat(100));
+    await a.run();
+    server.calls = [];
+    expect((await b.run()).report.pulled).toBe(2);
+    expect(b.adapter.text("two.md")).toBe("second\n".repeat(100));
+    // One 405 per run, then single reads only.
+    expect(server.calls.filter((c) => c.includes("batch"))).toEqual(["POST /blobs/batch"]);
+    expect(server.calls.some((c) => c.startsWith("GET /chunks/"))).toBe(true);
   });
 
   it("does not write a note open in the editor, and retries later (decision 55)", async () => {

@@ -3,7 +3,11 @@
 //! KURA_TEST_VAULT_TOKEN, KURA_TEST_S3_ENDPOINT (bucket `kura-test`, keys
 //! `kura-dev` / `kura-dev-secret`, see `task dev:s3`).
 
-#![expect(clippy::unwrap_used, reason = "test helpers fail the test on purpose")]
+#![expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test helpers fail the test on purpose"
+)]
 
 mod common;
 
@@ -11,7 +15,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::app::{Env, env_with, problem, storage, vault_id};
+use common::app::{CONFIG, Env, env_with, problem, storage, vault_id};
 use futures_util::TryStreamExt as _;
 use kura_core::{ChunkHash, blob_hash};
 use kura_server::app::app;
@@ -369,4 +373,184 @@ async fn concurrent_uploads_respect_the_quota() {
         3,
         "{statuses:?}"
     );
+}
+
+/// `POST` of a JSON body; the raw answer.
+async fn post_raw(e: &Env, tok: &str, d: &str, uri: &str, body: Vec<u8>) -> (StatusCode, Vec<u8>) {
+    let req = Request::post(uri)
+        .header("authorization", format!("Bearer {tok}"))
+        .header("x-kura-device", d)
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    let r = app(e.state.clone()).oneshot(req).await.unwrap();
+    let status = r.status();
+    let bytes = axum::body::to_bytes(r.into_body(), 8 << 20).await.unwrap();
+    (status, bytes.to_vec())
+}
+
+/// `chunks/batch` records: (hash, Some(bytes) or None for missing).
+fn records(mut b: &[u8]) -> Vec<(String, Option<Vec<u8>>)> {
+    let mut out = Vec::new();
+    while !b.is_empty() {
+        let hash = ChunkHash::from_bytes(b[..32].try_into().unwrap()).to_string();
+        let status = b[32];
+        let len = u32::from_be_bytes(b[33..37].try_into().unwrap()) as usize;
+        let data = b[37..37 + len].to_vec();
+        out.push((hash, (status == 0).then_some(data)));
+        b = &b[37 + len..];
+    }
+    out
+}
+
+/// Uploads `data` as one chunk and a one-chunk file, committed; its blob hash.
+async fn stored_file(e: &Env, tok: &str, d: &str, v: &str, data: &[u8]) -> String {
+    let h = ChunkHash::of(data);
+    put(e, tok, d, v, &h.to_string(), data.to_vec()).await;
+    let blob = blob_hash(data.len() as u64, &[h]).to_string();
+    let (st, b) = e
+        .call(
+            "PUT",
+            &format!("/v1/vaults/{v}/blobs/{blob}"),
+            tok,
+            Some(d),
+            Some(json!({ "size": data.len(), "chunks": [h.to_string()] })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::NO_CONTENT, "{b}");
+    commit_blob(e, tok, d, v, &blob, data.len() as u64).await;
+    blob
+}
+
+/// RFC 0002: order kept, duplicates dropped, the 4 MiB cut, and an unknown
+/// chunk, an uncommitted one and a malformed request each answered as
+/// single reads would (T3), with the limits of §7.5 (T4).
+#[tokio::test]
+async fn batches_answer_in_order_within_their_budget() {
+    let Some((e, _s, tok, d, v)) = setup(module_path!()).await else {
+        return;
+    };
+    // Room for 5 MiB of chunks, to reach the 4 MiB cut.
+    let docs = CONFIG.replace(
+        "quota: { storage: 1Mi, maxFileSize: 2Mi }",
+        "quota: { storage: 16Mi, maxFileSize: 4Mi }",
+    );
+    assert_ne!(docs, CONFIG);
+    let dir = std::env::temp_dir().join(format!("kura-batch-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("config.yaml"), docs).unwrap();
+    let files = kura_server::reconcile::files::read_dir(&dir).unwrap();
+    kura_server::reconcile::reconcile(&e.t.app, &files, true)
+        .await
+        .unwrap();
+    e.state.set_snapshot(
+        kura_server::reconcile::snapshot::load_if_changed(&e.t.app, None)
+            .await
+            .unwrap()
+            .unwrap(),
+    );
+    let (a, b) = (b"alpha".to_vec(), b"bravo".to_vec());
+    let (big, bigger) = (vec![1u8; 3 << 20], vec![2u8; 2 << 20]);
+    let blob_a = stored_file(&e, &tok, &d, &v, &a).await;
+    stored_file(&e, &tok, &d, &v, &b).await;
+    stored_file(&e, &tok, &d, &v, &big).await;
+    stored_file(&e, &tok, &d, &v, &bigger).await;
+    // Uploaded but named by no entry: served by neither route.
+    let orphan = b"never committed".to_vec();
+    put(
+        &e,
+        &tok,
+        &d,
+        &v,
+        &ChunkHash::of(&orphan).to_string(),
+        orphan.clone(),
+    )
+    .await;
+    let h = |x: &[u8]| ChunkHash::of(x).to_string();
+    let unknown = h(b"nobody has this");
+    let uri = format!("/v1/vaults/{v}/chunks/batch");
+    let ask = |list: Vec<String>| serde_json::to_vec(&json!({ "chunks": list })).unwrap();
+
+    let (st, body) = post_raw(
+        &e,
+        &tok,
+        &d,
+        &uri,
+        ask(vec![h(&a), unknown.clone(), h(&a), h(&orphan), h(&b)]),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let got = records(&body);
+    assert_eq!(
+        got,
+        vec![
+            (h(&a), Some(a.clone())),
+            (unknown.clone(), None),
+            (h(&orphan), None),
+            (h(&b), Some(b.clone())),
+        ]
+    );
+    // An unknown hash and an uncommitted one: the same bytes but the hash.
+    // Records 2 and 3 start at 42 and 79 (after a 37-byte header and 5 bytes).
+    assert_eq!(body[42 + 32..42 + 37], body[79 + 32..79 + 37]);
+    assert_eq!(body[42 + 32..42 + 37], [1, 0, 0, 0, 0]);
+
+    // 3 MiB then 2 MiB: the second would pass 4 MiB, so it is left out.
+    let (_, body) = post_raw(&e, &tok, &d, &uri, ask(vec![h(&big), h(&bigger)])).await;
+    assert_eq!(records(&body), vec![(h(&big), Some(big.clone()))]);
+    let (_, body) = post_raw(&e, &tok, &d, &uri, ask(vec![h(&bigger)])).await;
+    assert_eq!(records(&body), vec![(h(&bigger), Some(bigger.clone()))]);
+
+    // Manifests: found ones in order, the rest missing.
+    let (st, body) = post_raw(
+        &e,
+        &tok,
+        &d,
+        &format!("/v1/vaults/{v}/blobs/batch"),
+        serde_json::to_vec(&json!({ "blobs": [blob_a, unknown] })).unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let r: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(r["manifests"][0]["hash"], blob_a);
+    assert_eq!(r["manifests"][0]["chunks"], json!([h(&a)]));
+    assert_eq!(r["missing"], json!([unknown]));
+
+    // Malformed: none, 1,001, a bad hash; a body past 128 KiB.
+    for bad in [vec![], vec![h(&a); 1001], vec!["ABC".to_owned()]] {
+        let (st, body) = post_raw(&e, &tok, &d, &uri, ask(bad)).await;
+        assert_eq!(
+            st,
+            StatusCode::BAD_REQUEST,
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+    let (st, _) = post_raw(&e, &tok, &d, &uri, vec![b' '; 129 << 10]).await;
+    assert_eq!(st, StatusCode::PAYLOAD_TOO_LARGE);
+
+    // Every batch slot of the replica taken: 429 before any work, never a
+    // 503 that the dependency alert would count.
+    let held = e.state.batches.try_acquire_many(8).unwrap();
+    let unavailable = e.state.metrics.unavailable_total.get();
+    let (st, _) = post_raw(&e, &tok, &d, &uri, ask(vec![h(&a)])).await;
+    assert_eq!(st, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(e.state.metrics.unavailable_total.get(), unavailable);
+    drop(held);
+    let found = e
+        .state
+        .metrics
+        .batch_items_total
+        .with_label_values(&["chunks", "found"])
+        .get();
+    assert_eq!(found, 4, "only what was sent was fetched");
+
+    // 60 calls a minute per device.
+    let mut last = StatusCode::OK;
+    for _ in 0..60 {
+        last = post_raw(&e, &tok, &d, &uri, ask(vec![unknown.clone()]))
+            .await
+            .0;
+    }
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
 }

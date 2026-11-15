@@ -160,6 +160,9 @@ struct AppRemote<'a> {
     tok: String,
     device: String,
     vault: String,
+    /// Reads through the batch routes (RFC 0002); one by one otherwise, as
+    /// against an older server.
+    batch: bool,
 }
 
 impl AppRemote<'_> {
@@ -260,6 +263,43 @@ impl Remote for AppRemote<'_> {
             serde_json::from_value(v["chunks"].clone()).unwrap(),
         ))
     }
+    async fn get_blobs(
+        &self,
+        hashes: &[ChunkHash],
+    ) -> Result<Option<Vec<(ChunkHash, u64, Vec<ChunkHash>)>>, RemoteError> {
+        if !self.batch {
+            return Ok(None);
+        }
+        let v: Value = self
+            .json("POST", "/blobs/batch", Some(json!({ "blobs": hashes })))
+            .await?;
+        Ok(Some(
+            v["manifests"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| {
+                    (
+                        m["hash"].as_str().unwrap().parse().unwrap(),
+                        m["size"].as_u64().unwrap(),
+                        serde_json::from_value(m["chunks"].clone()).unwrap(),
+                    )
+                })
+                .collect(),
+        ))
+    }
+    async fn get_chunk_records(
+        &self,
+        hashes: &[ChunkHash],
+    ) -> Result<Option<Vec<u8>>, RemoteError> {
+        if !self.batch {
+            return Ok(None);
+        }
+        let b = json!({ "chunks": hashes }).to_string().into_bytes();
+        self.send("POST", "/chunks/batch", Some((b, "application/json")))
+            .await
+            .map(Some)
+    }
     async fn commit(&self, req: &CommitRequest) -> Result<CommitResponse, RemoteError> {
         self.json("POST", "/commits", Some(serde_json::to_value(req).unwrap()))
             .await
@@ -333,6 +373,7 @@ async fn run(seed: u64) -> (usize, u64) {
                 tok: tok.clone(),
                 device: d,
                 vault: v.clone(),
+                batch: i % 2 == 0,
             },
             state: LocalState::new(device, vault),
         });
@@ -456,5 +497,13 @@ async fn run(seed: u64) -> (usize, u64) {
     eprintln!(
         "seed {seed}: {merged} merged, {attempted} merge conflicts, {conflicts} conflict files"
     );
+    // Half the devices read through the batch routes, half one by one.
+    let batched = e
+        .state
+        .metrics
+        .batch_items_total
+        .with_label_values(&["chunks", "found"])
+        .get();
+    assert!(batched > 0, "no chunk came through chunks/batch");
     (conflicts, merged)
 }

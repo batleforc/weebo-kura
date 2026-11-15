@@ -108,6 +108,21 @@ struct Scripted {
     rewound: bool,
     /// The vault's head, above every item served (changes elsewhere).
     head: u64,
+    /// Serves the batch routes of RFC 0002; an older server when false.
+    batch: bool,
+    /// Batch records carry other bytes than their hash names (T5).
+    forge: bool,
+    /// Records per `chunks/batch` answer; 0 for all asked.
+    per_call: usize,
+    /// `chunks/batch` answers a hash nobody asked for, and nothing else.
+    foreign: bool,
+    /// `blobs/batch` works but `chunks/batch` answers as an older server.
+    no_chunk_batch: bool,
+    /// Hashes asked of each `blobs/batch` call.
+    blob_asks: std::cell::RefCell<Vec<usize>>,
+    /// Single `get_blob` and `get_chunk` calls, and batch calls.
+    singles: Cell<usize>,
+    batches: Cell<usize>,
 }
 
 impl Remote for Scripted {
@@ -126,6 +141,7 @@ impl Remote for Scripted {
         Ok(())
     }
     async fn get_chunk(&self, h: &ChunkHash) -> Result<Vec<u8>, RemoteError> {
+        self.singles.set(self.singles.get() + 1);
         let data = self
             .serve
             .iter()
@@ -142,7 +158,70 @@ impl Remote for Scripted {
     async fn put_blob(&self, _: &ChunkHash, _: u64, _: &[ChunkHash]) -> Result<(), RemoteError> {
         Ok(())
     }
+    async fn get_blobs(
+        &self,
+        hashes: &[ChunkHash],
+    ) -> Result<Option<Vec<(ChunkHash, u64, Vec<ChunkHash>)>>, RemoteError> {
+        if !self.batch {
+            return Ok(None);
+        }
+        self.batches.set(self.batches.get() + 1);
+        self.blob_asks.borrow_mut().push(hashes.len());
+        Ok(Some(
+            self.serve
+                .iter()
+                .filter_map(|(s, d)| {
+                    s.blob
+                        .filter(|b| hashes.contains(b))
+                        .map(|b| (b, d.len() as u64, vec![ChunkHash::of(d)]))
+                })
+                .collect(),
+        ))
+    }
+    async fn get_chunk_records(
+        &self,
+        hashes: &[ChunkHash],
+    ) -> Result<Option<Vec<u8>>, RemoteError> {
+        if !self.batch || self.no_chunk_batch {
+            return Ok(None);
+        }
+        self.batches.set(self.batches.get() + 1);
+        let mut out = Vec::new();
+        if self.foreign {
+            out.extend_from_slice(ChunkHash::of(b"never asked").as_bytes());
+            out.extend_from_slice(&[0, 0, 0, 0, 1, b'x']);
+            return Ok(Some(out));
+        }
+        let n = if self.per_call == 0 {
+            hashes.len()
+        } else {
+            self.per_call
+        };
+        for h in hashes.iter().take(n) {
+            let data = self
+                .serve
+                .iter()
+                .find(|(_, d)| ChunkHash::of(d) == *h)
+                .map(|(_, d)| d.clone());
+            let data = if self.forge {
+                data.map(|_| b"forged".to_vec())
+            } else {
+                data
+            };
+            out.extend_from_slice(h.as_bytes());
+            match data {
+                Some(d) => {
+                    out.push(0);
+                    out.extend_from_slice(&u32::try_from(d.len()).unwrap().to_be_bytes());
+                    out.extend_from_slice(&d);
+                }
+                None => out.extend_from_slice(&[1, 0, 0, 0, 0]),
+            }
+        }
+        Ok(Some(out))
+    }
     async fn get_blob(&self, b: &ChunkHash) -> Result<(u64, Vec<ChunkHash>), RemoteError> {
+        self.singles.set(self.singles.get() + 1);
         let data = &self
             .serve
             .iter()
@@ -623,4 +702,113 @@ async fn the_configuration_takes_the_servers_copy_on_first_contact() {
     let r = sync(&host, &remote, &mut s, &o).await.unwrap();
     assert_eq!(host.files.borrow()["hotkeys.json"], b"{\"mine\": true}");
     assert_eq!((r.pulled, r.pushed), (1, 0), "{r:?}");
+}
+
+/// RFC 0002: a server with the batch routes is read in batches, with no
+/// single read; a forged record is dropped and the chunk read again (T5).
+#[tokio::test]
+async fn a_batched_pull_makes_no_single_reads_and_drops_forged_records() {
+    let files = [
+        ("a.md", &b"first"[..]),
+        ("b.md", b"second"),
+        ("c/d.md", b"third"),
+    ];
+    for forge in [false, true] {
+        let host = Mem::default();
+        let remote = Scripted {
+            serve: files
+                .iter()
+                .zip(1u8..)
+                .map(|((p, d), n)| served_as(p, d, n, u64::from(n)))
+                .collect(),
+            batch: true,
+            forge,
+            ..Scripted::default()
+        };
+        let r = sync(&host, &remote, &mut state(), &opts(false))
+            .await
+            .unwrap();
+        assert_eq!(r.pulled, 3, "{r:?}");
+        for (p, d) in files {
+            assert_eq!(host.files.borrow()[p], d, "{p}");
+        }
+        assert_eq!(
+            remote.batches.get(),
+            2,
+            "one call for manifests, one for chunks"
+        );
+        assert_eq!(
+            remote.singles.get(),
+            if forge { 3 } else { 0 },
+            "forge {forge}"
+        );
+    }
+}
+
+/// RFC 0002: the window asks again for what an answer left out, stops on an
+/// answer that settles nothing, reads one by one when chunk batches are
+/// missing, and closes at 16 MiB of stated size.
+#[tokio::test]
+async fn the_window_asks_again_stops_without_progress_and_closes_at_16_mib() {
+    let files: Vec<(String, Vec<u8>)> = (0..6u8)
+        .map(|i| (format!("big-{i}.bin"), vec![i; 3_500_000]))
+        .collect();
+    let serve = || -> Vec<(EntryState, Vec<u8>)> {
+        files
+            .iter()
+            .zip(1u8..)
+            .map(|((p, d), n)| served_as(p, d, n, u64::from(n)))
+            .collect()
+    };
+    let check = |host: &Mem| {
+        for (p, d) in &files {
+            assert_eq!(&host.files.borrow()[p.as_str()], d, "{p}");
+        }
+    };
+    let mut o = opts(false);
+    o.max_file_size = 1 << 30;
+    for (remote, singles, asks) in [
+        // One record per answer: asked again until all six are held.
+        (
+            Scripted {
+                serve: serve(),
+                batch: true,
+                per_call: 1,
+                ..Scripted::default()
+            },
+            0,
+            vec![4, 2],
+        ),
+        // Only a foreign hash: no progress, the window ends, chunks read singly.
+        (
+            Scripted {
+                serve: serve(),
+                batch: true,
+                foreign: true,
+                ..Scripted::default()
+            },
+            6,
+            vec![4, 2],
+        ),
+        // Manifests in a batch, chunks without one: batching stops for the
+        // run, so the second window reads its manifests singly too (2 + 6).
+        (
+            Scripted {
+                serve: serve(),
+                batch: true,
+                no_chunk_batch: true,
+                ..Scripted::default()
+            },
+            8,
+            vec![4],
+        ),
+    ] {
+        let host = Mem::default();
+        let r = sync(&host, &remote, &mut state(), &o).await.unwrap();
+        assert_eq!(r.pulled, 6, "{r:?}");
+        check(&host);
+        assert_eq!(remote.singles.get(), singles);
+        // 4 × 3.5 MB fit 16 MiB; the fifth opens a second window.
+        assert_eq!(*remote.blob_asks.borrow(), asks);
+    }
 }

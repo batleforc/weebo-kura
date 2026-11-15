@@ -251,7 +251,7 @@ revocation. Devices idle 180 days are purged daily; revoked ones are kept.
 | Log target `audit` | denials (problem, route template, client address, claimed device), device registration and revocation, binding and vault changes, configuration removals |
 | `kura_chunk_corrupt_total` | stored chunks failing their check on read: alert on any |
 | `QuotaBelowUsage` condition | in `GET /v1/admin/status`, a tenant storing more than its quota |
-| `429` with `Retry-After` | per-device rate limits (§4.4), held in each replica's memory |
+| `429` with `Retry-After` | per-device rate limits (§4.4), held in each replica's memory; the batch routes of RFC 0002 allow 60 calls a minute each |
 | `kura_vault_epoch_changes_total` | epochs regenerated after a promotion or a restore: alert on any (every device resyncs) |
 | `kura_commit_duration_seconds` | commit time; the budget is 200 ms at p95 (§10.3) |
 | `kura_notify_lag_seconds`, `kura_notify_queue_usage` | a replica's heartbeat round trip through `NOTIFY`; `pg_notification_queue_usage()` |
@@ -263,6 +263,7 @@ revocation. Devices idle 180 days are purged daily; revoked ones are kept.
 | `kura_deletions_scheduled` | tenants and vaults removed with `Delete`, in their grace period |
 | `kura_backup_last_success_timestamp_seconds`, `kura_storage_refreshed_timestamp_seconds` | the last bucket copy; the last storage refresh |
 | `kura_index_queue_depth` | search index jobs waiting |
+| `kura_batch_items_total{route,outcome}`, `kura_batch_response_bytes` | items asked of `blobs/batch` and `chunks/batch` (RFC 0002): `found` were fetched and sent, `missing` were unknown or not visible; the size of each chunk answer. A `chunks/batch` past the 8 a replica builds at once answers `429` with `Retry-After: 1`, so a busy replica never trips the dependency alert |
 | Log target `audit`, `scoped_token_used`, `scoped_token_created`, `scoped_token_revoked` | every use of a scoped token (id, route, client), its issue and revocation |
 | `kura_maintenance_failures_total` | vaults whose maintenance failed in a pass (the others went on): alert on a rise |
 | `kura_maintenance_deleted_total{outcome}` | revisions, entries, blobs, chunks, objects, orphans and purged vaults removed by maintenance |

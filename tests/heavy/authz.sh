@@ -2,7 +2,8 @@
 # RFC 0001 §6.P against the local stack (task dev:stack, then task dev:run),
 # the authorization observations: 3 (a scoped token from outside its
 # addresses), 4 (another tenant's vault looks missing), 5 (a revoked device
-# is refused while another device of the same user goes on).
+# is refused while another device of the same user goes on). RFC 0002
+# observation 2: a prefix token's chunk batch.
 # KURA_DEV_LOG: the dev server's log, to check observation 3's audit event.
 set -euo pipefail
 
@@ -60,6 +61,40 @@ for range in 10.99.0.0/16 127.0.0.0/8; do
   as alice token revoke notes "$id" >/dev/null
 done
 pass "3: scoped token refused outside its CIDR (403 address_not_allowed), last_used_at unchanged"
+
+# RFC 0002 observation 2: a token under agents/ asks chunks/batch for a chunk
+# inside and one outside: one found, one missing, one object fetched.
+mkdir -p "$work/notes/agents" "$work/notes/private"
+printf 'inside %s\n' "$$" > "$work/notes/agents/in-$$.md"
+printf 'outside %s\n' "$$" > "$work/notes/private/out-$$.md"
+as alice attach notes "$work/notes" --yes >/dev/null
+out=$(as alice token create notes --prefix agents/ --expires 1d --cidr 127.0.0.0/8)
+key=$(awk 'NF==1 && /^ *kura_/{print $1}' <<<"$out")
+dev_curl() { curl -sf -H "authorization: Bearer ${tokens[alice]}" -H "x-kura-device: $(device alice)" "$@"; }
+chunk_of() { # the first chunk of the live entry at this path
+  local blob
+  blob=$(sql "SELECT encode(r.blob_hash, 'hex') FROM entry e JOIN revision r ON r.id = e.head_revision WHERE e.vault_id = '$notes' AND e.path = '$1' AND NOT e.deleted")
+  dev_curl "$server/v1/vaults/$notes/blobs/$blob" | jq -r '.chunks[0]'
+}
+in_chunk=$(chunk_of "agents/in-$$.md"); out_chunk=$(chunk_of "private/out-$$.md")
+found() { curl -sf "${KURA_DEV_METRICS:-http://127.0.0.1:59090}/metrics" | awk '/^kura_batch_items_total\{outcome="found",route="chunks"\}/{print $2}'; }
+before=$(found); before=${before:-0}
+curl -sf -o "$work/records" -H "authorization: Bearer $key" -H 'content-type: application/json' \
+  -d "{\"chunks\":[\"$in_chunk\",\"$out_chunk\"]}" "$server/v1/vaults/$notes/chunks/batch" || fail "rfc0002-2: the batch was refused"
+statuses=$(python3 -I -c '
+import sys
+b = open(sys.argv[1], "rb").read()
+out = []
+while b:
+    n = int.from_bytes(b[33:37], "big")
+    out.append(b[:32].hex() + ":" + str(b[32]))
+    b = b[37 + n:]
+print(" ".join(out))' "$work/records")
+[ "$statuses" = "$in_chunk:0 $out_chunk:1" ] || fail "rfc0002-2: records $statuses"
+after=$(found)
+[ "$(( ${after%.*} - ${before%.*} ))" = 1 ] || fail "rfc0002-2: $before -> $after objects fetched"
+as alice token revoke notes "$(sed -E 's/^kura_([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})_.*/\1-\2-\3-\4-\5/' <<<"$key")" >/dev/null
+pass "rfc0002-2: a prefix token's batch serves the chunk inside, answers missing outside, fetches one object"
 
 # 4. Another tenant's vault and a vault that does not exist: the same 404, byte for byte.
 call() { curl -s -D - -o "$work/$1" -H "authorization: Bearer ${tokens[alice]}" -H "x-kura-device: $(device alice)" \

@@ -59,34 +59,62 @@ impl ReadAccess {
         hash: &kura_core::ChunkHash,
         chunk: bool,
     ) -> Result<bool, ApiError> {
-        // shortcut: the first 200 revisions naming the content are checked; a
+        Ok(self
+            .sees_contents(state, &[*hash], chunk)
+            .await?
+            .contains(hash))
+    }
+
+    /// [`Self::sees_content`] for many hashes in one query (RFC 0002 §5.2):
+    /// the same rule per hash, so a batch never sees more than single reads.
+    pub async fn sees_contents(
+        &self,
+        state: &SharedState,
+        hashes: &[kura_core::ChunkHash],
+        chunk: bool,
+    ) -> Result<std::collections::HashSet<kura_core::ChunkHash>, ApiError> {
+        // shortcut: the first 200 revisions naming each content are checked; a
         // chunk shared by more files outside the prefix may be refused (fails
         // closed). Index the content by entry if that ever bites.
+        // One set-based pass for every hash, 200 rows kept per hash. Not a
+        // per-hash `LATERAL … LIMIT 200`: with a new vault's stale statistics
+        // its nested loops scanned every revision per hash and passed the 5 s
+        // statement timeout (RFC 0002 plan D4).
         let sql = if chunk {
-            "SELECT r.path, e.path AS head FROM revision r JOIN entry e ON e.vault_id = r.vault_id AND e.id = r.entry_id
-             WHERE r.vault_id = $1 AND r.blob_hash IN (SELECT blob_hash FROM blob_chunk WHERE vault_id = $1 AND chunk_hash = $2)
-             LIMIT 200"
+            "WITH c AS (SELECT DISTINCT chunk_hash, blob_hash FROM blob_chunk WHERE vault_id = $1 AND chunk_hash = ANY($2)),
+             x AS (SELECT c.chunk_hash AS h, r.path, e.path AS head, row_number() OVER (PARTITION BY c.chunk_hash) AS n
+                   FROM c JOIN revision r ON r.vault_id = $1 AND r.blob_hash = c.blob_hash
+                   JOIN entry e ON e.vault_id = r.vault_id AND e.id = r.entry_id)
+             SELECT h, path, head FROM x WHERE n <= 200"
         } else {
-            "SELECT r.path, e.path AS head FROM revision r JOIN entry e ON e.vault_id = r.vault_id AND e.id = r.entry_id
-             WHERE r.vault_id = $1 AND r.blob_hash = $2 LIMIT 200"
+            "WITH x AS (SELECT r.blob_hash AS h, r.path, e.path AS head, row_number() OVER (PARTITION BY r.blob_hash) AS n
+                   FROM revision r JOIN entry e ON e.vault_id = r.vault_id AND e.id = r.entry_id
+                   WHERE r.vault_id = $1 AND r.blob_hash = ANY($2))
+             SELECT h, path, head FROM x WHERE n <= 200"
         };
+        let raw: Vec<Vec<u8>> = hashes.iter().map(|h| h.as_bytes().to_vec()).collect();
         // Under the caller's subject: another user's configuration is out of
         // row-level security's sight, so its content is never served (T14).
         let mut tx =
             crate::db::begin_tenant(&state.db, self.access.tenant, self.subject.as_deref()).await?;
         let rows = sqlx::query(sql)
             .bind(self.access.vault)
-            .bind(hash.as_bytes().as_slice())
+            .bind(&raw)
             .fetch_all(&mut *tx)
             .await?;
         tx.commit().await?;
+        let mut out = std::collections::HashSet::new();
         for r in &rows {
-            let (path, head): (String, String) = (r.try_get("path")?, r.try_get("head")?);
-            if self.sees(&path) && self.sees(&head) {
-                return Ok(true);
+            let (h, path, head): (Vec<u8>, String, String) =
+                (r.try_get("h")?, r.try_get("path")?, r.try_get("head")?);
+            if self.sees(&path)
+                && self.sees(&head)
+                && let Ok(b) = <[u8; 32]>::try_from(h.as_slice())
+            {
+                out.insert(kura_core::ChunkHash::from_bytes(b));
             }
         }
-        Ok(false)
+        Ok(out)
     }
 }
 

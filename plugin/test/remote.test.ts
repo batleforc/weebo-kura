@@ -75,4 +75,25 @@ describe("the API client", () => {
     await expect(bad.getBlob("b")).rejects.toThrow(/manifest/);
     expect(await bad.missing([])).toEqual([]);
   });
+
+  it("reads in batches, and falls back on an older server's 405 (RFC 0002)", async () => {
+    const calls: string[] = [];
+    const fetch: Fetch = (url, init) => {
+      calls.push(`${init.method ?? ""} ${url.replace("https://kura.test/v1/vaults/v1", "")} ${typeof init.body === "string" ? init.body : ""}`);
+      if (url.endsWith("/blobs/batch")) return Promise.resolve(json(200, { manifests: [{ hash: "b", size: 2, chunks: ["h1", 3] }, { nope: 1 }], missing: ["x"] }));
+      return Promise.resolve(new Response(new Uint8Array([7, 8]), { status: 200 }));
+    };
+    const r = api(fetch).a.remote("v1");
+    expect(await r.getBlobs(["b", "x"])).toEqual([{ hash: "b", size: 2, chunks: ["h1"] }]);
+    expect(await r.getChunkRecords(["h1"])).toEqual(new Uint8Array([7, 8]));
+    expect(calls).toEqual(['POST /blobs/batch {"blobs":["b","x"]}', 'POST /chunks/batch {"chunks":["h1"]}']);
+    const older = api(() => Promise.resolve(new Response(null, { status: 405 }))).a.remote("v1");
+    expect(await older.getBlobs(["b"])).toBeNull();
+    expect(await older.getChunkRecords(["h1"])).toBeNull();
+    const gone = api(() => Promise.resolve(json(404, { type: "/v1/problems/not_found" }))).a.remote("v1");
+    await expect(gone.getBlobs(["b"])).rejects.toMatchObject({ status: 404 });
+    await expect(gone.getChunkRecords(["h1"])).rejects.toMatchObject({ status: 404 });
+    const odd = api(() => Promise.resolve(json(200, { nope: 1 }))).a.remote("v1");
+    await expect(odd.getBlobs(["b"])).rejects.toThrow(/manifests/);
+  });
 });

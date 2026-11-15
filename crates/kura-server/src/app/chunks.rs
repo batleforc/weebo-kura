@@ -24,6 +24,14 @@ use object_store::ObjectStoreExt as _;
 pub const MAX_HASHES: usize = 1000;
 /// A chunk body (§4.3, §6.8).
 pub const MAX_CHUNK_BYTES: usize = kura_core::chunk::MAX_CHUNK;
+/// Chunk payload per `chunks/batch` answer (RFC 0002 §4.2).
+pub const MAX_BATCH_BYTES: usize = 4 << 20;
+/// Request body of the batch routes: 1,000 hashes of JSON (RFC 0002 §4.3).
+pub const MAX_BATCH_BODY: usize = 128 << 10;
+/// Objects one `chunks/batch` answer fetches at a time.
+pub const BATCH_FETCHES: usize = 8;
+/// `chunks/batch` answers one replica builds at once (RFC 0002 §7.5).
+pub const BATCHES_IN_FLIGHT: usize = 8;
 /// AES-GCM with random nonces: warn well before 2^32 encryptions under one key (§6.6).
 pub const ENCRYPTION_WARNING: i64 = 1 << 30;
 
@@ -378,22 +386,7 @@ pub(super) async fn read_chunk(
         .keys
         .get(&state.db, a.tenant, &a.tenant_slug, v)
         .await?;
-    let stored = store
-        .objects()
-        .get(&object_store::path::Path::from(object_key.as_str()))
-        .await
-        .map_err(|e| ApiError::Unavailable(e.to_string()))?
-        .bytes()
-        .await
-        .map_err(|e| ApiError::Unavailable(e.to_string()))?;
-    let opened = tokio::task::spawn_blocking(move || crypto::open(&key, v, &hash, &stored))
-        .await
-        .map_err(|e| ApiError::Unavailable(e.to_string()))?;
-    opened.map_err(|e| {
-        state.metrics.chunk_corrupt_total.inc();
-        tracing::error!(vault = %v, error = %e, "stored chunk failed its check");
-        ApiError::Unavailable(e.to_string())
-    })
+    open_object(state, key, v, hash, &object_key).await
 }
 
 /// A whole stored file version, chunk by chunk.
@@ -628,4 +621,296 @@ pub async fn get_blob(
         size: u64::try_from(size).unwrap_or(0),
         chunks,
     }))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlobBatchRequest {
+    /// Blob hashes, 64 lowercase hex characters each, 1 to 1,000.
+    pub blobs: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct HashedManifest {
+    pub hash: String,
+    /// File size in bytes.
+    pub size: u64,
+    /// Ordered chunk hashes.
+    pub chunks: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct BlobBatchResponse {
+    /// The manifests found, in request order.
+    pub manifests: Vec<HashedManifest>,
+    /// Unknown or not visible to the caller: the same answer for both.
+    pub missing: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChunkBatchRequest {
+    /// Chunk hashes, 64 lowercase hex characters each, 1 to 1,000.
+    pub chunks: Vec<String>,
+}
+
+/// 1 to 1,000 hashes, parsed, duplicates dropped, first occurrence kept.
+fn batch_hashes(list: &[String]) -> Result<Vec<ChunkHash>, ApiError> {
+    if list.is_empty() || list.len() > MAX_HASHES {
+        return Err(ApiError::with_detail(
+            ProblemType::InvalidRequest,
+            "between 1 and 1,000 hashes",
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(list.len());
+    for h in list {
+        let h = parse_hash(h)?;
+        if seen.insert(h) {
+            out.push(h);
+        }
+    }
+    Ok(out)
+}
+
+fn hash_of(raw: &[u8]) -> Option<ChunkHash> {
+    <[u8; 32]>::try_from(raw).ok().map(ChunkHash::from_bytes)
+}
+
+/// Many file manifests in one call (RFC 0002 §4.4).
+#[utoipa::path(
+    post,
+    path = "/vaults/{v}/blobs/batch",
+    tag = "chunks",
+    params(("v" = Uuid, Path, description = "Vault id"), ("X-Kura-Device" = Uuid, Header, description = "This device")),
+    request_body = BlobBatchRequest,
+    responses(
+        (status = 200, description = "Manifests found, and the hashes that were not", body = BlobBatchResponse),
+        (status = 400, description = "No hash, more than 1,000, or one malformed", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "No such vault", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("bearer_token" = [])),
+)]
+pub async fn batch_blobs(
+    State(state): State<SharedState>,
+    reader: super::reader::Reader,
+    Path(v): Path<Uuid>,
+    Body(body): Body<BlobBatchRequest>,
+) -> Result<Json<BlobBatchResponse>, ApiError> {
+    let ra = reader.access(&state, v, VaultRole::Viewer).await?;
+    let hashes = batch_hashes(&body.blobs)?;
+    let visible = ra.sees_contents(&state, &hashes, false).await?;
+    let raw: Vec<Vec<u8>> = hashes
+        .iter()
+        .filter(|h| visible.contains(h))
+        .map(|h| h.as_bytes().to_vec())
+        .collect();
+    let mut tx = db::begin_tenant(&state.db, ra.access.tenant, None).await?;
+    let sizes = sqlx::query("SELECT hash, size FROM blob WHERE vault_id = $1 AND hash = ANY($2)")
+        .bind(v)
+        .bind(&raw)
+        .fetch_all(&mut *tx)
+        .await?;
+    let parts = sqlx::query(
+        "SELECT blob_hash, chunk_hash FROM blob_chunk WHERE vault_id = $1 AND blob_hash = ANY($2) ORDER BY blob_hash, position",
+    )
+    .bind(v)
+    .bind(&raw)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let mut size_of = std::collections::HashMap::new();
+    for row in &sizes {
+        let (h, size): (Vec<u8>, i64) = (row.try_get("hash")?, row.try_get("size")?);
+        if let Some(h) = hash_of(&h) {
+            size_of.insert(h, u64::try_from(size).unwrap_or(0));
+        }
+    }
+    let mut chunks_of: std::collections::HashMap<ChunkHash, Vec<String>> =
+        std::collections::HashMap::new();
+    for row in &parts {
+        let (b, c): (Vec<u8>, Vec<u8>) = (row.try_get("blob_hash")?, row.try_get("chunk_hash")?);
+        if let (Some(b), Some(c)) = (hash_of(&b), hash_of(&c)) {
+            chunks_of.entry(b).or_default().push(c.to_string());
+        }
+    }
+    let mut out = BlobBatchResponse {
+        manifests: Vec::new(),
+        missing: Vec::new(),
+    };
+    for h in hashes {
+        match size_of.get(&h) {
+            Some(&size) => out.manifests.push(HashedManifest {
+                hash: h.to_string(),
+                size,
+                chunks: chunks_of.remove(&h).unwrap_or_default(),
+            }),
+            None => out.missing.push(h.to_string()),
+        }
+    }
+    let m = &state.metrics.batch_items_total;
+    m.with_label_values(&["blobs", "found"])
+        .inc_by(out.manifests.len() as u64);
+    m.with_label_values(&["blobs", "missing"])
+        .inc_by(out.missing.len() as u64);
+    Ok(Json(out))
+}
+
+/// Many chunks in one answer, decrypted, at most 4 MiB of them (RFC 0002
+/// §4.4): records `hash[32] status[1] length[4, big-endian] bytes`, status
+/// 0 found, 1 missing (unknown or not visible). Hashes past the budget are
+/// left out; the client asks for them again.
+#[utoipa::path(
+    post,
+    path = "/vaults/{v}/chunks/batch",
+    tag = "chunks",
+    params(("v" = Uuid, Path, description = "Vault id"), ("X-Kura-Device" = Uuid, Header, description = "This device")),
+    request_body = ChunkBatchRequest,
+    responses(
+        (status = 200, description = "Records in request order, up to 4 MiB of chunks", body = Vec<u8>, content_type = "application/octet-stream"),
+        (status = 400, description = "No hash, more than 1,000, or one malformed", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "No such vault", body = Problem, content_type = "application/problem+json"),
+        (status = 429, description = "Over 60 calls a minute, or this replica already builds 8 answers; retry after `Retry-After`", body = Problem, content_type = "application/problem+json"),
+        (status = 503, description = "Storage failing; retry after `Retry-After`", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("bearer_token" = [])),
+)]
+pub async fn batch_chunks(
+    State(state): State<SharedState>,
+    reader: super::reader::Reader,
+    Path(v): Path<Uuid>,
+    Body(body): Body<ChunkBatchRequest>,
+) -> Result<Response, ApiError> {
+    use futures_util::StreamExt as _;
+    let ra = reader.access(&state, v, VaultRole::Viewer).await?;
+    let hashes = batch_hashes(&body.chunks)?;
+    // Memory per replica is bounded before any work is done (T4). A busy
+    // replica is not a failing dependency: 429, never counted as a 503.
+    let Ok(_permit) = state.batches.try_acquire() else {
+        return Err(ApiError::RateLimited(1));
+    };
+    let visible = ra.sees_contents(&state, &hashes, true).await?;
+    let a = &ra.access;
+    let raw: Vec<Vec<u8>> = hashes
+        .iter()
+        .filter(|h| visible.contains(h))
+        .map(|h| h.as_bytes().to_vec())
+        .collect();
+    let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
+    let rows = sqlx::query(
+        "SELECT hash, size, object_key FROM chunk WHERE vault_id = $1 AND hash = ANY($2)",
+    )
+    .bind(v)
+    .bind(&raw)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let mut stored = std::collections::HashMap::new();
+    for row in &rows {
+        let (h, size, key): (Vec<u8>, i32, String) = (
+            row.try_get("hash")?,
+            row.try_get("size")?,
+            row.try_get("object_key")?,
+        );
+        if let Some(h) = hash_of(&h) {
+            stored.insert(h, (usize::try_from(size).unwrap_or(usize::MAX), key));
+        }
+    }
+    // In request order until the next chunk would pass the budget; the
+    // budget comes from the stored sizes, so nothing is fetched to be dropped.
+    let mut plan: Vec<(ChunkHash, Option<String>)> = Vec::new();
+    let mut budget = 0usize;
+    for h in hashes {
+        match stored.remove(&h) {
+            Some((size, key)) => {
+                let next = budget.saturating_add(size);
+                if budget > 0 && next > MAX_BATCH_BYTES {
+                    break;
+                }
+                budget = next;
+                plan.push((h, Some(key)));
+            }
+            None => plan.push((h, None)),
+        }
+    }
+    let found = plan.iter().filter(|(_, k)| k.is_some()).count();
+    let data_key = if found > 0 {
+        Some(
+            storage(&state)?
+                .keys
+                .get(&state.db, a.tenant, &a.tenant_slug, v)
+                .await?,
+        )
+    } else {
+        None
+    };
+    let jobs: Vec<(ChunkHash, Option<String>)> = plan.clone();
+    let parts: Vec<Result<Option<Vec<u8>>, ApiError>> = futures_util::stream::iter(jobs)
+        .map(|(h, key)| {
+            let (state, data_key) = (state.clone(), data_key.clone());
+            async move {
+                let (Some(key), Some(data_key)) = (key, data_key) else {
+                    return Ok(None);
+                };
+                open_object(&state, data_key, v, h, &key).await.map(Some)
+            }
+        })
+        .buffered(BATCH_FETCHES)
+        .collect()
+        .await;
+    let mut out = Vec::with_capacity(budget.saturating_add(plan.len().saturating_mul(37)));
+    for ((h, _), part) in plan.iter().zip(parts) {
+        out.extend_from_slice(h.as_bytes());
+        match part? {
+            Some(bytes) => {
+                out.push(0);
+                out.extend_from_slice(
+                    &u32::try_from(bytes.len()).unwrap_or(u32::MAX).to_be_bytes(),
+                );
+                out.extend_from_slice(&bytes);
+            }
+            None => {
+                out.push(1);
+                out.extend_from_slice(&0u32.to_be_bytes());
+            }
+        }
+    }
+    let m = &state.metrics.batch_items_total;
+    m.with_label_values(&["chunks", "found"])
+        .inc_by(found as u64);
+    m.with_label_values(&["chunks", "missing"])
+        .inc_by(plan.len().saturating_sub(found) as u64);
+    state.metrics.batch_response_bytes.observe(out.len() as f64);
+    let mut response = (StatusCode::OK, out).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    Ok(response)
+}
+
+/// One stored object, decrypted with the vault's key and checked against its address.
+async fn open_object(
+    state: &SharedState,
+    key: std::sync::Arc<crypto::DataKey>,
+    v: Uuid,
+    hash: ChunkHash,
+    object_key: &str,
+) -> Result<Vec<u8>, ApiError> {
+    let stored = storage(state)?
+        .objects()
+        .get(&object_store::path::Path::from(object_key))
+        .await
+        .map_err(|e| ApiError::Unavailable(e.to_string()))?
+        .bytes()
+        .await
+        .map_err(|e| ApiError::Unavailable(e.to_string()))?;
+    let opened = tokio::task::spawn_blocking(move || crypto::open(&key, v, &hash, &stored))
+        .await
+        .map_err(|e| ApiError::Unavailable(e.to_string()))?;
+    opened.map_err(|e| {
+        state.metrics.chunk_corrupt_total.inc();
+        tracing::error!(vault = %v, error = %e, "stored chunk failed its check");
+        ApiError::Unavailable(e.to_string())
+    })
 }
