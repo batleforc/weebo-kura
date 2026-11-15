@@ -3,7 +3,8 @@
 # the authorization observations: 3 (a scoped token from outside its
 # addresses), 4 (another tenant's vault looks missing), 5 (a revoked device
 # is refused while another device of the same user goes on). RFC 0002
-# observation 2: a prefix token's chunk batch.
+# observations 2 (a prefix token's chunk batch) and 3 (another member's
+# configuration, unseen in a batch).
 # KURA_DEV_LOG: the dev server's log, to check observation 3's audit event.
 set -euo pipefail
 
@@ -95,6 +96,43 @@ after=$(found)
 [ "$(( ${after%.*} - ${before%.*} ))" = 1 ] || fail "rfc0002-2: $before -> $after objects fetched"
 as alice token revoke notes "$(sed -E 's/^kura_([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})_.*/\1-\2-\3-\4-\5/' <<<"$key")" >/dev/null
 pass "rfc0002-2: a prefix token's batch serves the chunk inside, answers missing outside, fetches one object"
+
+# RFC 0002 observation 3: bob asks chunks/batch for a chunk of alice's own
+# .obsidian (vault `obsidian`, configSync): the record is byte for byte the
+# one a random hash gets; alice herself gets it.
+mkdir -p "$work/obs/.obsidian/snippets"
+printf '.alice-%s { color: red; }\n' "$$" > "$work/obs/.obsidian/snippets/alice-$$.css"
+as alice attach obsidian "$work/obs" --yes >/dev/null
+obsv=$(vault obsidian)
+cfg_blob=$(sql "SELECT encode(r.blob_hash, 'hex') FROM entry e JOIN revision r ON r.id = e.head_revision WHERE e.vault_id = '$obsv' AND e.namespace = 'config:desktop' AND e.path = 'snippets/alice-$$.css' AND NOT e.deleted")
+[ -n "$cfg_blob" ] || fail "rfc0002-3: alice's snippet was not pushed to her configuration"
+cfg_chunk=$(sql "SELECT encode(chunk_hash, 'hex') FROM blob_chunk WHERE vault_id = '$obsv' AND blob_hash = decode('$cfg_blob', 'hex') AND position = 0")
+random=$(printf 'nobody %s' "$$" | sha256sum | cut -c1-64)
+batch_as() { # batch_as <who> <hash>…: the record headers (status and length) of a chunks/batch answer
+  local who=$1; shift
+  local list; list=$(printf '"%s",' "$@"); list="[${list%,}]"
+  curl -sf -o "$work/rec-$who" -H "authorization: Bearer ${tokens[$who]}" -H "x-kura-device: $(device "$who")" \
+    -H 'content-type: application/json' -d "{\"chunks\":$list}" "$server/v1/vaults/$obsv/chunks/batch" || fail "rfc0002-3: $who's batch refused"
+  python3 -I -c '
+import sys
+b = open(sys.argv[1], "rb").read()
+out = []
+while b:
+    n = int.from_bytes(b[33:37], "big")
+    out.append(str(b[32]) + "/" + str(n))
+    b = b[37 + n:]
+print(" ".join(out))' "$work/rec-$who"
+}
+theirs=$(batch_as bob1 "$cfg_chunk" "$random")
+[ "$theirs" = "1/0 1/0" ] || fail "rfc0002-3: bob got $theirs for alice's chunk and a random one"
+mine=$(batch_as alice "$cfg_chunk")
+[ "${mine%%/*}" = 0 ] || fail "rfc0002-3: alice did not get her own chunk: $mine"
+# Alice's real Obsidian syncs this configuration too: the snippet goes again.
+rm "$work/obs/.obsidian/snippets/alice-$$.css"
+as alice sync obsidian >/dev/null
+left=$(sql "SELECT count(*) FROM entry WHERE vault_id = '$obsv' AND path = 'snippets/alice-$$.css' AND NOT deleted")
+[ "$left" = 0 ] || fail "rfc0002-3: the test snippet is still in alice's configuration"
+pass "rfc0002-3: another member's batch gets alice's configuration chunk as an unknown hash; alice gets it"
 
 # 4. Another tenant's vault and a vault that does not exist: the same 404, byte for byte.
 call() { curl -s -D - -o "$work/$1" -H "authorization: Bearer ${tokens[alice]}" -H "x-kura-device: $(device alice)" \

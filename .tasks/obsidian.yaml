@@ -1,7 +1,7 @@
 # Obsidian by hand against the local stack (RFC 0001 §6.P observation 12,
 # decisions 53–55; RFC 0002 observation 4): trust the dev CA, put the plugin
-# into a vault, show what to type in its settings. Desktop only for now: the
-# stack listens on loopback, so a phone or an Android VM cannot reach it yet.
+# into a vault, show what to type in its settings; on the desktop, or in an
+# Android emulator reaching the loopback-only stack through `adb reverse`.
 version: "3"
 
 silent: true
@@ -49,3 +49,28 @@ tasks:
         echo "  Vault         obsidian (syncs .obsidian: plugins, snippets, themes, hotkeys) or notes"
         curl -sf {{.SERVER}}/readyz >/dev/null || echo "warning: no server on {{.SERVER}}: task dev:run"
         trust list --filter=ca-anchors 2>/dev/null | grep -q "kura" || echo "warning: the dev CA does not look trusted: task obsidian:ca:trust"
+
+  # Android: an emulator on this PC (dev/android.sh says how it reaches the
+  # stack). Not run yet: setup downloads about 3 GB.
+  android:setup:
+    desc: "Install the Android emulator and a Google APIs image (about 3 GB under ~/Android/Sdk), and create the AVD kura-dev"
+    cmds:
+      - dev/android.sh setup
+
+  android:start:
+    desc: "Boot the kura-dev emulator, trust the dev CA in its system store and reverse ports 58080 and 59443 to this PC"
+    cmds:
+      - dev/android.sh start
+
+  android:obsidian:
+    desc: "Install Obsidian in the emulator: the APK of its latest GitHub release, or APK=<file>"
+    cmds:
+      - dev/android.sh obsidian {{.APK}}
+
+  android:deploy:
+    desc: "Build the plugin and copy it into an emulator vault under Documents (usage: task android:deploy VAULT=test)"
+    requires:
+      vars: [VAULT]
+    cmds:
+      - task: plugin:build
+      - dev/android.sh deploy "{{.VAULT}}"

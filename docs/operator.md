@@ -359,6 +359,7 @@ Rootless podman, one container at a time, every port on loopback:
 | `task perf:run:commit`, `:pull`, `:resync`, `perf:attach`, `perf:soak` | k6 load (§10.3), decision 42's first attach of 10,000 notes, the memory soak |
 | `task dev:token [AS=alice]` | An access token by the device code flow, no browser |
 | `task obsidian:ca:trust` / `obsidian:ca:untrust` | Trust (or stop trusting) the dev CA system-wide with `sudo trust anchor`, so Obsidian accepts Authentik on `https://localhost:59443` |
+| `task android:setup`, `android:start`, `android:obsidian [APK=…]`, `android:deploy VAULT=…` | An Android emulator (Google APIs image, about 3 GB under `~/Android/Sdk`, KVM) for the plugin on mobile: the dev CA goes into its system store (`adb root`, `-writable-system`), `adb reverse` maps its `localhost:58080` and `:59443` to this PC, so the stack stays on loopback and the URLs are the desktop's ([`dev/android.sh`](../dev/android.sh)) |
 | `task obsidian:deploy VAULT=<folder>` | Build the plugin, copy it into that Obsidian vault and print its settings; the dev vault `obsidian` syncs `.obsidian` (plugins, snippets, themes, hotkeys), `notes` is the heavy suites' |
 | `task dev:down` | Removes the containers and the network |
 | `task test:heavy` | The §6.P proof with the real `kura` binary, once `dev:run` serves (`tests/heavy/sync.sh`, `authz.sh`; `KURA_DEV_LOG=<file>` checks observation 3's audit event) |
