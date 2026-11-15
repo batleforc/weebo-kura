@@ -11,6 +11,7 @@ Nov 13, 2026 · @Maxime
 | Co-author | Claude Fable 5.2 |
 | Created | 2026-11-13 |
 | Supersedes | — |
+| Revisited by | RFC 0003 (non-goal "a web UI"), RFC 0004 (decision 10 and non-goal "write access for agents"), RFC 0005 (viewers limited to folders); all In review, nothing here changes until they are accepted |
 | Touches | New repository: `crates/kura-api`, `crates/kura-server`, `crates/kura-core`, `crates/kura-cli`, `plugin/`, `helm/`, `Containerfile`, `Containerfile.hardened`, `fuzz/`, `tests/heavy/`, `Taskfile.yml`, `.tasks/`, `docs/` |
 | Risk | high |
 
