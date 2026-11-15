@@ -13,6 +13,7 @@ includes:
   plugin: { taskfile: ./.tasks/plugin.yaml, flatten: true }
   deploy: { taskfile: ./.tasks/deploy.yaml, flatten: true }
   perf: { taskfile: ./.tasks/perf.yaml, flatten: true }
+  obsidian: { taskfile: ./.tasks/obsidian.yaml, flatten: true }
 
 tasks:
   init:

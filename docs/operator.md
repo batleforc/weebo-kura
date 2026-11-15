@@ -358,6 +358,8 @@ Rootless podman, one container at a time, every port on loopback:
 | `task dev:drill` | The restore drill of §12 on the local stack |
 | `task perf:run:commit`, `:pull`, `:resync`, `perf:attach`, `perf:soak` | k6 load (§10.3), decision 42's first attach of 10,000 notes, the memory soak |
 | `task dev:token [AS=alice]` | An access token by the device code flow, no browser |
+| `task obsidian:ca:trust` / `obsidian:ca:untrust` | Trust (or stop trusting) the dev CA system-wide with `sudo trust anchor`, so Obsidian accepts Authentik on `https://localhost:59443` |
+| `task obsidian:deploy VAULT=<folder>` | Build the plugin, copy it into that Obsidian vault and print its settings; the dev vault `obsidian` syncs `.obsidian` (plugins, snippets, themes, hotkeys), `notes` is the heavy suites' |
 | `task dev:down` | Removes the containers and the network |
 | `task test:heavy` | The §6.P proof with the real `kura` binary, once `dev:run` serves (`tests/heavy/sync.sh`, `authz.sh`; `KURA_DEV_LOG=<file>` checks observation 3's audit event) |
 

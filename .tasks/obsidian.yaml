@@ -1,0 +1,51 @@
+# Obsidian by hand against the local stack (RFC 0001 §6.P observation 12,
+# decisions 53–55; RFC 0002 observation 4): trust the dev CA, put the plugin
+# into a vault, show what to type in its settings. Desktop only for now: the
+# stack listens on loopback, so a phone or an Android VM cannot reach it yet.
+version: "3"
+
+silent: true
+
+vars:
+  CA: dev/certs/ca.pem
+  SERVER: http://127.0.0.1:58080
+  SIGN_IN: https://localhost:59443/application/o/kura-plugin/
+
+tasks:
+  obsidian:ca:trust:
+    desc: "Trust the dev CA system-wide (sudo, p11-kit), so Obsidian accepts Authentik at https://localhost:59443"
+    preconditions:
+      - sh: test -f {{.CA}}
+        msg: "no {{.CA}}: run task dev:stack first"
+    cmds:
+      - sudo trust anchor --store {{.CA}}
+      - echo "dev CA trusted; remove it with task obsidian:ca:untrust"
+
+  obsidian:ca:untrust:
+    desc: Remove the dev CA from the system trust store
+    cmds:
+      - sudo trust anchor --remove {{.CA}}
+      - echo "dev CA no longer trusted"
+
+  obsidian:deploy:
+    desc: "Build the plugin and copy it into an Obsidian vault, then print its settings (usage: task obsidian:deploy VAULT=~/Obsidian/test)"
+    requires:
+      vars: [VAULT]
+    preconditions:
+      - sh: test -d "{{.VAULT}}"
+        msg: "{{.VAULT}} is not a folder: create the vault in Obsidian first"
+    cmds:
+      - task: plugin:build
+      - |
+        dir="{{.VAULT}}/.obsidian/plugins/weebo-kura"
+        mkdir -p "$dir"
+        cp plugin/main.js plugin/manifest.json plugin/styles.css "$dir/"
+        echo "Kura Sync copied into $dir"
+        echo
+        echo "In Obsidian: Settings > Community plugins > turn on Kura Sync (reload the app if it is not listed)."
+        echo "  Server        {{.SERVER}}"
+        echo "  Sign-in URL   {{.SIGN_IN}}"
+        echo "  Sign in       alice / kura-dev (bob for a second member)"
+        echo "  Vault         obsidian (syncs .obsidian: plugins, snippets, themes, hotkeys) or notes"
+        curl -sf {{.SERVER}}/readyz >/dev/null || echo "warning: no server on {{.SERVER}}: task dev:run"
+        trust list --filter=ca-anchors 2>/dev/null | grep -q "kura" || echo "warning: the dev CA does not look trusted: task obsidian:ca:trust"

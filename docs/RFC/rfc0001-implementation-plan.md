@@ -85,6 +85,7 @@ Updated as each item lands. Commits are made by the maintainer (signed), so
 | PR 9.2 | **open** (maintainer) | | Export Notion, convert with Obsidian's importer, `kura attach` (answer no) until nothing is unsyncable, push, `kura verify` prints `Equal.`; Notion read-only from the export date; one month of use; close Notion |
 | PR 9.3 | done | 2026-11-14 | Review V4's open half: an open socket re-checks the vault role on every 30 s ping (the first at once) with the claims of the token behind its ticket (migration `0016`, additive: `ws_ticket.claims`, `kura_ws_ticket_consume` returns them), and closes 4005 `access_revoked` when a binding, a mapping or the vault is gone; a ticket without a subject is spent (4003). Clients need no change: they reconnect, and the ticket request is refused. Test `a_socket_closes_when_its_caller_loses_the_vault`; heavy observation 1 passes with real Authentik claims |
 | PR 9.4 | done | 2026-11-15 | Phase 1 review leftovers R5 and R6 fixed (see their rows); 216 Rust tests. RFC 0002 (batched transfers) drafted, Draft, three questions open |
+| Obsidian by hand | ready | 2026-11-15 | `task obsidian:ca:trust`, `task obsidian:deploy VAULT=…` and the dev vault `obsidian` (with `configSync`, apart from the heavy suites' `notes`) for observation 12 and decisions 53–55 on desktop. Android needs more: an Android VM (emulator) on the dev PC, and the stack reachable from it (today every port listens on loopback, and the dev certificate names only `localhost`) |
 
 ## 0. Before the first line of code
 
