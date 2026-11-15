@@ -554,3 +554,33 @@ async fn batches_answer_in_order_within_their_budget() {
     }
     assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
 }
+
+/// Review 2026-11-15 #3: when the commit itself fails, the row may or may
+/// not have landed, so the object is left for the orphan sweep instead of
+/// deleted (a deleted object under a landed row loses the version for good).
+/// A refusal before the commit still deletes it.
+#[tokio::test]
+async fn a_failed_commit_leaves_the_object_for_the_sweep() {
+    let Some((e, s, tok, d, v)) = setup(module_path!()).await else {
+        return;
+    };
+    // Fails at COMMIT, after the insert ran: the ambiguous case.
+    for sql in [
+        "CREATE FUNCTION fail_at_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'commit lost'; END $$",
+        "CREATE CONSTRAINT TRIGGER fail_at_commit AFTER INSERT ON chunk DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fail_at_commit()",
+    ] {
+        sqlx::query(sql).execute(&e.t.owner).await.unwrap();
+    }
+    let data = b"a chunk whose commit fails".to_vec();
+    let (status, _) = put(&e, &tok, &d, &v, &ChunkHash::of(&data).to_string(), data).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        objects(&s, &v).await.len(),
+        1,
+        "the object is kept for the sweep"
+    );
+    sqlx::query("DROP TRIGGER fail_at_commit ON chunk")
+        .execute(&e.t.owner)
+        .await
+        .unwrap();
+}

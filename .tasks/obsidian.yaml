@@ -17,6 +17,8 @@ tasks:
     preconditions:
       - sh: test -f {{.CA}}
         msg: "no {{.CA}}: run task dev:stack first"
+      - sh: openssl x509 -in {{.CA}} -noout -ext nameConstraints 2>/dev/null | grep -q localhost
+        msg: "{{.CA}} is not limited to localhost: run task dev:certs:renew before trusting it"
     cmds:
       - sudo trust anchor --store {{.CA}}
       - echo "dev CA trusted; remove it with task obsidian:ca:untrust"

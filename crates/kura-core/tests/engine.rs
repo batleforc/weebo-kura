@@ -812,3 +812,38 @@ async fn the_window_asks_again_stops_without_progress_and_closes_at_16_mib() {
         assert_eq!(*remote.blob_asks.borrow(), asks);
     }
 }
+
+/// Review 2026-11-15 #1: a synced file that grows past the size limit is
+/// reported as unsyncable and stays known; it is never pushed as a deletion
+/// (which would trash it on every other device).
+#[tokio::test]
+async fn a_known_file_grown_past_the_limit_is_not_deleted() {
+    let host = Mem::default();
+    host.files
+        .borrow_mut()
+        .insert("talk.pdf".into(), b"small".to_vec());
+    let mut s = state();
+    let path = VaultPath::parse("talk.pdf").unwrap();
+    let meta = host.stat(&path).await.unwrap().unwrap();
+    let entry = EntryId::new(1, &[7; 10]);
+    s.entries.insert(
+        entry,
+        kura_core::sync::Known {
+            path: path.clone(),
+            revision: Uuid::from_u128(9),
+            blob: blob_hash(5, &[ChunkHash::of(b"small")]),
+            size: 5,
+            stamp: Some(kura_core::sync::Stamp::from(&meta)),
+            resend: false,
+        },
+    );
+    // Now larger than opts' limit; any commit would fail (no reply scripted).
+    host.files
+        .borrow_mut()
+        .insert("talk.pdf".into(), vec![b'x'; 101]);
+    let remote = Scripted::default();
+    let r = sync(&host, &remote, &mut s, &opts(false)).await.unwrap();
+    assert_eq!(r.pushed, 0, "no deletion pushed: {r:?}");
+    assert_eq!(r.unsyncable.len(), 1);
+    assert!(s.entries.contains_key(&entry), "still known");
+}

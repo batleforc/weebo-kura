@@ -69,17 +69,39 @@ tasks:
       - echo "export KURA_TEST_S3_ENDPOINT=http://127.0.0.1:{{.S3_PORT}}"
 
   dev:certs:
-    desc: "Create a local CA and a localhost certificate in dev/certs/ (gitignored), so Authentik serves the https issuer server.yaml requires"
+    desc: "Create a local CA, limited to localhost and 127.0.0.0/8, and a localhost certificate in dev/certs/ (gitignored), so Authentik serves the https issuer server.yaml requires"
+    # An older CA without name constraints is replaced (review 2026-11-15 #13).
     status:
       - test -f dev/certs/ca.pem -a -f dev/certs/localhost.pem -a -f dev/certs/localhost.key
+      - openssl x509 -in dev/certs/ca.pem -noout -ext nameConstraints 2>/dev/null | grep -q localhost
     cmds:
-      - mkdir -p dev/certs
-      - openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 825 -subj "/CN=kura dev CA" -keyout dev/certs/ca.key -out dev/certs/ca.pem -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign"
+      - rm -rf dev/certs && mkdir -p dev/certs
+      # Name constraints: even a stolen copy signs nothing but localhost, so
+      # trusting it system-wide (task obsidian:ca:trust) opens nothing else.
+      - openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 825 -subj "/CN=kura dev CA" -keyout dev/certs/ca.key -out dev/certs/ca.pem -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign" -addext "nameConstraints=critical,permitted;DNS:localhost,permitted;IP:127.0.0.0/255.0.0.0"
       - openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=localhost" -keyout dev/certs/localhost.key -out dev/certs/localhost.csr
       - openssl x509 -req -in dev/certs/localhost.csr -CA dev/certs/ca.pem -CAkey dev/certs/ca.key -days 825 -out dev/certs/localhost.pem -extfile <(printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\nbasicConstraints=CA:FALSE\n')
-      - rm dev/certs/localhost.csr
+      # The CA key signs this one certificate, then is gone.
+      - rm dev/certs/localhost.csr dev/certs/ca.key
       # Authentik reads them as another user.
       - chmod 644 dev/certs/localhost.key
+
+  dev:certs:renew:
+    desc: "Replace dev/certs (an older unconstrained CA included) on a running stack: new certificates, Authentik's keypair re-applied, its server restarted"
+    cmds:
+      - task: dev:certs
+      # The keypair lives in Authentik's database: re-apply the blueprint that
+      # reads it, then restart the server, which caches the served certificate.
+      - podman exec kura-dev-authentik-worker ak apply_blueprint /blueprints/kura/kura.yaml >/dev/null 2>&1
+      - podman restart kura-dev-authentik-server >/dev/null
+      - |
+        for _ in $(seq 100); do
+          curl -sf --cacert dev/certs/ca.pem https://localhost:{{.AK_PORT}}/application/o/kura/.well-known/openid-configuration >/dev/null && break
+          sleep 3
+        done
+        curl -sf --cacert dev/certs/ca.pem https://localhost:{{.AK_PORT}}/application/o/kura/.well-known/openid-configuration >/dev/null \
+          || { echo "Authentik does not serve the new certificate yet" >&2; exit 1; }
+        echo "dev certificates renewed; restart task dev:run, and run task obsidian:ca:trust again if you trusted the old CA"
 
   dev:env:
     desc: Generate Authentik's secret key and admin password into dev/.env.local (gitignored), printed once

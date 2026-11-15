@@ -289,6 +289,15 @@ async fn reapplying_keeps_api_bindings_and_skips_unchanged_files() {
     .execute(&t.owner)
     .await
     .unwrap();
+    let ids = |pool: sqlx::PgPool| async move {
+        sqlx::query_scalar::<_, String>(
+            "SELECT subject || '=' || id::text FROM role_binding WHERE managed_by = 'config' ORDER BY subject",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+    };
+    let before = ids(t.owner.clone()).await;
     let edited = [
         tenant("a", ""),
         vault("a", "notes").replace("role: editor", "role: manager"),
@@ -303,9 +312,41 @@ async fn reapplying_keeps_api_bindings_and_skips_unchanged_files() {
             .await
             .unwrap();
     assert_eq!(roles, ["manager:config", "viewer:config", "viewer:api"]);
+    // A re-applied binding keeps its row, so a scoped token granted through it
+    // survives any configuration change (review 2026-11-15 #2).
+    assert_eq!(
+        ids(t.owner.clone()).await,
+        before,
+        "same ids after a role change"
+    );
+    let dropped = [
+        tenant("a", ""),
+        vault("a", "notes").replace("    - { role: viewer, subject: sub-1 }\n", ""),
+    ];
+    apply(&t.app, &dropped).await;
+    let left: Vec<String> = sqlx::query_scalar(
+        "SELECT subject || ':' || managed_by FROM role_binding ORDER BY subject",
+    )
+    .fetch_all(&t.owner)
+    .await
+    .unwrap();
+    assert_eq!(
+        left,
+        ["g-a:config", "sub-api:api"],
+        "an undeclared binding is deleted"
+    );
+    assert_eq!(
+        ids(t.owner.clone()).await,
+        before[..1],
+        "the other keeps its id"
+    );
     // Same files again: same generation, nothing written.
-    assert!(matches!(apply(&t.app, &edited).await, Outcome::NotWritten));
-    assert_eq!(count_state(&t).await, 2);
+    assert!(matches!(apply(&t.app, &dropped).await, Outcome::NotWritten));
+    assert_eq!(
+        count_state(&t).await,
+        3,
+        "three distinct generations applied"
+    );
 }
 
 /// The background tasks: a fresh install is unready until the reconciler has

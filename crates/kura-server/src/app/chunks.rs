@@ -225,14 +225,22 @@ pub(super) async fn store_chunk(
     // 3. Record it. The tenant lock serializes this check with every other
     //    upload of the tenant, so concurrent uploads cannot overshoot the
     //    quota (review P3).
-    let recorded = record_chunk(state, a, v, &hash, len, &object_key).await;
-    let inserted = match recorded {
-        Ok(inserted) => inserted,
+    let (tx, inserted, count) = match record_chunk(state, a, v, &hash, len, &object_key).await {
+        Ok(recorded) => recorded,
         Err(e) => {
+            // Refused before the commit: the transaction rolled back, no row
+            // names the object.
             delete_orphan(&objects, &path).await;
             return Err(e);
         }
     };
+    // A failed commit is ambiguous: the row may have landed. The object stays
+    // for the orphan sweep (migration 0011) rather than leave a row naming a
+    // deleted object (review 2026-11-15 #3).
+    tx.commit().await?;
+    if count >= ENCRYPTION_WARNING {
+        tracing::warn!(vault = %v, encryptions = count, "data key nearing its random-nonce bound; rotate the vault key");
+    }
     if !inserted {
         // Another upload of the same chunk won; ours is an orphan object.
         delete_orphan(&objects, &path).await;
@@ -240,14 +248,16 @@ pub(super) async fn store_chunk(
     Ok(())
 }
 
-async fn record_chunk(
-    state: &SharedState,
+/// The chunk's row and the vault's encryption count, in a transaction left
+/// open for the caller to commit: `(transaction, inserted, encryptions)`.
+async fn record_chunk<'a>(
+    state: &'a SharedState,
     a: &VaultAccess,
     v: Uuid,
     hash: &ChunkHash,
     len: i64,
     object_key: &str,
-) -> Result<bool, ApiError> {
+) -> Result<(sqlx::Transaction<'a, sqlx::Postgres>, bool, i64), ApiError> {
     let size = i32::try_from(len).map_err(|_| ApiError::of(ProblemType::PayloadTooLarge))?;
     let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('kura.quota:' || $1::text))")
@@ -272,11 +282,7 @@ async fn record_chunk(
     .bind(v)
     .fetch_one(&mut *tx)
     .await?;
-    tx.commit().await?;
-    if count >= ENCRYPTION_WARNING {
-        tracing::warn!(vault = %v, encryptions = count, "data key nearing its random-nonce bound; rotate the vault key");
-    }
-    Ok(inserted.is_some())
+    Ok((tx, inserted.is_some(), count))
 }
 
 async fn delete_orphan(

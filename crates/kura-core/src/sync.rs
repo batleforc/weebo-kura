@@ -487,9 +487,12 @@ async fn push<H: Host, R: Remote>(
 ) -> Result<(), SyncError> {
     let files = host.list().await?;
     let mut local: HashMap<VaultPath, FileMeta> = HashMap::new();
+    // Too large to sync, but present: never a deletion (review 2026-11-15 #1).
+    let mut oversized: std::collections::HashSet<VaultPath> = std::collections::HashSet::new();
     for f in files {
         match VaultPath::from_local(&f.path) {
             Ok(p) if f.size > opts.max_file_size => {
+                oversized.insert(p.clone());
                 report.unsyncable.push((
                     p.to_string(),
                     format!("larger than {} bytes", opts.max_file_size),
@@ -507,7 +510,7 @@ async fn push<H: Host, R: Remote>(
     let mut gone: Vec<EntryId> = state
         .entries
         .iter()
-        .filter(|(_, k)| !local.contains_key(&k.path))
+        .filter(|(_, k)| !local.contains_key(&k.path) && !oversized.contains(&k.path))
         .map(|(e, _)| *e)
         .collect();
     let mut ops: Vec<(Operation, Option<Pushed>)> = Vec::new();
