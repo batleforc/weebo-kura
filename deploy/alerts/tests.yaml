@@ -135,3 +135,31 @@ tests:
         exp_alerts:
           - exp_labels: { severity: warning }
             exp_annotations: { summary: "The search index queue has grown for 15 minutes; search results lag behind edits." }
+  - interval: 1m
+    input_series:
+      # Rounds until 10m, then none.
+      - { series: 'kura_index_round_timestamp_seconds{pod="a"}', values: '0+60x10 600x30' }
+      - { series: 'kura_index_failed{pod="a"}', values: '0x10 2x30' }
+    alert_rule_test:
+      - { eval_time: 20m, alertname: KuraIndexStalled, exp_alerts: [] }
+      - eval_time: 32m
+        alertname: KuraIndexStalled
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations: { summary: "The search indexer has not finished a round for 15 minutes; new edits are not searchable." }
+      - eval_time: 30m
+        alertname: KuraIndexJobsFailed
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations: { summary: "2 notes could not be indexed after five attempts and are missing from search until edited; see the warn logs." }
+  - interval: 1h
+    input_series:
+      # Collected at 1h, then skipped: stale past 49h. Never set: no alert.
+      - { series: 'kura_maintenance_gc_timestamp_seconds{pod="a"}', values: '0 3600x60' }
+    alert_rule_test:
+      - { eval_time: 40h, alertname: KuraGarbageCollectionStale, exp_alerts: [] }
+      - eval_time: 50h
+        alertname: KuraGarbageCollectionStale
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations: { summary: "Garbage collection has not run for 2 days (skipped while a backup holds its lock, or passes failing); storage keeps deleted content." }

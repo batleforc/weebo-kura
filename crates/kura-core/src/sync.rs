@@ -1178,8 +1178,11 @@ impl<'a, R: Remote> Prefetch<'a, R> {
                 self.stop_batching();
                 break;
             };
-            let records = crate::wire::parse_records(&body)
-                .map_err(|e| RemoteError::Unavailable(e.to_string()))?;
+            // A truncated or garbled answer ends the window: the rest is read
+            // one by one (review 2026-11-15 #17).
+            let Ok(records) = crate::wire::parse_records(&body) else {
+                break;
+            };
             let before = want.len();
             let mut chunks = lock(&self.chunks);
             for (hash, data) in records {
@@ -1215,7 +1218,9 @@ impl<R: Remote> Remote for Prefetch<'_, R> {
         self.remote.put_chunk(hash, data).await
     }
     async fn get_chunk(&self, hash: &ChunkHash) -> Result<Vec<u8>, RemoteError> {
-        let held = lock(&self.chunks).remove(hash);
+        // Kept for the window: identical files, or a chunk repeated in one,
+        // ask for it again (review 2026-11-15 #16). `fill` clears the window.
+        let held = lock(&self.chunks).get(hash).cloned();
         match held {
             Some(data) => Ok(data),
             None => self.remote.get_chunk(hash).await,

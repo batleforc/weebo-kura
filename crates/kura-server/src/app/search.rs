@@ -105,10 +105,16 @@ pub async fn round(state: &SharedState) -> Result<Round, ApiError> {
             }
         }
     }
-    let (pending, _failed): (i64, i64) = sqlx::query_as("SELECT * FROM kura_index_depth()")
+    let (pending, failed): (i64, i64) = sqlx::query_as("SELECT * FROM kura_index_depth()")
         .fetch_one(&state.db)
         .await?;
     state.metrics.index_queue_depth.set(pending);
+    state.metrics.index_failed.set(failed);
+    #[expect(clippy::cast_precision_loss, reason = "unix seconds fit an f64")]
+    state
+        .metrics
+        .index_round_timestamp_seconds
+        .set(time::OffsetDateTime::now_utc().unix_timestamp() as f64);
     Ok(r)
 }
 

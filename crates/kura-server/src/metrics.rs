@@ -70,6 +70,15 @@ pub struct Metrics {
     pub storage_refreshed_timestamp_seconds: Gauge,
     /// Search index jobs waiting (§10.1).
     pub index_queue_depth: IntGauge,
+    /// Search index jobs given up after five attempts: those notes are out of
+    /// search until their next edit (review 2026-11-15 #9).
+    pub index_failed: IntGauge,
+    /// When the indexer last finished a round: frozen while it is stuck or
+    /// failing, which the queue depth alone cannot show (review 2026-11-15 #20).
+    pub index_round_timestamp_seconds: Gauge,
+    /// When a maintenance pass last ran garbage collection: frozen while the
+    /// backup lock keeps it skipped, or passes fail.
+    pub maintenance_gc_timestamp_seconds: Gauge,
 }
 
 impl Metrics {
@@ -200,6 +209,21 @@ impl Metrics {
         registry.register(Box::new(storage_refreshed_timestamp_seconds.clone()))?;
         let index_queue_depth = IntGauge::new("index_queue_depth", "Search index jobs waiting")?;
         registry.register(Box::new(index_queue_depth.clone()))?;
+        let index_failed = IntGauge::new(
+            "index_failed",
+            "Search index jobs given up after five attempts",
+        )?;
+        registry.register(Box::new(index_failed.clone()))?;
+        let index_round_timestamp_seconds = Gauge::new(
+            "index_round_timestamp_seconds",
+            "When the search indexer last finished a round, unix seconds",
+        )?;
+        registry.register(Box::new(index_round_timestamp_seconds.clone()))?;
+        let maintenance_gc_timestamp_seconds = Gauge::new(
+            "maintenance_gc_timestamp_seconds",
+            "When a maintenance pass last ran garbage collection, unix seconds",
+        )?;
+        registry.register(Box::new(maintenance_gc_timestamp_seconds.clone()))?;
         Ok(Self {
             registry,
             ready,
@@ -229,6 +253,9 @@ impl Metrics {
             backup_last_success_timestamp_seconds,
             storage_refreshed_timestamp_seconds,
             index_queue_depth,
+            index_failed,
+            index_round_timestamp_seconds,
+            maintenance_gc_timestamp_seconds,
         })
     }
 }

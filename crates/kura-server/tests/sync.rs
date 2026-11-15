@@ -197,32 +197,41 @@ async fn diverging_edits_become_a_conflict_file() {
 }
 
 /// Review 4 H2: a push retried because its conflict file could not be
-/// moved locally (an open note) lands on the same conflict file.
+/// moved locally (an open note) lands on the same conflict file; a name long
+/// enough to be shortened too (review 2026-11-15 #18).
 #[tokio::test]
 async fn the_same_content_pushed_again_reuses_its_conflict_file() {
     let Some(s) = setup(module_path!()).await else {
         return;
     };
-    let a = eid();
-    let base = s.put(&a, "Open.md", "base", None).await["head"]["revision"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    s.put(&a, "Open.md", "edited elsewhere", Some(&base)).await;
-    let first = s.put(&a, "Open.md", "typed here", Some(&base)).await;
-    let again = s.put(&a, "Open.md", "typed here", Some(&base)).await;
-    assert_eq!(first["outcome"], "conflicted");
-    assert_eq!(again["conflict"]["entry"], first["conflict"]["entry"]);
-    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM entry WHERE NOT deleted")
-        .fetch_one(&s.e.t.owner)
-        .await
-        .unwrap();
-    assert_eq!(n, 2, "one note, one conflict file");
-    // A new file pushed twice onto an occupied path, likewise.
-    let x = eid();
-    let c1 = s.put(&x, "Open.md", "another", None).await;
-    let c2 = s.put(&eid(), "Open.md", "another", None).await;
-    assert_eq!(c2["conflict"]["entry"], c1["conflict"]["entry"]);
+    let long = format!("{}.md", "l".repeat(240));
+    for name in ["Open.md", long.as_str()] {
+        let stem = name.trim_end_matches(".md").get(..20).unwrap_or("Open");
+        let a = eid();
+        let base = s.put(&a, name, "base", None).await["head"]["revision"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        s.put(&a, name, "edited elsewhere", Some(&base)).await;
+        let first = s.put(&a, name, "typed here", Some(&base)).await;
+        let again = s.put(&a, name, "typed here", Some(&base)).await;
+        assert_eq!(first["outcome"], "conflicted", "{name}");
+        assert_eq!(
+            again["conflict"]["entry"], first["conflict"]["entry"],
+            "{name}"
+        );
+        let n: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM entry WHERE NOT deleted AND path LIKE $1")
+                .bind(format!("{stem}%"))
+                .fetch_one(&s.e.t.owner)
+                .await
+                .unwrap();
+        assert_eq!(n, 2, "one note, one conflict file: {name}");
+        // A new file pushed twice onto an occupied path, likewise.
+        let c1 = s.put(&eid(), name, "another", None).await;
+        let c2 = s.put(&eid(), name, "another", None).await;
+        assert_eq!(c2["conflict"]["entry"], c1["conflict"]["entry"], "{name}");
+    }
 }
 
 #[tokio::test]
@@ -285,10 +294,17 @@ async fn a_crowded_name_still_gets_a_unique_one() {
     };
     for name in [
         "x.md", "x (2).md", "x (3).md", "x (4).md", "x (5).md", "x (6).md", "x (7).md", "x (8).md",
-        "x (9).md",
     ] {
         s.put(&eid(), name, name, None).await;
     }
+    // The last numbered suffix is tried too (review 2026-11-15 #18).
+    let n9 = eid();
+    let rev = s.put(&n9, "n.md", "n", None).await["head"]["revision"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let moved = s.put(&n9, "x.md", "n", Some(&rev)).await;
+    assert_eq!(moved["head"]["path"], "x (9).md", "{moved}");
     let a = eid();
     let r = s.put(&a, "x.md", "one more", None).await;
     assert_eq!(r["outcome"], "conflicted", "{r}");

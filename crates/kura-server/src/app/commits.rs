@@ -192,14 +192,19 @@ impl Commit<'_> {
         path: &VaultPath,
         owner: Uuid,
     ) -> Result<VaultPath, ApiError> {
-        let mut candidate = path.clone();
-        for n in 2..=MAX_SUFFIX {
+        // `path`, then `(2)` to `(MAX_SUFFIX)`, the last one included
+        // (review 2026-11-15 #18).
+        for n in 1..=MAX_SUFFIX {
+            let candidate = if n == 1 {
+                path.clone()
+            } else {
+                path.suffixed(&n.to_string()).map_err(|e| refused(i, e))?
+            };
             match self.occupant(&path_key(&candidate)).await? {
                 None => return Ok(candidate),
                 Some(o) if o == owner => return Ok(candidate),
                 Some(_) => {}
             }
-            candidate = path.suffixed(&n.to_string()).map_err(|e| refused(i, e))?;
         }
         // Never refuse the commit for a name (review 3.6 F4): the entry id is unique.
         let id = owner.simple().to_string();
@@ -220,33 +225,44 @@ impl Commit<'_> {
         path: &VaultPath,
         blob: ChunkHash,
     ) -> Result<Option<Head>, ApiError> {
-        let Ok(marker) = path.suffixed("conflict") else {
+        // The stem and extension as `conflict_path` cuts them: a long name is
+        // shortened by the length of this device's suffix, not of a bare
+        // "conflict" (review 2026-11-15 #18).
+        let Ok(first) = path.suffixed(&self.conflict_suffix) else {
             return Ok(None);
         };
-        let Some(stem) = marker
-            .as_str()
-            .find(" (conflict)")
-            .and_then(|n| marker.as_str().get(..n))
-        else {
+        let first = first.as_str();
+        let (Some(n), Some(close)) = (first.rfind(" (conflict"), first.rfind(')')) else {
             return Ok(None);
         };
-        let like = format!(
-            "{} (conflict %",
-            stem.replace('\\', "\\\\")
+        let (Some(stem), Some(ext)) = (first.get(..n), first.get(close.saturating_add(1)..)) else {
+            return Ok(None);
+        };
+        let escape = |s: &str| {
+            s.replace('\\', "\\\\")
                 .replace('%', "\\%")
                 .replace('_', "\\_")
-        );
-        let row = sqlx::query(concat!(
+        };
+        let like = format!("{} (conflict %){}", escape(stem), escape(ext));
+        let rows = sqlx::query(concat!(
             head_select!(),
-            " WHERE e.vault_id = $1 AND e.namespace = $4 AND NOT e.deleted AND r.blob_hash = $2 AND e.path LIKE $3 ESCAPE '\\' ORDER BY e.last_seq LIMIT 1"
+            " WHERE e.vault_id = $1 AND e.namespace = $4 AND NOT e.deleted AND r.blob_hash = $2 AND e.path LIKE $3 ESCAPE '\\' ORDER BY e.last_seq LIMIT 16"
         ))
         .bind(self.vault)
         .bind(blob.as_bytes().as_slice())
         .bind(like)
         .bind(&self.space.namespace)
-        .fetch_optional(&mut **self.tx)
+        .fetch_all(&mut **self.tx)
         .await?;
-        row.as_ref().map(head_from_row).transpose()
+        // `%` also crosses folders: the conflict file sits beside `path`.
+        for row in &rows {
+            let head = head_from_row(row)?;
+            let rest = head.path.as_str().get(n..).unwrap_or_default();
+            if !rest.contains('/') {
+                return Ok(Some(head));
+            }
+        }
+        Ok(None)
     }
 
     /// Where the pushed content of a conflict goes: `name (conflict <device> <date>).ext`.

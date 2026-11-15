@@ -340,6 +340,24 @@ async fn a_token_is_revoked_with_the_binding_that_allowed_it() {
         s.read(&key, "/changes?since=0", INSIDE).await.0,
         StatusCode::OK
     );
+    // Downgraded then raised again: the token stays cut (review 2026-11-15 #19).
+    for role in ["viewer", "manager"] {
+        let (st, b) =
+            s.e.call(
+                "PUT",
+                &format!("/v1/vaults/{}/bindings/user:u2", s.v),
+                &s.admin,
+                Some(&s.ad),
+                Some(json!({ "role": role })),
+            )
+            .await;
+        assert!(st.is_success(), "{b}");
+        assert_eq!(
+            s.read(&key, "/changes?since=0", INSIDE).await.0,
+            StatusCode::UNAUTHORIZED,
+            "after {role}"
+        );
+    }
     let (st, _) =
         s.e.call(
             "DELETE",
@@ -350,6 +368,17 @@ async fn a_token_is_revoked_with_the_binding_that_allowed_it() {
         )
         .await;
     assert_eq!(st, StatusCode::NO_CONTENT);
+    // A token issued under the binding as it is now dies with its deletion.
+    let (st, b) =
+        s.e.call(
+            "POST",
+            &format!("/v1/vaults/{}/tokens", s.v),
+            &mgr,
+            Some(&md),
+            Some(json!({ "expiresInDays": 7, "cidrs": ["10.42.0.0/16"] })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "no longer a manager: {b}");
     assert_eq!(
         s.read(&key, "/changes?since=0", INSIDE).await.0,
         StatusCode::UNAUTHORIZED

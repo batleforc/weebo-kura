@@ -334,6 +334,17 @@ async fn a_failing_index_job_is_kept_after_five_attempts() {
     for attempt in 1..=5 {
         let r = s.index().await;
         assert_eq!(r.failed, 1, "attempt {attempt}: {r:?}");
+        // Not again at once: the job waits the 5-minute reclaim (review
+        // 2026-11-15 #9), aged here.
+        assert_eq!(
+            s.index().await,
+            kura_server::app::search::Round::default(),
+            "attempt {attempt} waits"
+        );
+        sqlx::query("UPDATE index_job SET claimed_at = now() - interval '6 minutes' WHERE claimed_at IS NOT NULL")
+            .execute(&s.e.t.owner)
+            .await
+            .unwrap();
     }
     assert_eq!(
         s.index().await,
@@ -347,4 +358,9 @@ async fn a_failing_index_job_is_kept_after_five_attempts() {
             .unwrap();
     assert_eq!(failed, 1);
     assert_eq!(s.e.state.metrics.index_queue_depth.get(), 0);
+    assert_eq!(
+        s.e.state.metrics.index_failed.get(),
+        1,
+        "given up, and visible"
+    );
 }

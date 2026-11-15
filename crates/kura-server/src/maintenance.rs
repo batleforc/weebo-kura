@@ -151,7 +151,12 @@ pub async fn run(state: crate::app::SharedState, window: Window, shutdown: Cance
             match pass(&state, Settings::default(), &shutdown).await {
                 Ok(Some(r)) => tracing::info!(report = ?r, "maintenance pass done"),
                 Ok(None) => {}
-                Err(e) => tracing::warn!(error = %e, "maintenance pass failed, retried next hour"),
+                Err(e) => {
+                    // A whole pass failing alerts too, not only one vault
+                    // (review 2026-11-15 #20).
+                    state.metrics.maintenance_failures_total.inc();
+                    tracing::warn!(error = %e, "maintenance pass failed, retried next hour");
+                }
             }
             Duration::from_secs(3600)
         } else {
@@ -231,6 +236,13 @@ async fn run_pass(
         None => None,
     };
     report.gc_skipped = objects.is_none();
+    if !report.gc_skipped {
+        #[expect(clippy::cast_precision_loss, reason = "unix seconds fit an f64")]
+        state
+            .metrics
+            .maintenance_gc_timestamp_seconds
+            .set(time::OffsetDateTime::now_utc().unix_timestamp() as f64);
+    }
     // The session holding the locks, checked before each object deletion:
     // every query below runs on other connections of the pool.
     let lock_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")

@@ -171,7 +171,10 @@ backups. Enabling queues every Markdown note (the workers of each replica
 index 100 at a time); disabling drops the tenant's index. The database
 needs `unaccent` and `pg_trgm` (created by the migration; both are trusted
 extensions). `kura_index_queue_depth` and `KuraIndexQueueGrowing` watch the
-queue; a note that fails 5 times stays in `index_job` with `failed_at`.
+queue, `KuraIndexStalled` an indexer that no longer finishes rounds. A failed
+note is retried after the 5-minute reclaim; after 5 failures it stays in
+`index_job` with `failed_at`, counted by `kura_index_failed` and
+`KuraIndexJobsFailed`, until its next edit.
 
 ## 5. Vault and object storage
 
@@ -262,10 +265,12 @@ revocation. Devices idle 180 days are purged daily; revoked ones are kept.
 | `kura_chunk_bytes_stored`, `kura_dedup_ratio`, `kura_quota_used_ratio` (by `tenant`) | storage, refreshed every minute |
 | `kura_deletions_scheduled` | tenants and vaults removed with `Delete`, in their grace period |
 | `kura_backup_last_success_timestamp_seconds`, `kura_storage_refreshed_timestamp_seconds` | the last bucket copy; the last storage refresh |
-| `kura_index_queue_depth` | search index jobs waiting |
+| `kura_index_queue_depth`, `kura_index_failed` | search index jobs waiting; given up after 5 attempts |
+| `kura_index_round_timestamp_seconds` | the indexer's last finished round |
 | `kura_batch_items_total{route,outcome}`, `kura_batch_response_bytes` | items asked of `blobs/batch` and `chunks/batch` (RFC 0002): `found` were fetched and sent, `missing` were unknown or not visible; the size of each chunk answer. A `chunks/batch` past the 8 a replica builds at once answers `429` with `Retry-After: 1`, so a busy replica never trips the dependency alert |
 | Log target `audit`, `scoped_token_used`, `scoped_token_created`, `scoped_token_revoked` | every use of a scoped token (id, route, client), its issue and revocation |
-| `kura_maintenance_failures_total` | vaults whose maintenance failed in a pass (the others went on): alert on a rise |
+| `kura_maintenance_failures_total` | vaults whose maintenance failed in a pass (the others went on), and whole passes failed: alert on a rise |
+| `kura_maintenance_gc_timestamp_seconds` | the last pass that ran garbage collection (skipped while a backup holds the lock) |
 | `kura_maintenance_deleted_total{outcome}` | revisions, entries, blobs, chunks, objects, orphans and purged vaults removed by maintenance |
 | `kura_tenants_awaiting_key_destruction` | tenants purged by `Delete` whose Transit key an operator must destroy: alert on any |
 | Log target `audit`, `vault_purged` | a vault purged after its `Delete` grace period |
@@ -276,9 +281,9 @@ replica scraped, dependency failures and Vault failures for 2 minutes,
 notification lag above 30 s for 5 minutes, the `NOTIFY` queue over half
 full, a corrupt chunk, a refused configuration, a deletion scheduled with
 `Delete`, a tenant awaiting key destruction, an epoch change, a tenant above
-90% of its quota, stale storage metrics, a failed maintenance pass, and no
-bucket copy for 36 hours. Search's `index_queue_depth`
-comes with search. Logs carry a span per request (method, route template,
+90% of its quota, stale storage metrics, a failed maintenance pass, no
+garbage collection for 2 days, and no bucket copy for 36 hours. Search adds
+a growing queue, a stalled indexer and notes given up. Logs carry a span per request (method, route template,
 status, duration); there is no trace export yet.
 
 ## 9. The `kura` CLI

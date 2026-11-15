@@ -402,21 +402,31 @@ pub(super) async fn read_blob(
     v: Uuid,
     hash: ChunkHash,
 ) -> Result<Vec<u8>, ApiError> {
+    let store = storage(state)?;
+    // Every chunk's object in one transaction, not one per chunk (review
+    // 2026-11-15 #20): a merge reads three versions.
     let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
-    let chunks: Vec<Vec<u8>> = sqlx::query_scalar(
-        "SELECT chunk_hash FROM blob_chunk WHERE vault_id = $1 AND blob_hash = $2 ORDER BY position",
+    let rows: Vec<(Vec<u8>, Option<String>)> = sqlx::query_as(
+        "SELECT bc.chunk_hash, c.object_key FROM blob_chunk bc
+         LEFT JOIN chunk c ON c.vault_id = bc.vault_id AND c.hash = bc.chunk_hash
+         WHERE bc.vault_id = $1 AND bc.blob_hash = $2 ORDER BY bc.position",
     )
     .bind(v)
     .bind(hash.as_bytes().as_slice())
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
+    let key = store
+        .keys
+        .get(&state.db, a.tenant, &a.tenant_slug, v)
+        .await?;
     let mut out = Vec::new();
-    for c in chunks {
+    for (c, object_key) in rows {
         let h = <[u8; 32]>::try_from(c.as_slice())
             .map(ChunkHash::from_bytes)
             .map_err(|_| ApiError::Unavailable("stored chunk hash is not 32 bytes".into()))?;
-        out.extend_from_slice(&read_chunk(state, a, v, h).await?);
+        let object_key = object_key.ok_or(ApiError::of(ProblemType::NotFound))?;
+        out.extend_from_slice(&open_object(state, key.clone(), v, h, &object_key).await?);
     }
     Ok(out)
 }

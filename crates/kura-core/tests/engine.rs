@@ -140,6 +140,8 @@ struct Scripted {
     foreign: bool,
     /// `blobs/batch` works but `chunks/batch` answers as an older server.
     no_chunk_batch: bool,
+    /// `chunks/batch` answers cut in the middle of a record.
+    truncated: bool,
     /// Hashes asked of each `blobs/batch` call.
     blob_asks: std::cell::RefCell<Vec<usize>>,
     /// Single `get_blob` and `get_chunk` calls, and batch calls.
@@ -209,6 +211,10 @@ impl Remote for Scripted {
         }
         self.batches.set(self.batches.get() + 1);
         let mut out = Vec::new();
+        if self.truncated {
+            out.extend_from_slice(hashes.first().unwrap().as_bytes().get(..10).unwrap());
+            return Ok(Some(out));
+        }
         if self.foreign {
             out.extend_from_slice(ChunkHash::of(b"never asked").as_bytes());
             out.extend_from_slice(&[0, 0, 0, 0, 1, b'x']);
@@ -993,5 +999,34 @@ async fn a_change_of_case_lands_on_a_case_insensitive_disk() {
         );
         assert_eq!(s.entries[&new.entry].path, new.path);
         assert_eq!(s.cursor, 2, "the cursor moves on");
+    }
+}
+
+/// Review 2026-11-15 #16 and #17: identical files in one window are served
+/// from the batch, and a truncated batch answer falls back to single reads
+/// instead of failing the run.
+#[tokio::test]
+async fn identical_files_share_the_window_and_a_cut_answer_falls_back() {
+    for truncated in [false, true] {
+        let host = Mem::default();
+        let remote = Scripted {
+            serve: vec![
+                served_as("a.md", b"same", 1, 1),
+                served_as("b.md", b"same", 2, 2),
+            ],
+            batch: true,
+            truncated,
+            ..Scripted::default()
+        };
+        let r = sync(&host, &remote, &mut state(), &opts(false))
+            .await
+            .unwrap();
+        assert_eq!(r.pulled, 2, "{r:?}");
+        assert_eq!(host.files.borrow()["b.md"], b"same");
+        assert_eq!(
+            remote.singles.get(),
+            if truncated { 2 } else { 0 },
+            "truncated {truncated}"
+        );
     }
 }

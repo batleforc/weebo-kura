@@ -206,13 +206,26 @@ async fn vault_accesses(
         .into_iter()
         .find(|m| m.tenant == tenant)
         .map(|m| m.role);
+    let values = claim
+        .as_deref()
+        .map(|c| p.claim_values(c))
+        .unwrap_or_default();
+    let every = tenant_role.and_then(tenant_vault_role).is_some();
     let mut tx = db::begin_tenant(pool, tenant, Some(&p.sub)).await?;
+    // Only the vaults the caller may open, before the limit (review
+    // 2026-11-15 #19): the role is settled below.
     let rows = sqlx::query(
         "SELECT id, namespace, name, managed_by, chunking_params, epoch, head_seq, config_sync FROM vault
-         WHERE disabled_at IS NULL AND ($1::uuid IS NULL OR id = $1) ORDER BY namespace, name LIMIT $2",
+         WHERE disabled_at IS NULL AND ($1::uuid IS NULL OR id = $1)
+           AND ($3 OR EXISTS (SELECT 1 FROM role_binding b WHERE b.vault_id = vault.id
+                AND ((b.subject_kind = 'user' AND b.subject = $4) OR (b.subject_kind = 'claim' AND b.subject = ANY($5)))))
+         ORDER BY namespace, name LIMIT $2",
     )
     .bind(only)
     .bind(limit)
+    .bind(every)
+    .bind(&p.sub)
+    .bind(&values)
     .fetch_all(&mut *tx)
     .await?;
     let ids: Vec<Uuid> = rows
@@ -226,10 +239,6 @@ async fn vault_accesses(
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
-    let values = claim
-        .as_deref()
-        .map(|c| p.claim_values(c))
-        .unwrap_or_default();
     let mut out = Vec::new();
     for row in &rows {
         let vault: Uuid = row.try_get("id")?;

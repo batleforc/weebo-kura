@@ -81,6 +81,23 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: The search index queue has grown for 15 minutes; search results lag behind edits.
+      - alert: KuraIndexStalled
+        expr: time() - max(kura_index_round_timestamp_seconds) > 900
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: The search indexer has not finished a round for 15 minutes; new edits are not searchable.
+      - alert: KuraIndexJobsFailed
+        expr: max(kura_index_failed) > 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value }} notes could not be indexed after five attempts and are missing from search until edited; see the warn logs."
+      - alert: KuraGarbageCollectionStale
+        expr: (time() - max(kura_maintenance_gc_timestamp_seconds) > 172800) and max(kura_maintenance_gc_timestamp_seconds) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: Garbage collection has not run for 2 days (skipped while a backup holds its lock, or passes failing); storage keeps deleted content.
       - alert: KuraMaintenanceFailing
         expr: increase(kura_maintenance_failures_total[2h]) > 0
         labels: { severity: warning }

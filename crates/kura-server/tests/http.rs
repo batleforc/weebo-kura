@@ -920,3 +920,41 @@ async fn a_binding_alone_links_the_device_to_its_tenant() {
         .await;
     assert_eq!(s, StatusCode::NO_CONTENT);
 }
+
+/// Review 2026-11-15 #19: the vaults a member may open are chosen before
+/// the listing limit, so a vault sorted after many others stays listed.
+#[tokio::test]
+async fn the_listing_limit_counts_only_vaults_the_caller_opens() {
+    let Some(e) = env(module_path!()).await else {
+        return;
+    };
+    let admin = e.key.token("a1", "sa", &["maxime-admins"]);
+    let da = e.register(&admin, "admin").await;
+    // "archive" sorts before "knowledge", the member's only vault.
+    let (s, b) = e
+        .call(
+            "POST",
+            "/v1/vaults",
+            &admin,
+            Some(&da),
+            Some(json!({ "tenant": "maxime", "name": "archive" })),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{b}");
+    let member = kura_server::auth::Principal::from_claims(
+        json!({ "sub": "u1", "groups": ["maxime-members"] })
+            .as_object()
+            .unwrap()
+            .clone(),
+    )
+    .unwrap();
+    let snap = e.state.snapshot().unwrap();
+    let tenant = snap.tenant_ids["maxime"];
+    let seen = kura_server::authz::vault_accesses_in(&e.state.db, &snap, &member, tenant, 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        seen.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(),
+        ["knowledge"]
+    );
+}

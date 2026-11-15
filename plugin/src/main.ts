@@ -204,10 +204,14 @@ class ConfirmModal extends Modal {
   }
 }
 
+const CONFIG_EVERY_MS = 5 * 60 * 1000 - 15_000;
+
 export default class KuraPlugin extends Plugin {
   config: Settings = { ...DEFAULTS };
   latest: Situation | null = null;
   private resyncAnnounced = false;
+  /** When `.obsidian` was last scanned: at most every 5 minutes, and on resume (§6.8). */
+  private configSyncedAt = 0;
   vaults: VaultView[] = [];
   private core: Core | null = null;
   private session: Session | null = null;
@@ -239,7 +243,10 @@ export default class KuraPlugin extends Plugin {
     // The configuration is scanned at most every 5 minutes, and on resume (§6.8).
     this.registerInterval(window.setInterval(() => void this.controller?.sync(), 5 * 60 * 1000));
     this.registerDomEvent(document, "visibilitychange", () => {
-      if (document.visibilityState === "visible") void this.controller?.sync();
+      if (document.visibilityState === "visible") {
+        this.configSyncedAt = 0;
+        void this.controller?.sync();
+      }
     });
     this.app.workspace.onLayoutReady(() => void this.start());
   }
@@ -326,7 +333,12 @@ export default class KuraPlugin extends Plugin {
         const c = vault.chunking;
         const options = JSON.stringify({ device: s.device, vault: s.vault, ...c, maxFileSize: s.maxFileMiB * 1024 * 1024, dryRun, allowDeletions });
         const notes = await core.sync(host, api.remote(s.vault), state, options);
-        if (!dryRun && vault.configSync.length > 0) await this.syncConfig(core, api, vault.configSync, options);
+        // Not on every note sync (review 2026-11-15 #20); the 5-minute timer
+        // finds it due, a few seconds early at most.
+        if (!dryRun && vault.configSync.length > 0 && Date.now() - this.configSyncedAt >= CONFIG_EVERY_MS) {
+          this.configSyncedAt = Date.now();
+          await this.syncConfig(core, api, vault.configSync, options);
+        }
         return notes;
       },
       loadState: () => host.loadState(),

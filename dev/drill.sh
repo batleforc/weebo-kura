@@ -33,11 +33,13 @@ vaults=$(sql kura "SELECT DISTINCT vault_id FROM chunk")
 for v in $vaults; do
   podman exec kura-dev-s3 test -d "/data/kura-backup/$v" || { echo "FAIL: vault $v is not in the copy; nothing deleted"; exit 1; }
 done
-for v in $vaults; do podman exec kura-dev-s3 rm -rf "/data/kura-dev/$v"; done
-
-# 3. Restore all of it: the database (into kura_drill), then the objects.
+# The database is restored first (into kura_drill): a dump that does not
+# restore fails the drill before any object is deleted (review 2026-11-15 #20).
 podman exec kura-dev-postgres createdb -U postgres kura_drill
 podman exec -i kura-dev-postgres pg_restore -U postgres -d kura_drill --no-owner <"$work/kura.dump"
+for v in $vaults; do podman exec kura-dev-s3 rm -rf "/data/kura-dev/$v"; done
+
+# 3. Restore the objects from the copy.
 for v in $vaults; do podman exec kura-dev-s3 cp -r "/data/kura-backup/$v" /data/kura-dev/; done
 drill=postgres://postgres:kura-dev@127.0.0.1:55433/kura_drill
 old=$(sql kura_drill "SELECT string_agg(epoch::text, ',' ORDER BY id) FROM vault")
