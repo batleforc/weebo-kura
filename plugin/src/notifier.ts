@@ -78,13 +78,16 @@ export class Notifier {
     const ws = this.o.socket(url);
     this.ws = ws;
     ws.onopen = () => {
-      this.backoff = 1;
       if (this.poll !== null) this.o.timers.clear(this.poll);
       this.poll = null;
       this.o.onState(true);
       this.heard();
+      // What changed while the socket was down (review 2026-11-15 #7).
+      this.o.onNotice();
     };
     ws.onmessage = (e) => {
+      // A socket that opens then closes at once (4005, 4008) keeps backing off.
+      this.backoff = 1;
       this.heard();
       if (typeof e.data !== "string") return;
       try {

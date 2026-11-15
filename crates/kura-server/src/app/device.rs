@@ -101,10 +101,7 @@ pub async fn require_device(
             if touched > 0
                 && let Some(snapshot) = state.snapshot()
             {
-                let tenants: Vec<Uuid> = crate::authz::memberships(&snapshot, p)
-                    .iter()
-                    .map(|m| m.tenant)
-                    .collect();
+                let tenants = crate::authz::device_tenants(&state.db, &snapshot, p).await?;
                 sqlx::query("SELECT kura_device_link($1, $2)")
                     .bind(device)
                     .bind(tenants)

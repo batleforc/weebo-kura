@@ -44,6 +44,7 @@ describe("the vault host", () => {
     expect(await h.stat("nope.md")).toBeNull();
     expect(await h.stat("sub")).toBeNull();
     await h.trash("b.md");
+    await expect(h.trash("busy.md")).rejects.toThrow(/open in the editor/);
     expect(adapter.trashed).toEqual(["b.md"]);
     expect(await h.loadState()).toBe("");
     await h.save('{"cursor":3}');

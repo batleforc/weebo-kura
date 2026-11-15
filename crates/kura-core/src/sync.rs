@@ -455,6 +455,15 @@ async fn recover<H: Host>(
         let data = host.read(&s.path).await?;
         // Otherwise the file is left alone: the next scan sees it as a local edit.
         if blob_of(&data, params).0 == blob {
+            // Killed between writing the new path and trashing the old one
+            // (a remote move with an edit): the old file, if untouched, goes
+            // now, or it would be pushed as a new note (review 2026-11-15 #10).
+            if let Some(old) = state.entries.get(&s.entry).filter(|k| k.path != s.path)
+                && host.stat(&old.path).await?.is_some()
+                && untouched(host, old).await?
+            {
+                host.trash(&old.path).await?;
+            }
             state.entries.insert(
                 s.entry,
                 Known {
@@ -805,7 +814,7 @@ async fn settle<H: Host, R: Remote>(
             } else {
                 // The server suffixed or re-cased the name: follow it. A file
                 // edited since the scan gets no stamp, so the next run rehashes it.
-                let moved = Stamp::from(&host.rename(&p.local, &head.path).await?);
+                let moved = Stamp::from(&relocate(host, state, None, &p.local, &head.path).await?);
                 (moved == p.stamp).then_some(p.stamp)
             };
             state.entries.insert(
@@ -887,6 +896,43 @@ async fn pull<H: Host, R: Remote>(
     }
 }
 
+/// Moves a file. A change of case alone goes through a temporary name: on a
+/// case-insensitive disk the target is the file itself, so a host refuses to
+/// move onto it. The known entry, if any, points at the temporary name while
+/// it is there, so a crash in between leaves a tracked file.
+async fn relocate<H: Host>(
+    host: &H,
+    state: &mut LocalState,
+    entry: Option<EntryId>,
+    from: &VaultPath,
+    to: &VaultPath,
+) -> Result<FileMeta, SyncError> {
+    if !from.same_but_case(to) {
+        return Ok(host.rename(from, to).await?);
+    }
+    let tmp = to
+        .suffixed("kura-move")
+        .map_err(|e| HostError(format!("no temporary name for {to}: {e}")))?;
+    host.rename(from, &tmp).await?;
+    let track = |state: &mut LocalState, path: &VaultPath| {
+        if let Some(k) = entry.and_then(|e| state.entries.get_mut(&e)) {
+            k.path = path.clone();
+        }
+    };
+    track(state, &tmp);
+    host.save(state).await?;
+    match host.rename(&tmp, to).await {
+        Ok(meta) => Ok(meta),
+        // Another file at `to` (a case-sensitive disk): back where it was.
+        Err(e) => {
+            host.rename(&tmp, from).await?;
+            track(state, from);
+            host.save(state).await?;
+            Err(e.into())
+        }
+    }
+}
+
 /// Is the local file still the version this device last synced?
 async fn untouched<H: Host>(host: &H, k: &Known) -> Result<bool, SyncError> {
     Ok(match host.stat(&k.path).await? {
@@ -911,7 +957,7 @@ async fn apply<H: Host, R: Remote>(
     opts: &Options,
     report: &mut Report,
 ) -> Result<Applied, SyncError> {
-    let known = state.entries.get(&item.entry).cloned();
+    let mut known = state.entries.get(&item.entry).cloned();
     if let Some(k) = &known
         && (k.resend || !untouched(host, k).await?)
     {
@@ -951,7 +997,9 @@ async fn apply<H: Host, R: Remote>(
             }
             state.entries.remove(&other);
         }
-    } else if known.as_ref().is_none_or(|k| k.path != item.path)
+    } else if known
+        .as_ref()
+        .is_none_or(|k| k.path != item.path && !k.path.same_but_case(&item.path))
         && host.stat(&item.path).await?.is_some()
     {
         if !opts.prefer_remote {
@@ -963,12 +1011,25 @@ async fn apply<H: Host, R: Remote>(
         // in `.trash`.
         host.trash(&item.path).await?;
     }
+    // A change of case first moves the file, which a case-insensitive disk
+    // sees at both paths (review 2026-11-15 #11); the content follows below.
+    let mut moved = None;
+    if let Some(k) = known.as_mut().filter(|k| k.path.same_but_case(&item.path))
+        && host.stat(&k.path).await?.is_some()
+    {
+        let meta = relocate(host, state, Some(item.entry), &k.path, &item.path).await?;
+        k.path = item.path.clone();
+        k.stamp = Some(Stamp::from(&meta));
+        state.entries.insert(item.entry, k.clone());
+        moved = Some(meta);
+    }
     let only_moved = match &known {
         Some(k) if k.blob == blob => host.stat(&k.path).await?.is_some(),
         _ => false,
     };
-    let meta = match &known {
-        Some(k) if only_moved => host.rename(&k.path, &item.path).await?,
+    let meta = match (&known, moved) {
+        (Some(_), Some(meta)) if only_moved => meta,
+        (Some(k), _) if only_moved => host.rename(&k.path, &item.path).await?,
         _ => {
             let data = download(remote, blob, item.size).await?;
             state.pending = Some(Pending {

@@ -27,6 +27,24 @@ struct Mem {
     unwritable: Option<String>,
     /// This file cannot be moved (an open note).
     pinned: Option<String>,
+    /// A case-insensitive disk (macOS, Windows, Android): a path names the
+    /// file stored under any case.
+    fold: bool,
+}
+
+impl Mem {
+    /// The stored name a path reaches.
+    fn key(&self, path: &str) -> Option<String> {
+        let files = self.files.borrow();
+        if files.contains_key(path) {
+            return Some(path.to_owned());
+        }
+        let lower = path.to_lowercase();
+        files
+            .keys()
+            .find(|k| self.fold && k.to_lowercase() == lower)
+            .cloned()
+    }
 }
 
 impl Host for Mem {
@@ -43,14 +61,16 @@ impl Host for Mem {
             .collect())
     }
     async fn read(&self, path: &VaultPath) -> Result<Vec<u8>, HostError> {
+        let key = self.key(path.as_str()).unwrap_or_default();
         self.files
             .borrow()
-            .get(path.as_str())
+            .get(&key)
             .cloned()
             .ok_or_else(|| HostError("missing".into()))
     }
     async fn stat(&self, path: &VaultPath) -> Result<Option<FileMeta>, HostError> {
-        Ok(self.files.borrow().get(path.as_str()).map(|d| FileMeta {
+        let key = self.key(path.as_str()).unwrap_or_default();
+        Ok(self.files.borrow().get(&key).map(|d| FileMeta {
             path: path.to_string(),
             size: d.len() as u64,
             mtime: 1,
@@ -61,9 +81,9 @@ impl Host for Mem {
             return Err(HostError("the disk refuses this name".into()));
         }
         self.tick.set(self.tick.get() + 1);
-        self.files
-            .borrow_mut()
-            .insert(path.to_string(), data.to_vec());
+        // An existing file keeps its stored case, as on a real disk.
+        let key = self.key(path.as_str()).unwrap_or_else(|| path.to_string());
+        self.files.borrow_mut().insert(key, data.to_vec());
         Ok(self.stat(path).await?.unwrap())
     }
     async fn rename(&self, from: &VaultPath, to: &VaultPath) -> Result<FileMeta, HostError> {
@@ -71,15 +91,17 @@ impl Host for Mem {
             return Err(HostError("open in the editor".into()));
         }
         // As FsHost: never onto an existing file.
-        if self.files.borrow().contains_key(to.as_str()) {
+        if self.key(to.as_str()).is_some() {
             return Err(HostError("exists".into()));
         }
-        let d = self.files.borrow_mut().remove(from.as_str()).unwrap();
+        let from = self.key(from.as_str()).unwrap();
+        let d = self.files.borrow_mut().remove(&from).unwrap();
         self.files.borrow_mut().insert(to.to_string(), d);
         Ok(self.stat(to).await?.unwrap())
     }
     async fn trash(&self, path: &VaultPath) -> Result<(), HostError> {
-        self.files.borrow_mut().remove(path.as_str());
+        let key = self.key(path.as_str()).unwrap_or_default();
+        self.files.borrow_mut().remove(&key);
         Ok(())
     }
     async fn save(&self, _: &LocalState) -> Result<(), HostError> {
@@ -846,4 +868,130 @@ async fn a_known_file_grown_past_the_limit_is_not_deleted() {
     assert_eq!(r.pushed, 0, "no deletion pushed: {r:?}");
     assert_eq!(r.unsyncable.len(), 1);
     assert!(s.entries.contains_key(&entry), "still known");
+}
+
+/// Review 2026-11-15 #5: the host killed between removing the old file and
+/// moving the new one into place. The next push sends a delete against the
+/// old revision, the server drops it (edited since) and the file comes back.
+#[tokio::test]
+async fn a_write_killed_after_the_old_file_went_brings_it_back() {
+    let (old, old_data) = served_as("note.md", b"old\n", 1, 1);
+    let (new, new_data) = served_as("note.md", b"new\n", 1, 2);
+    let host = Mem::default();
+    let mut s = state();
+    s.cursor = 1;
+    s.entries.insert(
+        old.entry,
+        kura_core::sync::Known {
+            path: old.path.clone(),
+            revision: old.revision,
+            blob: old.blob.unwrap(),
+            size: old_data.len() as u64,
+            stamp: None,
+            resend: false,
+        },
+    );
+    s.pending = Some(Pending { state: new.clone() });
+    let remote = Scripted {
+        serve: vec![(new.clone(), new_data.clone())],
+        reply: Some(CommitResponse {
+            head_seq: 2,
+            results: vec![OpResult {
+                outcome: Outcome::Conflicted,
+                head: new.clone(),
+                conflict: None,
+            }],
+        }),
+        ..Scripted::default()
+    };
+    sync(&host, &remote, &mut s, &opts(false)).await.unwrap();
+    assert_eq!(host.files.borrow()["note.md"], new_data);
+    assert_eq!(s.entries[&new.entry].revision, new.revision);
+}
+
+/// Review 2026-11-15 #10: killed after writing the new path of a remote move
+/// with an edit, before trashing the old one. The old file goes on restart
+/// instead of being pushed as a new note.
+#[tokio::test]
+async fn a_move_killed_before_the_old_file_went_trashes_it_on_restart() {
+    let (old, old_data) = served_as("a.md", b"old\n", 1, 1);
+    let (new, new_data) = served_as("b.md", b"new\n", 1, 2);
+    let host = Mem::default();
+    host.files
+        .borrow_mut()
+        .insert("a.md".into(), old_data.clone());
+    host.files
+        .borrow_mut()
+        .insert("b.md".into(), new_data.clone());
+    let meta = host.stat(&old.path).await.unwrap().unwrap();
+    let mut s = state();
+    s.cursor = 1;
+    s.entries.insert(
+        old.entry,
+        kura_core::sync::Known {
+            path: old.path.clone(),
+            revision: old.revision,
+            blob: old.blob.unwrap(),
+            size: old_data.len() as u64,
+            stamp: Some(kura_core::sync::Stamp::from(&meta)),
+            resend: false,
+        },
+    );
+    s.pending = Some(Pending { state: new.clone() });
+    let remote = Scripted {
+        serve: vec![(new.clone(), new_data)],
+        ..Scripted::default()
+    };
+    let r = sync(&host, &remote, &mut s, &opts(false)).await.unwrap();
+    assert_eq!(r.pushed, 0, "nothing pushed as new: {r:?}");
+    assert!(
+        !host.files.borrow().contains_key("a.md"),
+        "old file trashed"
+    );
+    assert_eq!(s.entries[&new.entry].path, new.path);
+}
+
+/// Review 2026-11-15 #11: a remote change of case only (Note.md → note.md),
+/// with and without an edit, on a case-insensitive disk: applied, not held.
+#[tokio::test]
+async fn a_change_of_case_lands_on_a_case_insensitive_disk() {
+    for edited in [false, true] {
+        let (old, old_data) = served_as("Note.md", b"text\n", 1, 1);
+        let body: &[u8] = if edited { b"text, edited\n" } else { b"text\n" };
+        let (new, new_data) = served_as("note.md", body, 1, 2);
+        let host = Mem {
+            fold: true,
+            ..Mem::default()
+        };
+        host.files
+            .borrow_mut()
+            .insert("Note.md".into(), old_data.clone());
+        let meta = host.stat(&old.path).await.unwrap().unwrap();
+        let mut s = state();
+        s.cursor = 1;
+        s.entries.insert(
+            old.entry,
+            kura_core::sync::Known {
+                path: old.path.clone(),
+                revision: old.revision,
+                blob: old.blob.unwrap(),
+                size: old_data.len() as u64,
+                stamp: Some(kura_core::sync::Stamp::from(&meta)),
+                resend: false,
+            },
+        );
+        let remote = Scripted {
+            serve: vec![(new.clone(), new_data.clone())],
+            ..Scripted::default()
+        };
+        let r = sync(&host, &remote, &mut s, &opts(false)).await.unwrap();
+        assert!(r.deferred.is_empty() && r.failed.is_empty(), "{r:?}");
+        assert_eq!(
+            host.files.borrow().clone().into_iter().collect::<Vec<_>>(),
+            vec![("note.md".to_owned(), new_data)],
+            "edited: {edited}"
+        );
+        assert_eq!(s.entries[&new.entry].path, new.path);
+        assert_eq!(s.cursor, 2, "the cursor moves on");
+    }
 }

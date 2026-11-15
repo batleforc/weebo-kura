@@ -576,3 +576,64 @@ async fn backup_copies_new_objects_and_the_drill_check_catches_corruption() {
         (2, 1)
     );
 }
+
+/// Review 2026-11-15 #8 and #15: a vault restored while its objects are
+/// purged. An object a device uploads again (written after the cutoff, or
+/// named by a chunk row) is kept, and the purge does not finish. And once
+/// the session holding the shared backup lock lost it, nothing is deleted.
+#[tokio::test]
+async fn purge_keeps_objects_uploaded_after_its_rows_went() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    s.put_file(b"uploaded again").await;
+    let stray = object_store::path::Path::from(format!("{}/stray", s.v));
+    s.st.objects()
+        .put(&stray, b"sealed bytes".to_vec().into())
+        .await
+        .unwrap();
+    let mut lock = s.e.state.db.acquire().await.unwrap();
+    let held: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock_shared($1)")
+        .bind(BACKUP_LOCK)
+        .fetch_one(&mut *lock)
+        .await
+        .unwrap();
+    assert!(held);
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *lock)
+        .await
+        .unwrap();
+    let v: Uuid = s.v.parse().unwrap();
+    let objects = s.st.objects();
+    let now = time::OffsetDateTime::now_utc();
+    let before = now - time::Duration::hours(1);
+    let after = now + time::Duration::hours(1);
+    let purge =
+        |cutoff| kura_server::maintenance::purge_objects(&s.e.state.db, pid, &*objects, v, cutoff);
+    assert!(
+        !purge(before).await.unwrap(),
+        "both written after the cutoff"
+    );
+    assert_eq!(s.objects().await, 2);
+    assert!(!purge(after).await.unwrap(), "the row's object is kept");
+    assert_eq!(s.objects().await, 1, "only the stray object went");
+    s.sql("DELETE FROM blob_chunk").await;
+    s.sql("DELETE FROM chunk").await;
+    // The lock is lost (a failover, an idle cutoff): nothing is deleted.
+    sqlx::query("SELECT pg_advisory_unlock_all()")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    assert!(matches!(
+        purge(after).await,
+        Err(kura_server::maintenance::MaintenanceError::LockLost)
+    ));
+    assert_eq!(s.objects().await, 1);
+    let _again: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock_shared($1)")
+        .bind(BACKUP_LOCK)
+        .fetch_one(&mut *lock)
+        .await
+        .unwrap();
+    assert!(purge(after).await.unwrap(), "nothing left");
+    assert_eq!(s.objects().await, 0);
+}

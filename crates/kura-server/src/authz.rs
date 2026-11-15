@@ -68,6 +68,48 @@ use sqlx::Row as _;
 use crate::db;
 use crate::problem::{ApiError, ProblemType};
 
+/// The tenants a device of the caller is linked to: its memberships, and
+/// every tenant where a vault binding (from the files or the API, to its
+/// subject or to one of its claim values) opens a vault to it. Without the
+/// latter, a user who reaches a vault only through a binding could not
+/// register a device, and the tenant's admins would not see or revoke it
+/// (review 2026-11-15 #14).
+pub async fn device_tenants(
+    pool: &sqlx::PgPool,
+    snapshot: &Snapshot,
+    p: &Principal,
+) -> Result<Vec<Uuid>, ApiError> {
+    let mut out: Vec<Uuid> = memberships(snapshot, p).iter().map(|m| m.tenant).collect();
+    for (slug, &tenant) in &snapshot.tenant_ids {
+        if out.contains(&tenant) {
+            continue;
+        }
+        let values: Vec<&str> = snapshot
+            .config
+            .tenants
+            .get(slug.as_str())
+            .and_then(|t| t.doc.spec.claim_mappings.as_ref())
+            .map(|m| p.claim_values(&m.claim))
+            .unwrap_or_default();
+        let mut tx = db::begin_tenant(pool, tenant, Some(&p.sub)).await?;
+        let bound: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM role_binding b JOIN vault v ON v.id = b.vault_id
+                 WHERE v.disabled_at IS NULL
+                   AND ((b.subject_kind = 'user' AND b.subject = $1)
+                        OR (b.subject_kind = 'claim' AND b.subject = ANY($2))))",
+        )
+        .bind(&p.sub)
+        .bind(&values)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        if bound {
+            out.push(tenant);
+        }
+    }
+    Ok(out)
+}
+
 /// What a tenant role grants on every vault of the tenant (§6.2): `owner`
 /// and `admin` open every vault as a manager; `member` only through bindings.
 pub const fn tenant_vault_role(role: TenantRole) -> Option<VaultRole> {

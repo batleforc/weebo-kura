@@ -882,3 +882,41 @@ async fn quota_below_usage_is_reported() {
         "{maxime}"
     );
 }
+
+/// Review 2026-11-15 #14: a user who reaches a vault only through a binding
+/// to a claim value outside the tenant's claim mappings registers a device,
+/// linked to that tenant, so the tenant's admins see and revoke it.
+#[tokio::test]
+async fn a_binding_alone_links_the_device_to_its_tenant() {
+    let Some(e) = env(module_path!()).await else {
+        return;
+    };
+    let v = vault_id(&e, "knowledge").await;
+    sqlx::query(
+        "INSERT INTO role_binding (tenant_id, vault_id, subject_kind, subject, role, managed_by)
+         SELECT tenant_id, id, 'claim', 'maxime-guests', 'viewer', 'config' FROM vault WHERE id = $1::uuid",
+    )
+    .bind(&v)
+    .execute(&e.t.owner)
+    .await
+    .unwrap();
+    let guest = e.key.token("g1", "sg", &["maxime-guests"]);
+    let dg = e.register(&guest, "guest-laptop").await;
+    let admin = e.key.token("a1", "sa", &["maxime-admins"]);
+    let da = e.register(&admin, "admin-laptop").await;
+    let (_, b) = e.call("GET", "/v1/devices", &admin, Some(&da), None).await;
+    assert!(
+        b.as_array().unwrap().iter().any(|d| d["owner"] == "g1"),
+        "the guest's device is listed: {b}"
+    );
+    let (s, _) = e
+        .call(
+            "DELETE",
+            &format!("/v1/devices/{dg}"),
+            &admin,
+            Some(&da),
+            None,
+        )
+        .await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+}

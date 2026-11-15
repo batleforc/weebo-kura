@@ -61,7 +61,12 @@ async function call(http: Http, req: HttpRequest): Promise<HttpResponse> {
 export async function discover(http: Http, issuer: string): Promise<Discovery> {
   const r = await call(http, { url: `${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`, method: "GET" });
   if (r.status !== 200) throw new AuthError("unavailable", `discovery answered ${String(r.status)}`);
-  return { tokenEndpoint: str(r.json, "token_endpoint"), deviceEndpoint: str(r.json, "device_authorization_endpoint") };
+  const d = { tokenEndpoint: str(r.json, "token_endpoint"), deviceEndpoint: str(r.json, "device_authorization_endpoint") };
+  // The provider's endpoints carry the tokens: https too (review 2026-11-15 #6).
+  for (const url of [d.tokenEndpoint, d.deviceEndpoint]) {
+    if (!secureUrl(url)) throw new AuthError("unavailable", `the identity provider announced an endpoint that is not https: ${url}`);
+  }
+  return d;
 }
 
 export async function startDevice(http: Http, d: Discovery, clientId: string): Promise<DeviceCode> {

@@ -40,12 +40,13 @@ describe("notifications", () => {
     expect(s).toBeDefined();
     s?.onopen?.();
     expect(t.states).toEqual([true]);
+    expect(t.notices()).toBe(1); // what changed while down
     s?.onmessage?.({ data: JSON.stringify({ type: "change", seq: 3 }) });
     s?.onmessage?.({ data: JSON.stringify({ type: "pull" }) });
     s?.onmessage?.({ data: JSON.stringify({ type: "ping", headSeq: 3 }) });
     s?.onmessage?.({ data: "not json" });
     s?.onmessage?.({ data: new Uint8Array() });
-    expect(t.notices()).toBe(2);
+    expect(t.notices()).toBe(3);
     expect(t.timers.delays()).toEqual([SILENCE_MS]);
     t.n.stop();
     expect(s?.closed).toBe(true);
@@ -64,8 +65,29 @@ describe("notifications", () => {
     expect(delays[1]).toBe(POLL_MS);
     t.timers.fireAll();
     await flush();
-    expect(t.notices()).toBe(1);
+    expect(t.notices()).toBe(2); // on open, then the poll
     expect(t.sockets).toHaveLength(2);
+    t.n.stop();
+  });
+
+  it("keeps backing off when the socket opens then closes at once", async () => {
+    const t = setup();
+    t.n.start();
+    await flush();
+    const retries: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      t.sockets[i]?.onopen?.();
+      t.sockets[i]?.onclose?.();
+      retries.push(Math.min(...t.timers.delays()));
+      t.timers.fireAll();
+      await flush();
+    }
+    expect(retries).toEqual([2000, 3000, 5000]);
+    // A message proves the socket is up: the next drop starts from 1 s again.
+    t.sockets[3]?.onopen?.();
+    t.sockets[3]?.onmessage?.({ data: JSON.stringify({ type: "ping", headSeq: 1 }) });
+    t.sockets[3]?.onclose?.();
+    expect(Math.min(...t.timers.delays())).toBe(2000);
     t.n.stop();
   });
 

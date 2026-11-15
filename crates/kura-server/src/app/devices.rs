@@ -117,8 +117,11 @@ pub async fn register_device(
             "name: 1 to 64 bytes",
         ));
     }
-    let tenants = members(&state, &caller)?;
-    if tenants.is_empty() {
+    let snapshot = state
+        .snapshot()
+        .ok_or(ApiError::of(ProblemType::Unavailable))?;
+    let ids = crate::authz::device_tenants(&state.db, &snapshot, &caller.principal).await?;
+    if ids.is_empty() {
         return Err(ApiError::of(ProblemType::InsufficientRole));
     }
     let sub = &caller.principal.sub;
@@ -165,7 +168,6 @@ pub async fn register_device(
     .fetch_one(&mut *tx)
     .await?;
     let created = device(&row, None)?;
-    let ids: Vec<Uuid> = tenants.iter().map(|m| m.tenant).collect();
     sqlx::query("SELECT kura_device_link($1, $2)")
         .bind(created.id)
         .bind(ids)

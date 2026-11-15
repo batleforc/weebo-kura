@@ -20,12 +20,12 @@ function scripted(answers: (HttpResponse | Error)[]): { http: Http; seen: HttpRe
 describe("device code sign-in", () => {
   it("discovers and starts", async () => {
     const { http, seen } = scripted([
-      { status: 200, json: { token_endpoint: "t", device_authorization_endpoint: "d" } },
+      { status: 200, json: { token_endpoint: "https://auth/t", device_authorization_endpoint: "https://auth/d" } },
       { status: 200, json: { device_code: "dc", user_code: "U", verification_uri: "v", verification_uri_complete: "vc", expires_in: 60, interval: 2 } },
     ]);
     const d = await discover(http, "https://auth/app/kura/");
     expect(seen[0]?.url).toBe("https://auth/app/kura/.well-known/openid-configuration");
-    expect(d).toEqual({ tokenEndpoint: "t", deviceEndpoint: "d" });
+    expect(d).toEqual({ tokenEndpoint: "https://auth/t", deviceEndpoint: "https://auth/d" });
     const c = await startDevice(http, d, "kura-plugin");
     expect(c).toMatchObject({ userCode: "U", verificationUriComplete: "vc", expiresIn: 60, interval: 2 });
     expect(seen[1]?.form).toEqual({ client_id: "kura-plugin", scope: "openid profile email offline_access" });
@@ -35,6 +35,8 @@ describe("device code sign-in", () => {
     await expect(discover(scripted([{ status: 500, json: null }]).http, "i")).rejects.toMatchObject({ reason: "unavailable" });
     await expect(discover(scripted([new Error("offline")]).http, "i")).rejects.toThrow(/cannot reach/);
     await expect(discover(scripted([{ status: 200, json: {} }]).http, "i")).rejects.toThrow(/token_endpoint/);
+    const plain = { token_endpoint: "http://auth.example/t", device_authorization_endpoint: "https://auth.example/d" };
+    await expect(discover(scripted([{ status: 200, json: plain }]).http, "i")).rejects.toThrow(/not https/);
     await expect(startDevice(scripted([{ status: 400, json: null }]).http, D, "c")).rejects.toBeInstanceOf(AuthError);
   });
 
@@ -94,9 +96,9 @@ describe("secrets and the session", () => {
     const secrets = { getSecret: (id: string) => store.get(id) ?? null, setSecret: (id: string, s: string) => { store.set(id, s); } };
     let now = 0;
     const answers: HttpResponse[] = [
-      { status: 200, json: { token_endpoint: "t", device_authorization_endpoint: "d" } },
+      { status: 200, json: { token_endpoint: "https://auth/t", device_authorization_endpoint: "https://auth/d" } },
       { status: 200, json: { access_token: "a2", refresh_token: "r2", expires_in: 900 } },
-      { status: 200, json: { token_endpoint: "t", device_authorization_endpoint: "d" } },
+      { status: 200, json: { token_endpoint: "https://auth/t", device_authorization_endpoint: "https://auth/d" } },
       { status: 400, json: { error: "invalid_grant" } },
     ];
     let calls = 0;

@@ -69,6 +69,12 @@ impl VaultPath {
         Ok(Self(nfc))
     }
 
+    /// Another path that only differs by case: the same file on a
+    /// case-insensitive disk (macOS, Windows, Android).
+    pub fn same_but_case(&self, other: &Self) -> bool {
+        self != other && self.0.to_lowercase() == other.0.to_lowercase()
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }

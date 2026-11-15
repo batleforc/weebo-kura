@@ -55,6 +55,26 @@ pub enum MaintenanceError {
     Db(#[from] sqlx::Error),
     #[error("object storage: {0}")]
     Objects(#[from] object_store::Error),
+    /// The session holding the shared backup lock is gone (a failover, an
+    /// idle cutoff): a backup may be running, so no object is deleted.
+    #[error("the backup lock was lost; object deletion stopped until the next pass")]
+    LockLost,
+}
+
+/// Errors unless the session `pid` still holds the shared backup lock, the
+/// check `backup.rs` makes on its side (review 2026-11-15 #15).
+async fn lock_held(db: &sqlx::PgPool, pid: i32) -> Result<(), MaintenanceError> {
+    let held: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND pid = $1 AND mode = 'ShareLock' AND granted)",
+    )
+    .bind(pid)
+    .fetch_one(db)
+    .await?;
+    if held {
+        Ok(())
+    } else {
+        Err(MaintenanceError::LockLost)
+    }
 }
 
 /// The off-peak window, `HH:MM-HH:MM` in UTC; equal ends mean all day.
@@ -211,26 +231,23 @@ async fn run_pass(
         None => None,
     };
     report.gc_skipped = objects.is_none();
+    // The session holding the locks, checked before each object deletion:
+    // every query below runs on other connections of the pool.
+    let lock_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut **conn)
+        .await?;
     let batches = Batches {
         db: &state.db,
         pause: settings.pause,
         shutdown,
+        lock_pid,
     };
     for v in &vaults {
         if shutdown.is_cancelled() {
             break;
         }
         // One vault failing (a timeout, a bad policy) never stops the others.
-        if let Err(e) = one_vault(
-            state,
-            &batches,
-            objects.as_deref(),
-            v,
-            settings,
-            &mut report,
-        )
-        .await
-        {
+        if let Err(e) = one_vault(&batches, objects.as_deref(), v, settings, &mut report).await {
             report.failed_vaults = report.failed_vaults.saturating_add(1);
             state.metrics.maintenance_failures_total.inc();
             tracing::warn!(error = %e, vault = %v.id, "maintenance of a vault failed, retried next pass");
@@ -257,7 +274,6 @@ async fn run_pass(
 
 /// Retention, collection or the purge of one vault.
 async fn one_vault(
-    state: &AppState,
     batches: &Batches<'_>,
     objects: Option<&dyn ObjectStore>,
     v: &VaultRow,
@@ -334,7 +350,7 @@ async fn one_vault(
     report.objects = report.objects.saturating_add(deleted);
     report.orphans = report
         .orphans
-        .saturating_add(sweep_orphans(&state.db, o, v.id, settings.orphan_grace).await?);
+        .saturating_add(sweep_orphans(batches, o, v.id, settings.orphan_grace).await?);
     Ok(())
 }
 
@@ -343,6 +359,8 @@ struct Batches<'a> {
     db: &'a sqlx::PgPool,
     pause: Duration,
     shutdown: &'a CancellationToken,
+    /// The session holding the shared backup lock.
+    lock_pid: i32,
 }
 
 impl Batches<'_> {
@@ -376,6 +394,7 @@ async fn collect_chunks(
 ) -> Result<(u64, u64), MaintenanceError> {
     let (mut rows, mut deleted) = (0u64, 0u64);
     loop {
+        lock_held(b.db, b.lock_pid).await?;
         let keys: Vec<String> = sqlx::query_scalar("SELECT kura_gc_chunks($1, $2)")
             .bind(vault)
             .bind(BATCH)
@@ -407,7 +426,7 @@ async fn delete_objects(objects: &dyn ObjectStore, keys: Vec<String>) -> u64 {
 /// Objects under the vault's prefix that no chunk row names and older than
 /// the grace period: left by a crash between an object PUT and its row (§6.9).
 async fn sweep_orphans(
-    db: &sqlx::PgPool,
+    b: &Batches<'_>,
     objects: &dyn ObjectStore,
     vault: Uuid,
     grace: time::Duration,
@@ -429,11 +448,12 @@ async fn sweep_orphans(
             }
         }
         if page.len() >= BATCH.unsigned_abs() as usize || (next.is_none() && !page.is_empty()) {
+            lock_held(b.db, b.lock_pid).await?;
             let known: HashSet<String> =
                 sqlx::query_scalar::<_, String>("SELECT kura_known_objects($1, $2)")
                     .bind(vault)
                     .bind(&page)
-                    .fetch_all(db)
+                    .fetch_all(b.db)
                     .await?
                     .into_iter()
                     .collect();
@@ -454,7 +474,12 @@ async fn purge_vault(
     objects: &dyn ObjectStore,
     vault: Uuid,
 ) -> Result<bool, MaintenanceError> {
-    loop {
+    let cutoff = loop {
+        // Read before each batch, so the last one's (the batch that finds the
+        // vault still due and nothing left) precedes any restore: an object
+        // written after it belongs to the vault come back (review 2026-11-15 #8).
+        let cutoff: time::OffsetDateTime =
+            sqlx::query_scalar("SELECT now()").fetch_one(b.db).await?;
         let n: i64 = sqlx::query_scalar("SELECT kura_purge_vault($1, $2)")
             .bind(vault)
             .bind(BATCH)
@@ -464,28 +489,16 @@ async fn purge_vault(
             return Ok(false);
         }
         if n == 0 {
-            break;
+            break cutoff;
         }
         if b.shutdown.is_cancelled() {
             return Ok(false);
         }
         tokio::time::sleep(b.pause).await;
-    }
-    let prefix = ObjectPath::from(vault.to_string());
-    // shortcut: the prefix is listed whole in memory (about 100 bytes a key);
-    // stream it in pages if vaults reach millions of objects.
-    let keys: Vec<String> = objects
-        .list(Some(&prefix))
-        .map(|m| m.map(|m| m.location.to_string()))
-        .try_collect()
-        .await?;
-    let mut deleted = 0u64;
-    for page in keys.chunks(BATCH.unsigned_abs() as usize) {
-        deleted = deleted.saturating_add(delete_objects(objects, page.to_vec()).await);
-    }
+    };
     // The vault row is the only way back to its prefix: it stays until every
     // object is gone, and the next pass tries again.
-    if deleted < keys.len() as u64 {
+    if !purge_objects(b.db, b.lock_pid, objects, vault, cutoff).await? {
         return Ok(false);
     }
     let done: bool = sqlx::query_scalar("SELECT kura_purge_vault_finish($1)")
@@ -496,6 +509,60 @@ async fn purge_vault(
         tracing::warn!(target: "audit", event = "vault_purged", vault = %vault, "vault purged after its Delete grace period");
     }
     Ok(done)
+}
+
+/// Deletes a purged vault's objects written before `cutoff` that no chunk
+/// row names; `true` once nothing is left under its prefix. An object newer
+/// than `cutoff` or named by a row is kept: the vault came back and a device
+/// uploaded it again, its row in flight or landed. `lock_pid` is the session
+/// holding the shared backup lock; once it lost the lock, nothing is deleted.
+pub async fn purge_objects(
+    db: &sqlx::PgPool,
+    lock_pid: i32,
+    objects: &dyn ObjectStore,
+    vault: Uuid,
+    cutoff: time::OffsetDateTime,
+) -> Result<bool, MaintenanceError> {
+    let prefix = ObjectPath::from(vault.to_string());
+    // shortcut: the prefix is listed whole in memory (about 100 bytes a key);
+    // stream it in pages if vaults reach millions of objects.
+    let listed: Vec<(String, bool)> = objects
+        .list(Some(&prefix))
+        .map(|m| {
+            m.map(|m| {
+                (
+                    m.location.to_string(),
+                    i128::from(m.last_modified.timestamp_millis())
+                        < cutoff.unix_timestamp_nanos() / 1_000_000,
+                )
+            })
+        })
+        .try_collect()
+        .await?;
+    let mut kept = 0usize;
+    for page in listed.chunks(BATCH.unsigned_abs() as usize) {
+        let old: Vec<String> = page
+            .iter()
+            .filter(|(_, old)| *old)
+            .map(|(k, _)| k.clone())
+            .collect();
+        lock_held(db, lock_pid).await?;
+        let known: HashSet<String> =
+            sqlx::query_scalar::<_, String>("SELECT kura_known_objects($1, $2)")
+                .bind(vault)
+                .bind(&old)
+                .fetch_all(db)
+                .await?
+                .into_iter()
+                .collect();
+        let gone: Vec<String> = old.into_iter().filter(|k| !known.contains(k)).collect();
+        let n = gone.len();
+        let deleted = delete_objects(objects, gone).await;
+        kept = kept
+            .saturating_add(page.len().saturating_sub(n))
+            .saturating_add(n.saturating_sub(usize::try_from(deleted).unwrap_or(n)));
+    }
+    Ok(kept == 0)
 }
 
 #[cfg(test)]

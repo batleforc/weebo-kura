@@ -136,6 +136,8 @@ export class ObsidianHost implements KuraHost {
   }
 
   async trash(path: string): Promise<void> {
+    // Not under the user either (review 2026-11-15 #4): the core retries later.
+    if (this.o.isOpen(path)) throw new Error(`${path} is open in the editor; trashed once it is closed`);
     // Obsidian's own `.trash`, never unlinked (§6.3).
     await this.o.adapter.trashLocal(this.full(path));
   }
