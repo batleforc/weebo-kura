@@ -660,8 +660,8 @@
     "semantic_hash": ""
   },
   "dev/config/tenants.yaml": {
-    "mtime": 1794941472.592268,
-    "seen": 1794941530.115942,
+    "mtime": 1794942181.7736423,
+    "seen": 1794942242.9174204,
     "ast_hash": "3dc92d65a932cf3892cb2fe7c4054727",
     "semantic_hash": ""
   },
@@ -1134,9 +1134,9 @@
     "semantic_hash": ""
   },
   "tests/heavy/console.sh": {
-    "mtime": 1794941224.3326159,
-    "seen": 1794941530.1172855,
-    "ast_hash": "23c89b7f08bd43e24360794403c72de3",
+    "mtime": 1794941995.4675286,
+    "seen": 1794942242.9188592,
+    "ast_hash": "30a4cc8bb453973a3ce346836a754cad",
     "semantic_hash": ""
   },
   "docs/RFC/rfc0003-web-console-and-notifications.md": {
@@ -1224,21 +1224,21 @@
     "semantic_hash": ""
   },
   "ui/src/App.vue": {
-    "mtime": 1794938389.4403625,
-    "seen": 1794939114.142675,
-    "ast_hash": "379b238733b730d30f5cbe7d00093db2",
+    "mtime": 1794941879.446634,
+    "seen": 1794942242.9191065,
+    "ast_hash": "dc78834478f161e30e335774580bb108",
     "semantic_hash": ""
   },
   "ui/src/api/client.spec.ts": {
-    "mtime": 1794938508.6715455,
-    "seen": 1794939114.1426756,
-    "ast_hash": "0eb1e5f20d4f56a2f03704d0fafa18d7",
+    "mtime": 1794942109.521875,
+    "seen": 1794942242.9191074,
+    "ast_hash": "728cefae260075099dbf853489f2f14a",
     "semantic_hash": ""
   },
   "ui/src/api/client.ts": {
-    "mtime": 1794938508.6715455,
-    "seen": 1794939114.1426766,
-    "ast_hash": "619a4e5726483155ebd79fa02e4ecbae",
+    "mtime": 1794942109.5838277,
+    "seen": 1794942242.9191082,
+    "ast_hash": "44f5a828954aa9d4725210260690d122",
     "semantic_hash": ""
   },
   "ui/src/api/problem.ts": {
@@ -1308,15 +1308,15 @@
     "semantic_hash": ""
   },
   "ui/src/locales/en.json": {
-    "mtime": 1794940921.0434954,
-    "seen": 1794941530.1177619,
-    "ast_hash": "59a8ff6da0250adf81f20035fa9b894d",
+    "mtime": 1794941879.3846364,
+    "seen": 1794942242.919456,
+    "ast_hash": "a88d86f2111f1a56b6c9de333501ee21",
     "semantic_hash": ""
   },
   "ui/src/locales/fr.json": {
-    "mtime": 1794940921.0436547,
-    "seen": 1794941530.1177626,
-    "ast_hash": "13c73f49f091e13ed49862defab8bb0b",
+    "mtime": 1794941879.3848515,
+    "seen": 1794942242.919457,
+    "ast_hash": "b442e582e27f90a096a8415b4f283453",
     "semantic_hash": ""
   },
   "ui/src/main.ts": {
@@ -1350,9 +1350,9 @@
     "semantic_hash": ""
   },
   "ui/src/pages/VaultsPage.vue": {
-    "mtime": 1794940931.489514,
-    "seen": 1794941530.1179183,
-    "ast_hash": "d4a4257e8888e5ebe9b510cd494259d9",
+    "mtime": 1794941888.8036125,
+    "seen": 1794942242.9197128,
+    "ast_hash": "098ccbdecc337acdd3cf36698688e390",
     "semantic_hash": ""
   },
   "ui/src/pages/pages.spec.ts": {
@@ -1368,9 +1368,9 @@
     "semantic_hash": ""
   },
   "ui/src/router.ts": {
-    "mtime": 1794940931.5548778,
-    "seen": 1794941530.1179848,
-    "ast_hash": "9f652b5f4237b1dd8c9145e4eaa508d9",
+    "mtime": 1794941879.452634,
+    "seen": 1794942242.920062,
+    "ast_hash": "62853d82889e19c06f6f63106f8b67f3",
     "semantic_hash": ""
   },
   "ui/src/sw.spec.ts": {
@@ -1398,9 +1398,9 @@
     "semantic_hash": ""
   },
   "docs/RFC/rfc0003-implementation-plan.md": {
-    "mtime": 1794941526.375119,
-    "seen": 1794941530.118229,
-    "ast_hash": "a363c70070e7ee63844d9188c0d4933e",
+    "mtime": 1794942239.8370156,
+    "seen": 1794942242.9203598,
+    "ast_hash": "cf62451f1f5fcff2cece08893f692c26",
     "semantic_hash": ""
   },
   "ui/index.html": {
@@ -1422,9 +1422,9 @@
     "semantic_hash": ""
   },
   "tests/heavy/reader.sh": {
-    "mtime": 1794941144.05477,
-    "seen": 1794941530.117314,
-    "ast_hash": "270cae25899fde541c9b138cccbcbf5d",
+    "mtime": 1794942220.3605485,
+    "seen": 1794942242.9188893,
+    "ast_hash": "7970d8133187778a7bfbccd64f7acee4",
     "semantic_hash": ""
   },
   "ui/e2e/reader.spec.ts": {
@@ -1515,6 +1515,66 @@
     "mtime": 1794941516.5823722,
     "seen": 1794941530.1183155,
     "ast_hash": "9d58a81e5cb4b27b4fd9eb42c449fa1c",
+    "semantic_hash": ""
+  },
+  "ui/e2e/console.spec.ts": {
+    "mtime": 1794942139.0003133,
+    "seen": 1794942242.9189453,
+    "ast_hash": "7fd2868a643653205fe45849f132ae96",
+    "semantic_hash": ""
+  },
+  "ui/src/manage/targets.ts": {
+    "mtime": 1794941879.44765,
+    "seen": 1794942242.9194868,
+    "ast_hash": "03a3008f9a29353fc3d97b4deef78aa4",
+    "semantic_hash": ""
+  },
+  "ui/src/manage/useLoad.ts": {
+    "mtime": 1794941807.5805776,
+    "seen": 1794942242.9194877,
+    "ast_hash": "5fab20809db725383588a7758827c51c",
+    "semantic_hash": ""
+  },
+  "ui/src/pages/AccessPage.vue": {
+    "mtime": 1794941879.455634,
+    "seen": 1794942242.9195173,
+    "ast_hash": "e5c31231650bfcc87f69cc3428303b85",
+    "semantic_hash": ""
+  },
+  "ui/src/pages/KeysPage.vue": {
+    "mtime": 1794941879.4516342,
+    "seen": 1794942242.9196455,
+    "ast_hash": "2d791b5f0eaa24d288d8b217e57890b9",
+    "semantic_hash": ""
+  },
+  "ui/src/pages/ManagePage.vue": {
+    "mtime": 1794941879.448109,
+    "seen": 1794942242.9196463,
+    "ast_hash": "45af7bef2ac4acb201c13be2cf8b4f1b",
+    "semantic_hash": ""
+  },
+  "ui/src/pages/StatusPage.vue": {
+    "mtime": 1794941879.450634,
+    "seen": 1794942242.9197102,
+    "ast_hash": "ec8eee44ca51bbbfff6a3e2312d2a9b0",
+    "semantic_hash": ""
+  },
+  "ui/src/pages/TenantDevicesPage.vue": {
+    "mtime": 1794941879.449634,
+    "seen": 1794942242.9197109,
+    "ast_hash": "72e6dfff60eb73a690b4e9e10e0f58b9",
+    "semantic_hash": ""
+  },
+  "ui/src/pages/TenantVaultsPage.vue": {
+    "mtime": 1794941879.450634,
+    "seen": 1794942242.9197118,
+    "ast_hash": "51507d1d8436604565bdda2714cd515b",
+    "semantic_hash": ""
+  },
+  "ui/src/pages/manage-pages.spec.ts": {
+    "mtime": 1794941963.8249002,
+    "seen": 1794942242.9197135,
+    "ast_hash": "ae9bfec015247d9c6a4742eac8bab5ce",
     "semantic_hash": ""
   },
   "plugin/pnpm-lock.yaml": {

@@ -14,6 +14,18 @@ const router = useRouter();
 const session = useSession();
 const meStore = useMe();
 const shell = computed(() => route.meta.access === "member");
+/**
+ * The back office is one more menu, present only when `GET /me` gives a role
+ * that can use it (§4.5): a tenant admin or owner, a platform admin. A vault
+ * manager without a tenant role finds it from the vault (decision D1 of the
+ * phase 2 plan).
+ */
+const canManage = computed(
+  () =>
+    !!meStore.me &&
+    (meStore.me.platformAdmin ||
+      meStore.me.tenants.some((x) => x.role !== "member")),
+);
 /** Signed in, but in no tenant: registering a device is refused (§4.5). */
 const noTenant = ref(false);
 
@@ -46,6 +58,7 @@ async function leave(): Promise<void> {
       <nav :aria-label="t('nav.main')" class="flex gap-4">
         <RouterLink to="/vaults" active-class="underline">{{ t("nav.vaults") }}</RouterLink>
         <RouterLink to="/devices" active-class="underline">{{ t("nav.devices") }}</RouterLink>
+        <RouterLink v-if="canManage" to="/manage" active-class="underline" data-test="manage">{{ t("manage.nav") }}</RouterLink>
       </nav>
       <span class="ml-auto text-ink-dim">{{ meStore.me?.name ?? meStore.me?.subject ?? "" }}</span>
       <button type="button" class="border border-rule px-2" data-test="sign-out" @click="leave">

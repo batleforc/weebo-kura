@@ -81,7 +81,7 @@ pass "7: an anonymous GET /v1/vaults is 401"
 refresh=$(bash "$root/tests/heavy/console.sh" --refresh-token bob)
 [ -n "$refresh" ] || fail "no kura-web refresh token for bob"
 (cd "$root/ui" && KURA_E2E_REFRESH=$refresh KURA_E2E_VAULT=$vault KURA_E2E_NOTE=$note KURA_E2E_HIDDEN=$hidden \
-  KURA_DEV_SERVER=$server pnpm exec playwright test --reporter=line) || fail "1, 6: the reader's browser proof failed"
+  KURA_DEV_SERVER=$server pnpm exec playwright test e2e/reader.spec.ts --reporter=line) || fail "1, 6: the reader's browser proof failed"
 pass "1, 6: in Chromium bob reads Sessions/ and Resumes/; the hostile note ran nothing and the frame cannot reach storage"
 
 # 5. alice moves the note under MJ/: bob loses it and its history.

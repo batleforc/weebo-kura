@@ -36,7 +36,8 @@ describe("the device", () => {
   });
 
   it("is registered once, as a web device, and kept", async () => {
-    const id = await ensureDevice();
+    const [id, same] = await Promise.all([ensureDevice(), ensureDevice()]);
+    expect(same).toBe(id);
     expect(await ensureDevice()).toBe(id);
     expect(registerDevice).toHaveBeenCalledTimes(1);
     expect(vi.mocked(registerDevice).mock.calls[0]?.[0]?.body).toMatchObject({

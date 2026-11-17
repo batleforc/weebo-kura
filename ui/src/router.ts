@@ -71,6 +71,43 @@ export const routes: RouteRecordRaw[] = [
     component: () => import("@/pages/SearchPage.vue"),
     meta: { access: "member" },
   },
+  // The back office (RFC 0003 phase 2): shown by role, decided by the API.
+  {
+    path: "/manage",
+    name: "manage",
+    component: () => import("@/pages/ManagePage.vue"),
+    meta: { access: "member" },
+  },
+  {
+    path: "/manage/vaults/:v/access",
+    name: "access",
+    component: () => import("@/pages/AccessPage.vue"),
+    meta: { access: "member" },
+  },
+  {
+    path: "/manage/vaults/:v/keys",
+    name: "keys",
+    component: () => import("@/pages/KeysPage.vue"),
+    meta: { access: "member" },
+  },
+  {
+    path: "/manage/tenants/:t/vaults",
+    name: "tenant-vaults",
+    component: () => import("@/pages/TenantVaultsPage.vue"),
+    meta: { access: "member" },
+  },
+  {
+    path: "/manage/devices",
+    name: "tenant-devices",
+    component: () => import("@/pages/TenantDevicesPage.vue"),
+    meta: { access: "member" },
+  },
+  {
+    path: "/manage/status",
+    name: "status",
+    component: () => import("@/pages/StatusPage.vue"),
+    meta: { access: "member" },
+  },
   { path: "/:pathMatch(.*)*", redirect: "/vaults" },
 ];
 

@@ -140,4 +140,15 @@ at=$(field "$t" access_token)
 [ "$(claim "$at" auth_time)" = "$auth_time" ] || fail "auth_time changed once the Authentik session ended"
 pass "h. after the Authentik session ends the refresh still works, with the same auth_time"
 [ -n "$(claim "$at" sid)" ] || note "that token has no sid: require_session then rests on auth_time [R12]"
+# §6.P observations 1 to 3, in Chromium, when the console is served
+# (task ui:build, then task dev:run).
+server=${KURA_DEV_SERVER:-http://127.0.0.1:58080}
+if curl -sf "$server/app/config.json" >/dev/null; then
+  vault_id() { podman exec kura-dev-postgres psql -U postgres -d kura -tAc "SELECT id FROM vault WHERE name = '$1'"; }
+  (cd "$root/ui" && KURA_E2E_NOTES=$(vault_id notes) KURA_E2E_CAMPAIGN=$(vault_id campaign) KURA_E2E_AUTHENTIK=$ak \
+    KURA_DEV_SERVER=$server pnpm exec playwright test e2e/console.spec.ts --reporter=line) || fail "§6.P 1 to 3: the console's browser proof failed"
+  pass "§6.P 1 to 3: alice signs in through Authentik with no cookie, a key's secret is shown once, bob is refused the keys"
+else
+  note "no console on $server: §6.P observations 1 to 3 not run (task ui:build, task dev:run)"
+fi
 echo "console.sh: the Authentik facts of RFC 0003 hold on $ak"

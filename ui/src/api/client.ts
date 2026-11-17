@@ -73,17 +73,26 @@ export function browserName(ua: string = navigator.userAgent): string {
  * This browser's device id, registered at first use. The server hands back
  * the device this Authentik session already has (one per session, T12).
  */
-export async function ensureDevice(): Promise<string> {
+export function ensureDevice(): Promise<string> {
   const session = useSession();
   const known = session.device();
-  if (known) return known;
-  const { data } = await registerDevice({
+  if (known) return Promise.resolve(known);
+  // One registration at a time: the shell and the page ask together at start.
+  registering ??= registerDevice({
     body: { name: browserName(), profile: "web" },
     throwOnError: true,
-  });
-  session.setDevice(data.id);
-  return data.id;
+  })
+    .then(({ data }) => {
+      session.setDevice(data.id);
+      return data.id;
+    })
+    .finally(() => {
+      registering = null;
+    });
+  return registering;
 }
+
+let registering: Promise<string> | null = null;
 
 /**
  * Runs a call that needs a device; a device the server no longer knows
