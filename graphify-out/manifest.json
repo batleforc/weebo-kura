@@ -72,9 +72,9 @@
     "semantic_hash": ""
   },
   ".tasks/dev.yaml": {
-    "mtime": 1794945063.1362727,
-    "seen": 1794945747.7956057,
-    "ast_hash": "c8917bba063dd353357a697d7eaece92",
+    "mtime": 1794952003.5882878,
+    "seen": 1794952093.960434,
+    "ast_hash": "61014d086d1bdcefec240a1a9cfdd33e",
     "semantic_hash": ""
   },
   ".tasks/mise.yaml": {
@@ -90,9 +90,9 @@
     "semantic_hash": ""
   },
   ".tasks/security.yaml": {
-    "mtime": 1794938823.5441325,
-    "seen": 1794939114.1364655,
-    "ast_hash": "5fe77befc944d5abd047f7b1ca6f929a",
+    "mtime": 1794948502.3090339,
+    "seen": 1794952093.960583,
+    "ast_hash": "e6e8cd6933886b56a9fb3af7e1dddf75",
     "semantic_hash": ""
   },
   ".tasks/skills.yaml": {
@@ -474,9 +474,9 @@
     "semantic_hash": ""
   },
   "docs/operator.md": {
-    "mtime": 1794946590.1346705,
-    "seen": 1794948163.4246488,
-    "ast_hash": "185043be6a5d0a414772173e693fc83f",
+    "mtime": 1794952083.0586994,
+    "seen": 1794952093.9688666,
+    "ast_hash": "a0ebcf5533d4bc21bd308781d5bab79e",
     "semantic_hash": ""
   },
   "docs/readme.md": {
@@ -660,9 +660,9 @@
     "semantic_hash": ""
   },
   "dev/config/tenants.yaml": {
-    "mtime": 1794945112.7999067,
-    "seen": 1794945747.7990754,
-    "ast_hash": "03e16bf92cd4cba7c42be69fc11fc86e",
+    "mtime": 1794948469.1952224,
+    "seen": 1794952093.9646888,
+    "ast_hash": "2192b06d6062d741ea034a4be4edff4e",
     "semantic_hash": ""
   },
   "dev/server.yaml": {
@@ -966,9 +966,9 @@
     "semantic_hash": ""
   },
   "dev/drill.sh": {
-    "mtime": 1794741231.207385,
-    "seen": 1794741943.9108086,
-    "ast_hash": "eb1e58ba0b541267f7cb343ae4968b30",
+    "mtime": 1794952083.0852535,
+    "seen": 1794952093.9646904,
+    "ast_hash": "b2d661ed70d752fd9617fa5fd60060cc",
     "semantic_hash": ""
   },
   "perf/attach.sh": {
@@ -1062,9 +1062,9 @@
     "semantic_hash": ""
   },
   "tests/heavy/authz.sh": {
-    "mtime": 1794708072.9597516,
-    "seen": 1794734509.9326293,
-    "ast_hash": "5c4bf357709e628173450056441b3156",
+    "mtime": 1794948478.8389423,
+    "seen": 1794952093.9662745,
+    "ast_hash": "088f9618b16ff34547a4cb12e08f48a7",
     "semantic_hash": ""
   },
   "crates/kura-core/src/config.rs": {
@@ -1122,9 +1122,9 @@
     "semantic_hash": ""
   },
   "docs/RFC/rfc0002-implementation-plan.md": {
-    "mtime": 1794948150.6126184,
-    "seen": 1794948163.42447,
-    "ast_hash": "a0376e7e7b23edd3584aaeb67fa2d8ae",
+    "mtime": 1794948522.396294,
+    "seen": 1794952093.9687345,
+    "ast_hash": "c64bab7b40623e92cfb42e32b5bb94cf",
     "semantic_hash": ""
   },
   "crates/kura-server/build.rs": {
@@ -1164,9 +1164,9 @@
     "semantic_hash": ""
   },
   "docs/RFC/rfc0004-implementation-plan.md": {
-    "mtime": 1794945488.5792289,
-    "seen": 1794945747.8023226,
-    "ast_hash": "6c3a51e0d96a6a7d54f7a83f2e6d6319",
+    "mtime": 1794948522.396415,
+    "seen": 1794952093.9687686,
+    "ast_hash": "4b3061452fd31c1d6d9eff86a0c6e0e6",
     "semantic_hash": ""
   },
   ".tasks/ui.yaml": {
@@ -1398,9 +1398,9 @@
     "semantic_hash": ""
   },
   "docs/RFC/rfc0003-implementation-plan.md": {
-    "mtime": 1794945488.556512,
-    "seen": 1794945747.802321,
-    "ast_hash": "5a071bd984b866075b9971c673fa6923",
+    "mtime": 1794948522.3960912,
+    "seen": 1794952093.968736,
+    "ast_hash": "93771e8a3ce5edfe3576e354086d7c4d",
     "semantic_hash": ""
   },
   "ui/index.html": {

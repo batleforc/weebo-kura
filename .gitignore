@@ -51,6 +51,8 @@ fuzz/artifacts/
 
 # Local dev stack: generated CA/certificates (task dev:certs)
 dev/certs/
+# The local OpenBao's unseal key and root token (task dev:vault)
+dev/openbao-keys.json
 
 # The plugin: the generated WASM core and its build output
 plugin/src/wasm/

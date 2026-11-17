@@ -536,7 +536,7 @@ Rootless podman, one container at a time, every port on loopback:
 
 | Task | What |
 |---|---|
-| `task dev:stack` | PostgreSQL 18 (55433), OpenBao 2.7 dev mode (58200, token `kura-dev`), RustFS (59000), Authentik 2026.8 (https://localhost:59443), then `dev:seed` |
+| `task dev:stack` | PostgreSQL 18 (55433), OpenBao 2.7 persistent (58200, token `kura-dev`, Raft in the volume `kura-dev-vault-data`, unseal key in `dev/openbao-keys.json`), RustFS (59000), Authentik 2026.8 (https://localhost:59443), then `dev:seed` |
 | `task dev:seed` | OpenBao KV `mv/kura/{database,bucket}`, Transit key `kura-dev`, database `kura`, `kura_app`, migrations |
 | `task dev:run [RELEASE=1]` | `kura-server` with `dev/server.yaml` and `dev/config/` (API 58080, metrics 59090); `RELEASE=1` for the perf tasks |
 | `task dev:maintain` | One maintenance pass now |
