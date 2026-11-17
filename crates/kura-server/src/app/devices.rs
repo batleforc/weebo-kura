@@ -222,7 +222,9 @@ pub async fn list_devices(
 ) -> Result<Json<Vec<Device>>, ApiError> {
     let sub = caller.caller.principal.sub.clone();
     let mut tx = db::begin_subject(&state.db, &sub).await?;
-    let rows = sqlx::query("SELECT id, name, profile, created_at, last_seen, revoked_at FROM device ORDER BY created_at, id LIMIT 1000")
+    // A signed-out web device is gone for its browser: not listed (it is
+    // purged after 30 days idle).
+    let rows = sqlx::query("SELECT id, name, profile, created_at, last_seen, revoked_at FROM device WHERE signed_out_at IS NULL ORDER BY created_at, id LIMIT 1000")
         .fetch_all(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -347,6 +349,10 @@ pub async fn sign_out_device(
         return Err(ApiError::of(ProblemType::NotFound));
     }
     tracing::info!(target: "audit", event = "device_signed_out", sub = %sub, device = %d);
+    // Its sockets close on every replica, as on a revocation.
+    if let Err(e) = crate::notify::notify_revoked(&state.db, d).await {
+        tracing::warn!(error = %e, "sign-out not broadcast; its sockets close at their next check");
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

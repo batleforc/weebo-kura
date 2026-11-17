@@ -40,6 +40,16 @@ spec:
   bindings:
     - { role: viewer, claimValue: kura-dev }
 ---
+# RFC 0005: members read two folders of this one, owners all of it
+# (tests/heavy/reader.sh writes Sessions/, Resumes/ and MJ/ as alice).
+apiVersion: kura.weebo.io/v1alpha1
+kind: KuraVault
+metadata: { name: campaign, namespace: dev }
+spec:
+  tenantRef: { name: dev }
+  bindings:
+    - { role: viewer, claimValue: kura-dev, paths: [Sessions/, Resumes/] }
+---
 # Another tenant nobody of the dev users belongs to: its vault must answer
 # exactly as a missing one (§6.P observation 4, tests/heavy/authz.sh).
 apiVersion: kura.weebo.io/v1alpha1

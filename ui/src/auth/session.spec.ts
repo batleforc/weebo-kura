@@ -177,6 +177,19 @@ describe("refresh", () => {
 });
 
 describe("sign-out", () => {
+  it("renews a token first when none is in memory, to sign the device out", async () => {
+    freshIdp(() =>
+      json({ access_token: "fresh", refresh_token: "r2", expires_in: 900 }),
+    );
+    sessionStorage.setItem("kura:refresh-token", "r1");
+    const session = useSession();
+    session.setDevice("dev-2");
+    const signedOut: string[] = [];
+    await session.signOut(async (d) => signedOut.push(d));
+    expect(signedOut).toEqual(["dev-2"]);
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+  });
+
   // T14, `sign_out_clears_storage_and_closes_the_device` (decisions 24, 25).
   it("signs the device out, clears both storages and fires the revocation unread", async () => {
     const fetchMock = freshIdp(() =>

@@ -249,7 +249,9 @@ export const useSession = defineStore("session", () => {
   ): Promise<void> {
     const held = stored();
     const d = device();
-    if (d && accessToken.value) {
+    // A token is needed to sign the device out at Kura: renewed first when
+    // none is in memory, or the device would stay live (code review #10).
+    if (d && (accessToken.value || (held && (await bearer())))) {
       await signOutDevice(d).catch(() => undefined);
     }
     setDevice(null);

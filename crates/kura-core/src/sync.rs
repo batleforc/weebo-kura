@@ -150,10 +150,6 @@ pub enum SyncError {
     /// the user agreed (§6.3).
     #[error("a full resync would move {deletions} of {files} local files to the trash")]
     TooManyDeletions { deletions: usize, files: usize },
-    /// Local changes outside what [`Options::writable`] allows; nothing was
-    /// uploaded (RFC 0004 §6.6).
-    #[error("{} local changes are outside the folders this caller may write", paths.len())]
-    NotWritable { paths: Vec<String> },
 }
 
 /// The local side: files, the persisted state, time and randomness.
@@ -240,6 +236,9 @@ pub struct Report {
     pub deferred: Vec<VaultPath>,
     /// The push was refused (role, quota): local changes are kept.
     pub refused: Option<RemoteError>,
+    /// Local changes outside [`Options::writable`]: nothing was pushed, the
+    /// pull ran (RFC 0004 §6.6).
+    pub not_writable: Vec<String>,
     /// Remote files this device could not write, with why; retried next run.
     pub failed: Vec<(VaultPath, String)>,
     /// A full resync ran, after this answer: `cursor_expired` or
@@ -265,7 +264,7 @@ pub struct Options {
     pub prefer_remote: bool,
     /// Where this caller may write, when it is not everywhere (a scoped
     /// token, RFC 0004 §6.6): a change elsewhere stops the push before any
-    /// upload, with [`SyncError::NotWritable`].
+    /// upload, listed in [`Report::not_writable`]; the pull still runs.
     pub writable: Option<Writable>,
 }
 
@@ -636,7 +635,10 @@ async fn push<H: Host, R: Remote>(
         paths.sort();
         paths.dedup();
         if !paths.is_empty() {
-            return Err(SyncError::NotWritable { paths });
+            // Like a refused push: local changes are kept, remote ones still
+            // arrive (code review of 2026-11-17, #1).
+            report.not_writable = paths;
+            return Ok(());
         }
     }
     if opts.dry_run || ops.is_empty() {

@@ -5,7 +5,11 @@
 # here after an Authentik upgrade means §6.2 must be read again. The §6.P
 # observations (Chromium, the webhook receiver) join this suite in phase 1.
 # "note:" lines are behaviours the design tolerates but does not need.
+# `console.sh --refresh-token <user>` only signs <user> in as the console and
+# prints its refresh token (tests/heavy/reader.sh).
 set -euo pipefail
+who=alice
+[ "${1:-}" = --refresh-token ] && who=${2:?usage: console.sh --refresh-token <user>}
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
 ak=${KURA_DEV_AUTHENTIK:-https://localhost:59443}
@@ -62,8 +66,13 @@ c -o /dev/null -f "$ak/application/o/kura-web/.well-known/openid-configuration" 
   || fail "no kura-web provider on $ak: task dev:authentik (re-apply the blueprint on an older stack)"
 flow=default-authentication-flow
 step $flow "" >/dev/null
-step $flow "" '{"component":"ak-stage-identification","uid_field":"alice"}' >/dev/null
-[ "$(step $flow "" '{"component":"ak-stage-password","password":"kura-dev"}' | jq -r .component)" = xak-flow-redirect ] || fail "alice cannot log in"
+step $flow "" "{\"component\":\"ak-stage-identification\",\"uid_field\":\"$who\"}" >/dev/null
+[ "$(step $flow "" '{"component":"ak-stage-password","password":"kura-dev"}' | jq -r .component)" = xak-flow-redirect ] || fail "$who cannot log in"
+if [ "${1:-}" = --refresh-token ]; then
+  authorize
+  field "$(exchange)" refresh_token
+  exit 0
+fi
 
 # a. The token endpoint answers the application's origin, and only it.
 authorize; [ -n "$code" ] || fail "no authorization code"
@@ -71,7 +80,11 @@ t=$(exchange); [ "$(status "$t")" = 200 ] || fail "code exchange: $t"
 [ "$(allow_origin "$work/h")" = "$origin" ] || fail "the token answer does not allow $origin"
 c -o /dev/null -D "$work/p" -X OPTIONS -H "Origin: $origin" -H 'Access-Control-Request-Method: POST' "$ak/application/o/token/"
 [ "$(allow_origin "$work/p")" = "$origin" ] || fail "the preflight does not allow $origin"
-pass "a. a public client exchanges its code from $origin (CORS from the redirect URI)"
+c -o /dev/null -D "$work/d" -H "Origin: $origin" "$ak/application/o/kura-web/.well-known/openid-configuration"
+[ "$(allow_origin "$work/d")" = "$origin" ] || fail "kura-web's discovery does not allow $origin"
+c -o /dev/null -D "$work/d" -H "Origin: $origin" "$ak/application/o/kura/.well-known/openid-configuration"
+[ -z "$(allow_origin "$work/d")" ] || note "another application's discovery now allows $origin"
+pass "a. a public client exchanges its code from $origin and reads its own discovery (CORS from the redirect URI, per application)"
 
 # b. The access token names its session, on a sign-in and after a refresh.
 at=$(field "$t" access_token); rt1=$(field "$t" refresh_token)

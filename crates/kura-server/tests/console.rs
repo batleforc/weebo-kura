@@ -162,6 +162,21 @@ async fn web_device_is_reused_per_sid() {
         (st, problem(&b)),
         (StatusCode::UNAUTHORIZED, "/v1/problems/device_unknown")
     );
+    let active: Option<bool> = sqlx::query_scalar("SELECT kura_device_active($1::uuid)")
+        .bind(&d)
+        .fetch_one(&e.t.app)
+        .await
+        .unwrap();
+    assert_eq!(active, Some(false), "its sockets close");
+    let (_, listed) = e.call("GET", "/v1/devices", &token, Some(&cli), None).await;
+    assert!(
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|x| x["id"] != json!(d)),
+        "not listed: {listed}"
+    );
     let (st, _) = e.call("GET", "/v1/vaults", &token, Some(&cli), None).await;
     assert_eq!(st, StatusCode::OK, "the session is not banned");
     // `sign_in_works_after_sign_out_in_the_same_session`: a new device.
@@ -333,6 +348,9 @@ async fn the_console_is_served_with_its_headers() {
     let (st, h, _) = get(state.clone(), "/app/assets/app-1a2b.js").await;
     assert_eq!(st, StatusCode::OK);
     assert!(h["cache-control"].to_str().unwrap().contains("immutable"));
+    let (st, _, body) = get(state.clone(), "/app/assets/gone-9z9z.js").await;
+    assert_eq!(st, StatusCode::NOT_FOUND, "a stale asset is not the shell");
+    assert!(!body.contains("<title>"));
     let (st, h, body) = get(state.clone(), "/app/config.json").await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(

@@ -421,11 +421,17 @@ impl Reader {
             .snapshot()
             .ok_or(ApiError::of(ProblemType::Unavailable))?;
         match self {
-            Self::Device(d) => Ok(ReadAccess {
-                access: authz::require_role(&state.db, &snap, &d.caller.principal, v, min).await?,
-                scope: PathScope::whole(),
-                subject: Some(d.caller.principal.sub.clone()),
-            }),
+            Self::Device(d) => {
+                let access =
+                    authz::require_role(&state.db, &snap, &d.caller.principal, v, min).await?;
+                // A person goes through the same filter as a token (RFC 0005
+                // §5.2): a restricted viewer's folders, else the whole vault.
+                Ok(ReadAccess {
+                    scope: access.scope.clone(),
+                    access,
+                    subject: Some(d.caller.principal.sub.clone()),
+                })
+            }
             Self::Key(k) => {
                 if k.vault != v {
                     return Err(ApiError::of(ProblemType::NotFound));

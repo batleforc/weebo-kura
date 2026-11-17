@@ -16,7 +16,7 @@ Every project keeps its documentation here, either as plain markdown or as a
 | [0002](RFC/rfc0002-batched-transfers.md) | Batched chunk and manifest transfers | Accepted ([implementation plan](RFC/rfc0002-implementation-plan.md)) | How a device downloads (and, in phase 3, uploads) thousands of small files without one request per chunk and per manifest |
 | [0003](RFC/rfc0003-web-console-and-notifications.md) | Web console (front and back office) and notifications | In review ([implementation plan](RFC/rfc0003-implementation-plan.md)) | How members and managers use Kura from a browser, and how a tenant is notified of events on a webhook |
 | [0004](RFC/rfc0004-scoped-token-folders-and-write.md) | Scoped tokens: several folders, and write access | In review ([implementation plan](RFC/rfc0004-implementation-plan.md)) | How a scoped token is limited to several folders of one vault, and may write under some of them |
-| [0005](RFC/rfc0005-folder-restricted-viewers.md) | Folder-restricted viewers and the web reader | In review | How people without Obsidian read and search the folders of a vault that a manager opens to them, and nothing else |
+| [0005](RFC/rfc0005-folder-restricted-viewers.md) | Folder-restricted viewers and the web reader | In review ([implementation plan](RFC/rfc0005-implementation-plan.md)) | How people without Obsidian read and search the folders of a vault that a manager opens to them, and nothing else |
 
 ### Planned
 

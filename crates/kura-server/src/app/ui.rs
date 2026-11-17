@@ -39,8 +39,13 @@ impl UiSettings {
         // The page calls the token endpoint itself (decision 13): only the
         // identity provider's origin is added to `connect-src`.
         let idp = origin(&discovery)?;
+        // RFC 0005 §6.5: the note frame inherits this policy. It may run its
+        // one bridge script, by hash, and show images inlined as `data:`.
+        let bridge = frame_hash(&dir)
+            .map(|h| format!(" {h}"))
+            .unwrap_or_default();
         let csp = HeaderValue::from_str(&format!(
-            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; \
+            "default-src 'none'; script-src 'self'{bridge}; style-src 'self'; img-src 'self' blob: data:; \
              font-src 'self'; connect-src 'self' {idp}; frame-ancestors 'none'; base-uri 'none'; \
              form-action 'none'; worker-src 'self'; manifest-src 'self'"
         ))
@@ -53,6 +58,21 @@ impl UiSettings {
             csp,
         })
     }
+}
+
+/// The bridge's `'sha256-…'` from `frame-csp.txt`, written by the build;
+/// anything else in that file is ignored, so it can never widen the policy.
+fn frame_hash(dir: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(dir.join("frame-csp.txt")).ok()?;
+    let hash = text.trim();
+    let digest = hash.strip_prefix("'sha256-")?.strip_suffix('\'')?;
+    let base64 = digest.len() == 44
+        && digest.ends_with('=')
+        && digest
+            .trim_end_matches('=')
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/');
+    base64.then(|| hash.to_owned())
 }
 
 /// `scheme://host[:port]` of a URL, the form a CSP source takes.
@@ -118,8 +138,13 @@ pub fn router(state: &SharedState) -> axum::Router<SharedState> {
     let index = ui.dir.join("index.html");
     let files = tower_http::services::ServeDir::new(&ui.dir)
         .fallback(tower_http::services::ServeFile::new(index));
+    // A missing hashed asset is a 404, never the shell: served as the asset
+    // and marked immutable, the shell would be kept for a year by the
+    // browser and the service worker (code review of 2026-11-17).
+    let assets = tower_http::services::ServeDir::new(ui.dir.join("assets"));
     axum::Router::new()
         .route("/app/config.json", get(config))
+        .nest_service("/app/assets", assets)
         .nest_service("/app", files)
         .route_layer(middleware::from_fn_with_state(state.clone(), headers))
         .route("/", get(|| async { Redirect::to("/app/") }))
@@ -145,6 +170,38 @@ mod tests {
         );
         assert!(csp.contains("script-src 'self';") && csp.contains("frame-ancestors 'none'"));
         assert!(!csp.contains("unsafe"));
+        assert!(csp.contains("img-src 'self' blob: data:;"));
+        assert!(
+            csp.contains("script-src 'self';"),
+            "no bridge file, no hash: {csp}"
+        );
+    }
+
+    #[test]
+    fn the_bridge_hash_is_read_strictly() {
+        let dir = std::env::temp_dir().join(format!("kura-frame-csp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let good = "'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='";
+        for (text, want) in [
+            (format!("{good}\n"), Some(good)),
+            ("'unsafe-inline'".to_owned(), None),
+            (format!("{good}; script-src *"), None),
+            ("'sha256-short='".to_owned(), None),
+        ] {
+            std::fs::write(dir.join("frame-csp.txt"), &text).unwrap();
+            assert_eq!(frame_hash(&dir).as_deref(), want, "{text}");
+        }
+        let ui =
+            UiSettings::new(dir.clone(), "c".into(), "https://a.example/".into(), None).unwrap();
+        std::fs::write(dir.join("frame-csp.txt"), good).unwrap();
+        let ui2 = UiSettings::new(dir, "c".into(), "https://a.example/".into(), None).unwrap();
+        assert!(!ui.csp.to_str().unwrap().contains("sha256"));
+        assert!(
+            ui2.csp
+                .to_str()
+                .unwrap()
+                .contains(&format!("script-src 'self' {good};"))
+        );
         assert_eq!(
             origin("https://a.example:8443/p?q").as_deref(),
             Some("https://a.example:8443")

@@ -17,4 +17,4 @@ vault:
 ui:
   enabled: true
   dir: ui/dist
-  oidc: { clientId: kura-web }
+  oidc: { clientId: kura-web, discovery: "https://localhost:59443/application/o/kura-web/" }

@@ -1,13 +1,38 @@
+import { createHash } from "node:crypto";
 import { fileURLToPath, URL } from "node:url";
 
 import tailwindcss from "@tailwindcss/vite";
 import vue from "@vitejs/plugin-vue";
+import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
+
+import { BRIDGE } from "./src/reader/bridge.ts";
+
+/**
+ * `dist/frame-csp.txt`: the CSP source of the note frame's one script
+ * (RFC 0005 §6.5). kura-server reads it from `ui.dir` and adds it to
+ * `script-src`; without it the bridge does not run and notes keep a fixed
+ * height, nothing worse.
+ */
+function frameHash(): Plugin {
+  return {
+    name: "kura:frame-csp",
+    apply: "build",
+    generateBundle() {
+      const hash = createHash("sha256").update(BRIDGE).digest("base64");
+      this.emitFile({
+        type: "asset",
+        fileName: "frame-csp.txt",
+        source: `'sha256-${hash}'\n`,
+      });
+    },
+  };
+}
 
 // Served by kura-server under /app (RFC 0003 §6.1), same origin as the API.
 export default defineConfig({
   base: "/app/",
-  plugins: [vue(), tailwindcss()],
+  plugins: [vue(), tailwindcss(), frameHash()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   server: {
     // `pnpm dev` against `task dev:run`: the API and config.json come from it.
@@ -19,6 +44,8 @@ export default defineConfig({
   build: { outDir: "dist", assetsDir: "assets" },
   test: {
     environment: "jsdom",
+    // e2e/ is Playwright's, run against a real browser by tests/heavy/reader.sh.
+    exclude: ["e2e/**", "node_modules/**"],
     coverage: {
       provider: "v8",
       // public/sw.js runs under `new Function` in its spec, out of v8 coverage.

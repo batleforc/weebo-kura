@@ -200,6 +200,10 @@ pub struct Binding {
     pub claim_value: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
+    /// `viewer` only: 1 to 16 folders, each ending with `/`, that the holder
+    /// reads; absent: the whole vault (RFC 0005 §4.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paths: Option<Vec<String>>,
 }
 
 /// A vault's identity: its namespace and name.

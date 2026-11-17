@@ -74,7 +74,9 @@ maintenance:
 ui:               # the web console (RFC 0003); absent or enabled: false: /app is 404
   enabled: true
   dir: /usr/share/kura/ui        # the default, where the image puts it
-  oidc: { clientId: kura-web }   # must also be in oidc.audiences
+  oidc:
+    clientId: kura-web           # must also be in oidc.audiences
+    discovery: https://auth.example.org/application/o/kura-web/   # with Authentik: the console's own application
 ```
 
 Unknown fields are refused, so a typo stops the server instead of being
@@ -111,6 +113,7 @@ spec:
   configSync: { categories: [plugins, snippets, themes, hotkeys] }
   bindings:
     - { role: editor, claimValue: kura-maxime }  # or `subject: <OIDC sub>`, exactly one
+    - { role: viewer, claimValue: kura-players, paths: [Sessions/, Resumes/] }   # RFC 0005
   deletionPolicy: Orphan
 ```
 
@@ -122,15 +125,44 @@ Refused changes (§4.3): an unknown kind, field or role; duplicate names; a
 vault outside its tenant's `vaultNamespaces` or naming an unknown tenant;
 chunking not `min < avg < max` or above 4 MiB, or changed after creation; one
 claim value mapped by two tenants; a file declaring a vault created through
-the API; removing two tenants at once, or all of them. Each rejection is
+the API; removing two tenants at once, or all of them; `paths` on a binding
+above `viewer`, an empty `paths`, more than 16 folders, a folder not ending
+with `/` or listed twice. Each rejection is
 logged at `warn` with `file#index field.path: message`, counted in
 `kura_config_rejected_total`, and listed in `GET /v1/admin/status`.
 
 Removing a document: `Orphan` disables the object and keeps its data;
 `Delete` disables it and schedules its deletion 30 days later, cancelled if
 the document comes back. The annotation `kura.weebo.io/force-orphan: "true"`
-cancels the `Delete` cleanup. Objects not `Ready` are counted in
-`kura_config_warnings`.
+cancels the `Delete` cleanup. Objects not `Ready`, or carrying an advisory
+condition, are counted in `kura_config_warnings`.
+
+### Viewers restricted to folders (RFC 0005)
+
+A `viewer` binding may list `paths`, 1 to 16 folders: its holder lists,
+reads, downloads, searches and sees the history of the notes under them,
+and nothing else, on every client (Obsidian, `kura`, the console). A hidden
+note answers `404`, exactly as a missing one, and is absent from listings,
+the change feed and search. A note moved out of the folders disappears with
+its history. `paths` absent is the whole vault, as before; above `viewer`
+`paths` is refused, in files, in the API and by the database.
+
+**The widest grant wins**: the tenant role `owner` or `admin`, or any other
+matching binding without `paths`, opens the whole vault whatever the
+restricted binding says. `GET /v1/admin/status` warns with
+`RestrictedBindingWidened` on a vault whose restricted binding names a claim
+value the tenant maps to `owner` or `admin`. `GET /v1/vaults` shows each
+caller the folders they read (`paths`).
+
+The schema of this release (migration `0021`) may not be served by an older
+binary, which would read a restricted binding as the whole vault: such a
+binary refuses to start against it. Roll forward, never back.
+
+In the console (`/app`), a member opens a vault, browses its shared folders,
+reads notes, searches and opens past revisions. A note is rendered with raw
+HTML off, sanitised, in a sandboxed frame that may run only the console's
+own bridge script (allowed by its hash from `ui.dir/frame-csp.txt`); images
+come from the vault only, remote ones are never loaded.
 
 Objects declared in files are read-only through the API. A tenant `admin` may
 create vaults (`POST /v1/vaults`, in the namespace named after the tenant)
@@ -282,7 +314,10 @@ Per §13 and §6.2:
   `https://<host>/app/callback` in **strict** mode (Authentik takes the
   origin its token endpoint allows from it), the `profile` and
   `offline_access` scope mappings, and its client id in `oidc.audiences`
-  and `ui.oidc.clientId`. A refresh token validity of 14 days is advised,
+  and `ui.oidc.clientId`. Set `ui.oidc.discovery` to that application's
+  discovery URL: Authentik answers a browser's cross-origin request to a
+  discovery document with the origins of that application's redirect URIs
+  only, so the console cannot read the CLI's. A refresh token validity of 14 days is advised,
   never checked: each refresh starts a new validity, so an active browser
   stays signed in. Verified against Authentik 2026.8.3;
   `tests/heavy/console.sh` replays those facts against another version.

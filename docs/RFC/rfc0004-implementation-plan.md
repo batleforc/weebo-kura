@@ -13,6 +13,13 @@ up to date as they land. Commits are made by the maintainer (signed), so
 | Phase 3 | done | 2026-11-17 | `kura token create --name --read --write` (`--prefix` kept as one `--read`), the list with `r:`/`w:`, `KURA_TOKEN` and `--token-file` for `attach` and `sync` (no login, no device, server from `KURA_SERVER`), the local refusal before any upload through `sync::Options::writable`. Operator guide: `scopedTokens.write`, the kill switch, the bot recipe. Tests: CLI `a_scoped_token_syncs_its_folders_and_refuses_the_rest`, `the_cli_issues_lists_and_revokes_scoped_tokens` (the two refusals of §4.5). **§6.P**: `tests/heavy/keys.sh`, observations 1 to 6 all `ok` on the dev stack on 2026-11-17 |
 | Not run | | | `task perf:run:commit` (§10.3: no regression on the device commit path); `tests/heavy/authz.sh` on the dev stack, whose `notes` vault became unreadable when the in-memory OpenBao restarted (its data keys are wrapped by the lost Transit key, see D7) |
 
+A code review of the branch on 2026-11-17 found that a change outside the
+write folders stopped the whole sync: it is now kept local and reported
+(`Report::not_writable`), and the pull still runs (CLI test extended); a
+token no longer tries the configuration space; the CLI's hints for a token
+were corrected. Writes refused by the tenant switch stay `403
+insufficient_role`, as §6.P observation 6 states.
+
 ## Divergences
 
 | # | Phase | RFC section | Divergence | Reason |

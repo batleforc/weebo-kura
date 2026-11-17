@@ -39,6 +39,10 @@ pub struct Vault {
     pub head_seq: u64,
     /// The Obsidian configuration categories that sync (§6.8); empty: none.
     pub config_sync: Vec<String>,
+    /// For a restricted viewer: the folders they read (RFC 0005 §4.2);
+    /// absent: the whole vault.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paths: Option<Vec<String>>,
     /// For a scoped token: its own folder rules (RFC 0004), so its client
     /// refuses a change outside them before sending it. Absent for a device.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -75,6 +79,7 @@ impl From<&VaultAccess> for Vault {
                 .collect(),
             head_seq: u64::try_from(a.head_seq).unwrap_or_default(),
             scopes: None,
+            paths: a.paths.clone(),
         }
     }
 }
@@ -94,6 +99,10 @@ pub struct PutBinding {
     /// `viewer`, `editor` or `manager`, at most your own role.
     #[schema(value_type = String, example = "editor")]
     pub role: VaultRole,
+    /// `viewer` only: 1 to 16 folders ending with `/`; absent: the whole
+    /// vault (RFC 0005).
+    #[serde(default)]
+    pub paths: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -103,6 +112,9 @@ pub struct BindingView {
     pub subject: String,
     pub role: String,
     pub managed_by: String,
+    /// The folders a restricted viewer reads; absent: the whole vault.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paths: Option<Vec<String>>,
 }
 
 fn snapshot(state: &SharedState) -> Result<std::sync::Arc<Snapshot>, ApiError> {
@@ -279,6 +291,9 @@ fn subject(b: &str) -> Result<BindingSubject, ApiError> {
     ))
 }
 
+/// `subject_kind, subject, role, managed_by, paths` of `role_binding`.
+type BindingRow = (String, String, String, String, Option<Vec<String>>);
+
 /// The vault's bindings, from files and from the API (RFC 0003 §4.4): vault
 /// manager or tenant admin.
 #[utoipa::path(
@@ -308,8 +323,8 @@ pub async fn list_bindings(
         ));
     }
     let mut tx = db::begin_tenant(&state.db, access.tenant, None).await?;
-    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
-        "SELECT subject_kind, subject, role, managed_by FROM role_binding
+    let rows: Vec<BindingRow> = sqlx::query_as(
+        "SELECT subject_kind, subject, role, managed_by, paths FROM role_binding
          WHERE vault_id = $1 ORDER BY subject_kind, subject LIMIT 1000",
     )
     .bind(v)
@@ -318,10 +333,11 @@ pub async fn list_bindings(
     tx.commit().await?;
     Ok(Json(
         rows.into_iter()
-            .map(|(kind, subject, role, managed_by)| BindingView {
+            .map(|(kind, subject, role, managed_by, paths)| BindingView {
                 subject: format!("{kind}:{subject}"),
                 role,
                 managed_by,
+                paths,
             })
             .collect(),
     ))
@@ -353,11 +369,22 @@ pub async fn put_binding(
 ) -> Result<Json<BindingView>, ApiError> {
     let (snap, access) = manageable(&state, &caller, v).await?;
     let subject = subject(&b)?;
+    // RFC 0005 §4.3: folders on a viewer only, each a vault folder.
+    if let Some(paths) = &body.paths {
+        kura_api::validate::check_paths(body.role, paths).map_err(|m| {
+            ApiError::with_detail(ProblemType::InvalidRequest, format!("paths: {m}"))
+        })?;
+        for p in paths {
+            super::tokens::check_folder(p)?;
+        }
+    }
     authz::check_binding(&state.db, &snap, &access, &subject, body.role).await?;
     let mut tx = db::begin_tenant(&state.db, access.tenant, None).await?;
+    // `paths` is written with the role, so raising a role clears it in the
+    // same statement (the CHECK refuses a writer with folders).
     let written: Option<String> = sqlx::query_scalar(
-        "INSERT INTO role_binding (tenant_id, vault_id, subject_kind, subject, role, managed_by) VALUES ($1, $2, $3, $4, $5, 'api')
-         ON CONFLICT (vault_id, subject_kind, subject) DO UPDATE SET role = EXCLUDED.role WHERE role_binding.managed_by = 'api'
+        "INSERT INTO role_binding (tenant_id, vault_id, subject_kind, subject, role, managed_by, paths) VALUES ($1, $2, $3, $4, $5, 'api', $6)
+         ON CONFLICT (vault_id, subject_kind, subject) DO UPDATE SET role = EXCLUDED.role, paths = EXCLUDED.paths WHERE role_binding.managed_by = 'api'
          RETURNING role",
     )
     .bind(access.tenant)
@@ -365,6 +392,7 @@ pub async fn put_binding(
     .bind(subject.kind())
     .bind(subject.value())
     .bind(role_name(body.role))
+    .bind(&body.paths)
     .fetch_optional(&mut *tx)
     .await?;
     if written.is_none() {
@@ -374,11 +402,12 @@ pub async fn put_binding(
         ));
     }
     tx.commit().await?;
-    tracing::info!(target: "audit", event = "binding_changed", sub = %caller.caller.principal.sub, vault = %v, binding = %b, role = role_name(body.role));
+    tracing::info!(target: "audit", event = "binding_changed", sub = %caller.caller.principal.sub, vault = %v, binding = %b, role = role_name(body.role), folders = body.paths.as_ref().map_or(0, Vec::len));
     Ok(Json(BindingView {
         subject: b,
         role: role_name(body.role).into(),
         managed_by: "api".into(),
+        paths: body.paths,
     }))
 }
 

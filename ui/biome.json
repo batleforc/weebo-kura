@@ -5,7 +5,8 @@
       "src/**",
       "*.ts",
       "!src/api/generated",
-      "!src/assets/tokens.css"
+      "!src/assets/tokens.css",
+      "e2e/**"
     ]
   },
   "formatter": {

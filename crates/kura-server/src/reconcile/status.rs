@@ -30,12 +30,16 @@ pub struct StoredStatus {
 }
 
 impl StoredStatus {
-    /// Objects whose `Ready` is not `True`: the `kura_config_warnings` gauge.
+    /// Objects whose `Ready` is not `True`, or that carry an advisory
+    /// condition: the `kura_config_warnings` gauge.
     pub fn warnings(&self) -> usize {
         self.objects
             .iter()
             .filter(|o| {
                 weebo_kit_api::status::ready(&o.conditions).is_none_or(|c| c.status != "True")
+                    || o.conditions
+                        .iter()
+                        .any(|c| c.type_ != Condition::READY && c.status == "True")
             })
             .count()
     }
@@ -61,6 +65,42 @@ fn ready(status: bool, reason: ReasonCode, message: String) -> Condition {
     }
 }
 
+/// RFC 0005 §4.3: a restricted binding whose claim value the tenant maps to
+/// `owner` or `admin`, who open the whole vault anyway.
+fn widened(
+    config: &kura_api::Config,
+    v: &kura_api::validate::Sourced<kura_api::spec::KuraVault>,
+) -> Option<Condition> {
+    let mapping = config
+        .tenants
+        .get(v.doc.spec.tenant_ref.name.as_str())?
+        .doc
+        .spec
+        .claim_mappings
+        .as_ref()?;
+    let wide: Vec<String> = v
+        .doc
+        .spec
+        .bindings
+        .iter()
+        .filter(|b| b.paths.is_some())
+        .filter_map(|b| b.claim_value.as_ref())
+        .filter(|c| mapping.roles.owner.contains(c) || mapping.roles.admin.contains(c))
+        .cloned()
+        .collect();
+    (!wide.is_empty()).then(|| Condition {
+        type_: ReasonCode::RestrictedBindingWidened.as_str().into(),
+        status: "True".into(),
+        reason: ReasonCode::RestrictedBindingWidened.as_str().into(),
+        message: format!(
+            "{} lists folders but the tenant maps it to owner or admin: the whole vault is open to it",
+            wide.join(", ")
+        ),
+        last_transition_time: None,
+        observed_generation: None,
+    })
+}
+
 pub fn build(config: &kura_api::Config, removed: &[Removed]) -> StoredStatus {
     let mut objects = Vec::new();
     for (slug, t) in &config.tenants {
@@ -79,16 +119,20 @@ pub fn build(config: &kura_api::Config, removed: &[Removed]) -> StoredStatus {
     }
     for (key, v) in &config.vaults {
         let generation = observed_generation(&v.doc);
+        let mut conditions = vec![Condition {
+            observed_generation: generation,
+            ..ready(true, ReasonCode::Reconciled, String::new())
+        }];
+        if let Some(c) = widened(config, v) {
+            conditions.push(c);
+        }
         objects.push(ObjectStatus {
             kind: kura_api::spec::KIND_VAULT.into(),
             namespace: Some(key.namespace.to_string()),
             name: key.name.to_string(),
             source: Some(v.source.to_string()),
             observed_generation: generation,
-            conditions: vec![Condition {
-                observed_generation: generation,
-                ..ready(true, ReasonCode::Reconciled, String::new())
-            }],
+            conditions,
         });
     }
     for r in removed {

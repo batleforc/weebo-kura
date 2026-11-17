@@ -61,6 +61,12 @@ pub struct UiConfig {
 pub struct UiOidc {
     /// The console's public client; also one of `oidc.audiences`.
     pub client_id: String,
+    /// The console's own discovery document. With Authentik it must be the
+    /// `kura-web` application's: Authentik answers a browser's cross-origin
+    /// request with the origins of that application's redirect URIs only.
+    /// Absent: `oidc.discovery`, else the issuer.
+    #[serde(default)]
+    pub discovery: Option<String>,
 }
 
 fn default_ui_dir() -> std::path::PathBuf {
@@ -241,13 +247,23 @@ impl ServerConfig {
             return Err(invalid("oidc.algorithms", "at least one algorithm".into()));
         }
         // The console's tokens are verified like any client's (RFC 0003 §4.1).
-        if let Some(ui) = config.ui.as_ref().filter(|u| u.enabled)
-            && !config.oidc.audiences.contains(&ui.oidc.client_id)
-        {
-            return Err(invalid(
-                "ui.oidc.clientId",
-                format!("{} must also be in oidc.audiences", ui.oidc.client_id),
-            ));
+        if let Some(ui) = config.ui.as_ref().filter(|u| u.enabled) {
+            if !config.oidc.audiences.contains(&ui.oidc.client_id) {
+                return Err(invalid(
+                    "ui.oidc.clientId",
+                    format!("{} must also be in oidc.audiences", ui.oidc.client_id),
+                ));
+            }
+            let https = ui.oidc.discovery.as_deref().is_none_or(|d| {
+                d.parse::<axum::http::Uri>()
+                    .is_ok_and(|u| u.scheme_str() == Some("https") && u.host().is_some())
+            });
+            if !https {
+                return Err(invalid(
+                    "ui.oidc.discovery",
+                    "must be an https:// URL".into(),
+                ));
+            }
         }
         Ok(config)
     }
@@ -323,6 +339,24 @@ vault:
         let ui =
             |id: &str| format!("{EXAMPLE}ui:\n  enabled: true\n  oidc: {{ clientId: {id} }}\n");
         assert!(err(&ui("kura-web")).contains("ui.oidc.clientId"));
+        let with = |d: &str| {
+            format!(
+                "{EXAMPLE}ui:\n  enabled: true\n  oidc: {{ clientId: kura-cli, discovery: '{d}' }}\n"
+            )
+        };
+        assert!(
+            err(&with("http://auth.example.org/application/o/kura-web/"))
+                .contains("ui.oidc.discovery")
+        );
+        let own = ServerConfig::parse(
+            "server.yaml",
+            &with("https://auth.example.org/application/o/kura-web/"),
+        )
+        .unwrap();
+        assert_eq!(
+            own.ui.unwrap().oidc.discovery.as_deref(),
+            Some("https://auth.example.org/application/o/kura-web/")
+        );
         let ok = ServerConfig::parse("server.yaml", &ui("kura-cli")).unwrap();
         let console = ok.ui.unwrap();
         assert_eq!(console.dir, std::path::PathBuf::from("/usr/share/kura/ui"));

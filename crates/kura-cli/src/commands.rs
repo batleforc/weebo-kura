@@ -523,21 +523,6 @@ async fn sync_one(
                     ),
                 ));
             }
-            Err(kura_core::sync::SyncError::NotWritable { paths }) => {
-                let folders = write_folders.unwrap_or_default();
-                let allowed = if folders.is_empty() {
-                    "it has none".to_owned()
-                } else {
-                    folders.join(", ")
-                };
-                return Err(Fail(
-                    3,
-                    format!(
-                        "{} is outside this token's write folders ({allowed}).\nNothing was pushed. Move the file back, or ask a manager for another token.",
-                        paths.join(", ")
-                    ),
-                ));
-            }
             Err(kura_core::sync::SyncError::Remote(r)) => return Err(Fail::from(r)),
             Err(other) => return Err(Fail::local(other)),
         }
@@ -562,6 +547,20 @@ async fn sync_one(
         None => {}
     }
     let mut code = 0u8;
+    if !r.not_writable.is_empty() {
+        let folders = write_folders.unwrap_or_default();
+        let allowed = if folders.is_empty() {
+            "it has none".to_owned()
+        } else {
+            folders.join(", ")
+        };
+        eprintln!(
+            "error: {name}: {} is outside this token's write folders ({allowed}).",
+            r.not_writable.join(", ")
+        );
+        eprintln!("Nothing was pushed. Move the file back, or ask a manager for another token.");
+        code = 3;
+    }
     if dry_run {
         println!(
             "{name}: would push {} files, {}.",
@@ -576,7 +575,11 @@ async fn sync_one(
             r.pushed
         );
         if e.kind() == "insufficient_role" {
-            eprintln!("Ask a vault manager for the editor role to upload them.");
+            if scoped(ctx).is_some() {
+                eprintln!("Ask a vault manager for a token that may write here.");
+            } else {
+                eprintln!("Ask a vault manager for the editor role to upload them.");
+            }
         }
         code = code_of(e);
     }
@@ -609,7 +612,11 @@ async fn sync_one(
         }
         println!(
             "{name}: pushed {}, pulled {}, removed {}, {} conflicts.",
-            if r.refused.is_some() { 0 } else { r.pushed },
+            if r.refused.is_some() || !r.not_writable.is_empty() {
+                0
+            } else {
+                r.pushed
+            },
             r.pulled,
             r.trashed,
             r.conflicts.len()
@@ -618,7 +625,10 @@ async fn sync_one(
             x.last_sync = Some(host.now_ms());
         }
         cfg.save(&ctx.home).map_err(Fail::local)?;
-        code = code.max(sync_config(api, name, &a, &v, device, yes).await?);
+        // A token never reads or writes an Obsidian configuration (§6.8).
+        if scoped(ctx).is_none() {
+            code = code.max(sync_config(api, name, &a, &v, device, yes).await?);
+        }
     }
     Ok(code)
 }
@@ -1186,12 +1196,14 @@ pub async fn token(ctx: &Ctx, action: TokenAction) -> Result<u8, Fail> {
             for r in &t.scopes {
                 println!("  {:<5}  {vault}/{}", r.mode, r.path);
             }
-            // A broader rule of the same token covers this one: both hold.
+            // A broader rule of the same token covers this one: both hold. A
+            // write rule covers a read one; a read rule never covers a write.
             for r in &scopes {
-                if scopes
-                    .iter()
-                    .any(|o| o.path != r.path && fold(&r.path).starts_with(&fold(&o.path)))
-                {
+                if scopes.iter().any(|o| {
+                    o.path != r.path
+                        && fold(&r.path).starts_with(&fold(&o.path))
+                        && (o.mode == r.mode || o.mode == "write")
+                }) {
                     println!("note: {} is also covered by a broader rule.", r.path);
                 }
             }

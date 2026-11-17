@@ -139,6 +139,11 @@ pub struct VaultAccess {
     pub head_seq: i64,
     /// The `configSync` categories; empty: `.obsidian` does not sync (§6.8).
     pub config: Vec<kura_api::spec::ConfigCategory>,
+    /// The folders a restricted viewer reads, as bound (RFC 0005 §4.2);
+    /// `None` is the whole vault, always so above `viewer` (§5.1).
+    pub paths: Option<Vec<String>>,
+    /// The same, as the read routes apply it.
+    pub scope: PathScope,
 }
 
 fn config_of(row: &sqlx::postgres::PgRow) -> Result<Vec<kura_api::spec::ConfigCategory>, ApiError> {
@@ -233,7 +238,7 @@ async fn vault_accesses(
         .map(|r| r.try_get("id"))
         .collect::<Result<_, _>>()?;
     let bindings = sqlx::query(
-        "SELECT vault_id, subject_kind, subject, role FROM role_binding WHERE vault_id = ANY($1)",
+        "SELECT vault_id, subject_kind, subject, role, paths FROM role_binding WHERE vault_id = ANY($1)",
     )
     .bind(&ids)
     .fetch_all(&mut *tx)
@@ -243,6 +248,11 @@ async fn vault_accesses(
     for row in &rows {
         let vault: Uuid = row.try_get("id")?;
         let mut role = tenant_role.and_then(tenant_vault_role);
+        // RFC 0005 §5.1, the widest grant wins: the tenant role or one
+        // binding without folders opens the whole vault; otherwise the
+        // union of the folders of the matching restricted bindings.
+        let mut whole = role.is_some();
+        let mut folders: Vec<String> = Vec::new();
         for b in &bindings {
             let (v, kind, subject, r): (Uuid, String, String, String) = (
                 b.try_get("vault_id")?,
@@ -258,9 +268,29 @@ async fn vault_accesses(
                 };
             if matches {
                 role = role.max(parse_role(&r));
+                match b.try_get::<Option<Vec<String>>, _>("paths")? {
+                    None => whole = true,
+                    Some(p) => folders.extend(p),
+                }
             }
         }
         let Some(role) = role else { continue };
+        let paths = (!whole).then(|| {
+            let mut seen = std::collections::HashSet::new();
+            folders.retain(|f| seen.insert(fold(f)));
+            folders
+        });
+        // A restricted binding is a viewer's (the database's CHECK); a role
+        // above viewer without the whole vault would be a broken row: refused.
+        let scope = match &paths {
+            None => PathScope::whole(),
+            Some(_) if role > VaultRole::Viewer => continue,
+            Some(f) => {
+                PathScope::from_rules(f.iter().map(|p| (p.as_str(), false))).ok_or_else(|| {
+                    ApiError::Unavailable("a restricted binding with no folder".into())
+                })?
+            }
+        };
         out.push(VaultAccess {
             vault,
             tenant,
@@ -276,6 +306,8 @@ async fn vault_accesses(
             epoch: row.try_get("epoch")?,
             head_seq: row.try_get("head_seq")?,
             config: config_of(row)?,
+            paths,
+            scope,
         });
     }
     Ok(out)
@@ -582,6 +614,9 @@ pub async fn key_access(
         epoch: row.try_get("epoch")?,
         head_seq: row.try_get("head_seq")?,
         config: config_of(&row)?,
+        // A token's own folders are applied by `ReadAccess` (RFC 0004).
+        paths: None,
+        scope: PathScope::whole(),
     }))
 }
 

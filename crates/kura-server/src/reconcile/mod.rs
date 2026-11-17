@@ -208,7 +208,7 @@ pub async fn reconcile(
                     (None, Some(s)) => ("user", s),
                     (None, None) => ("claim", &String::new()),
                 };
-                serde_json::json!({ "kind": kind, "subject": subject, "role": json(&b.role) })
+                serde_json::json!({ "kind": kind, "subject": subject, "role": json(&b.role), "paths": b.paths })
             })
             .collect();
         sqlx::query("SELECT kura_bindings_replace($1, $2)")

@@ -1,5 +1,8 @@
 {
-  "app": { "name": "Kura", "tagline": "Your vaults, from a browser." },
+  "app": {
+    "name": "Kura",
+    "tagline": "Your vaults, from a browser."
+  },
   "nav": {
     "vaults": "My vaults",
     "devices": "My devices",
@@ -29,7 +32,8 @@
     "name": "Name",
     "tenant": "Tenant",
     "role": "Your role",
-    "source": "Declared in"
+    "source": "Declared in",
+    "reach": "Reach"
   },
   "devices": {
     "title": "My devices",
@@ -49,7 +53,10 @@
     "confirm": "Revoke",
     "cancel": "Cancel"
   },
-  "state": { "loading": "Loading…", "retry": "Retry" },
+  "state": {
+    "loading": "Loading…",
+    "retry": "Retry"
+  },
   "problem": {
     "network": "The server could not be reached.",
     "insufficient_role": "Your role does not allow this.",
@@ -60,5 +67,29 @@
     "unavailable": "The server is unavailable for now.",
     "status": "The server answered {status}.",
     "unexpected": "Something unexpected happened."
+  },
+  "reader": {
+    "breadcrumb": "Where you are",
+    "search": "Search",
+    "folders": "Shared folders",
+    "emptyVault": "No note is shared with you in this vault yet.",
+    "failed": "This vault could not be loaded.",
+    "pick": "Pick a note in the folders.",
+    "notFound": "This note does not exist, or is not shared with you.",
+    "back": "Back to {name}",
+    "backToVault": "Back to the vault",
+    "backToNote": "Back to the note",
+    "download": "Download {name}",
+    "history": "History",
+    "searchOff": "Search is not enabled for this vault. Browse the folders instead.",
+    "noHit": "No note matches \"{query}\" in the folders shared with you.",
+    "hits": "{n} results",
+    "noRevision": "No revision.",
+    "current": "current",
+    "deleted": "deleted",
+    "view": "View",
+    "reach": "{n} folders",
+    "whole": "whole vault",
+    "open": "Open"
   }
 }

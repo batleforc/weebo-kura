@@ -1,5 +1,8 @@
 {
-  "app": { "name": "Kura", "tagline": "Vos coffres, depuis un navigateur." },
+  "app": {
+    "name": "Kura",
+    "tagline": "Vos coffres, depuis un navigateur."
+  },
   "nav": {
     "vaults": "Mes coffres",
     "devices": "Mes appareils",
@@ -29,7 +32,8 @@
     "name": "Nom",
     "tenant": "Tenant",
     "role": "Votre rôle",
-    "source": "Déclaré dans"
+    "source": "Déclaré dans",
+    "reach": "Portée"
   },
   "devices": {
     "title": "Mes appareils",
@@ -49,7 +53,10 @@
     "confirm": "Révoquer",
     "cancel": "Annuler"
   },
-  "state": { "loading": "Chargement…", "retry": "Réessayer" },
+  "state": {
+    "loading": "Chargement…",
+    "retry": "Réessayer"
+  },
   "problem": {
     "network": "Le serveur est injoignable.",
     "insufficient_role": "Votre rôle ne le permet pas.",
@@ -60,5 +67,29 @@
     "unavailable": "Le serveur est indisponible pour l'instant.",
     "status": "Le serveur a répondu {status}.",
     "unexpected": "Une erreur inattendue est survenue."
+  },
+  "reader": {
+    "breadcrumb": "Où vous êtes",
+    "search": "Rechercher",
+    "folders": "Dossiers partagés",
+    "emptyVault": "Aucune note de ce coffre ne vous est encore partagée.",
+    "failed": "Ce coffre n'a pas pu être chargé.",
+    "pick": "Choisissez une note dans les dossiers.",
+    "notFound": "Cette note n'existe pas, ou ne vous est pas partagée.",
+    "back": "Retour à {name}",
+    "backToVault": "Retour au coffre",
+    "backToNote": "Retour à la note",
+    "download": "Télécharger {name}",
+    "history": "Historique",
+    "searchOff": "La recherche n'est pas activée pour ce coffre. Parcourez plutôt les dossiers.",
+    "noHit": "Aucune note ne correspond à « {query} » dans les dossiers qui vous sont partagés.",
+    "hits": "{n} résultats",
+    "noRevision": "Aucune révision.",
+    "current": "actuelle",
+    "deleted": "supprimée",
+    "view": "Voir",
+    "reach": "{n} dossiers",
+    "whole": "coffre entier",
+    "open": "Ouvrir"
   }
 }

@@ -46,14 +46,16 @@ onMounted(load);
             <th scope="col">{{ t("vaults.name") }}</th>
             <th scope="col">{{ t("vaults.tenant") }}</th>
             <th scope="col">{{ t("vaults.role") }}</th>
+            <th scope="col">{{ t("vaults.reach") }}</th>
             <th scope="col">{{ t("vaults.source") }}</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="v in vaults" :key="v.id" class="border-t border-rule-soft">
-            <td>{{ v.name }}</td>
+            <td><RouterLink :to="`/vaults/${v.id}`" class="underline">{{ v.name }}</RouterLink></td>
             <td>{{ v.tenant }}</td>
             <td>{{ v.role }}</td>
+            <td>{{ v.paths ? t("reader.reach", { n: v.paths.length }) : t("reader.whole") }}</td>
             <td>{{ v.managedBy }}</td>
           </tr>
         </tbody>

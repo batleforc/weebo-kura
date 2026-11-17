@@ -22,6 +22,9 @@ weebo_kit_domain::reason_codes! {
         /// Write tokens exist while `scopedTokens.write` is off: they read,
         /// their writes are refused (RFC 0004 §4.3).
         TokenWriteDisabled,
+        /// A viewer binding lists folders while its claim value also opens
+        /// the whole vault: the widest grant wins (RFC 0005 §4.3).
+        RestrictedBindingWidened,
     }
 }
 
@@ -41,7 +44,8 @@ impl Reason for ReasonCode {
             | Self::CidrTokensWithoutTrustedProxies
             | Self::DeletionScheduled
             | Self::AwaitingKeyDestruction
-            | Self::TokenWriteDisabled => Severity::Advisory,
+            | Self::TokenWriteDisabled
+            | Self::RestrictedBindingWidened => Severity::Advisory,
         }
     }
 }
@@ -53,7 +57,7 @@ mod tests {
     #[test]
     fn catalogue_is_pascal_case_and_complete() {
         weebo_kit_domain::reason::assert_pascal_case(ReasonCode::ALL);
-        assert_eq!(ReasonCode::ALL.len(), 8);
+        assert_eq!(ReasonCode::ALL.len(), 9);
         assert_eq!(ReasonCode::SUCCESS.severity(), Severity::Advisory);
         assert_eq!(ReasonCode::InvalidDocument.severity(), Severity::Blocking);
     }

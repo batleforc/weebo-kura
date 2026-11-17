@@ -115,6 +115,14 @@ fn invalid(detail: impl Into<String>) -> ApiError {
     ApiError::with_detail(ProblemType::InvalidRequest, detail)
 }
 
+/// A vault folder followed by `/` (RFC 0005 binding folders).
+pub fn check_folder(p: &str) -> Result<(), ApiError> {
+    if p.is_empty() {
+        return Err(invalid("paths: a folder, not the whole vault"));
+    }
+    check_prefix(p)
+}
+
 /// `""`, or a valid vault path followed by `/`.
 fn check_prefix(p: &str) -> Result<(), ApiError> {
     if p.is_empty() {

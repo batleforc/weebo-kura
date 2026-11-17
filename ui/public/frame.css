@@ -1,0 +1,22 @@
+/* The note frame's only style (RFC 0005 §6.5): no inline style is allowed in it. */
+body {
+  margin: 0;
+  padding: 8px;
+  font: 15px/1.5 ui-monospace, monospace;
+  color: #ece0dc;
+  background: #140b0c;
+  overflow-wrap: anywhere;
+}
+a {
+  color: #ff8c7a;
+}
+img {
+  max-width: 100%;
+}
+pre {
+  overflow-x: auto;
+}
+.unshared,
+.remote {
+  text-decoration: underline dotted;
+}

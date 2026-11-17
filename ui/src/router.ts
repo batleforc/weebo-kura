@@ -46,6 +46,31 @@ export const routes: RouteRecordRaw[] = [
     component: () => import("@/pages/DevicesPage.vue"),
     meta: { access: "member" },
   },
+  // The reader (RFC 0005): browse, read, search, history.
+  {
+    path: "/vaults/:v",
+    name: "browse",
+    component: () => import("@/pages/BrowsePage.vue"),
+    meta: { access: "member" },
+  },
+  {
+    path: "/vaults/:v/notes/:entry",
+    name: "note",
+    component: () => import("@/pages/BrowsePage.vue"),
+    meta: { access: "member" },
+  },
+  {
+    path: "/vaults/:v/notes/:entry/history",
+    name: "history",
+    component: () => import("@/pages/HistoryPage.vue"),
+    meta: { access: "member" },
+  },
+  {
+    path: "/vaults/:v/search",
+    name: "search",
+    component: () => import("@/pages/SearchPage.vue"),
+    meta: { access: "member" },
+  },
   { path: "/:pathMatch(.*)*", redirect: "/vaults" },
 ];
 

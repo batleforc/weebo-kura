@@ -2,11 +2,12 @@ version: "3"
 
 tasks:
   test:heavy:
-    desc: "Run the §6.P proof against the local stack with the real kura binary (task dev:stack and task dev:run first)"
+    desc: "Run the §6.P proofs against the local stack with the real kura binary and Chromium (task dev:stack, task ui:build and task dev:run first)"
     cmds:
       - tests/heavy/sync.sh
       - tests/heavy/authz.sh
       - tests/heavy/keys.sh
+      - tests/heavy/reader.sh
       - tests/heavy/console.sh
 
   test:

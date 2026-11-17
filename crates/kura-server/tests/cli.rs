@@ -978,4 +978,18 @@ async fn a_scoped_token_syncs_its_folders_and_refuses_the_rest() {
     std::fs::write(bot_dir.join("Sessions/1.md"), "rewritten by the bot\n").unwrap();
     assert_eq!(code(commands::sync_cmd(&bot, None, false, false).await), 3);
     assert_eq!(head().await, before);
+    // A refused push still pulls (code review of 2026-11-17, #1): the game
+    // master's new session reaches the bot whose own edit stays local.
+    std::fs::write(gm_dir.join("Sessions/2.md"), "session two\n").unwrap();
+    assert_eq!(code(commands::sync_cmd(&gm, None, false, false).await), 0);
+    assert_eq!(code(commands::sync_cmd(&bot, None, false, false).await), 3);
+    assert_eq!(
+        std::fs::read_to_string(bot_dir.join("Sessions/2.md")).unwrap(),
+        "session two\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(bot_dir.join("Sessions/1.md")).unwrap(),
+        "rewritten by the bot\n",
+        "the local edit is kept"
+    );
 }

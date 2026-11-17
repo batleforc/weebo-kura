@@ -131,7 +131,12 @@ async fn connect(
             ui.dir.clone(),
             ui.oidc.client_id.clone(),
             config.oidc.issuer.clone(),
-            config.oidc.discovery.clone(),
+            // The console's own discovery document first (Authentik's CORS
+            // follows the application, not the issuer).
+            ui.oidc
+                .discovery
+                .clone()
+                .or_else(|| config.oidc.discovery.clone()),
         )
         .ok_or_else(|| {
             anyhow::anyhow!("oidc.discovery: not usable in a Content-Security-Policy")

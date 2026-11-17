@@ -216,8 +216,44 @@ fn check_vaults(config: &Config, previous: &PreviousState, errors: &mut Vec<Conf
                     "set exactly one of claimValue or subject, not empty",
                 )),
             }
+            if let Some(paths) = &b.paths
+                && let Err(message) = check_paths(b.role, paths)
+            {
+                errors.push(err(&v.source, &format!("{path}.paths"), message));
+            }
         }
     }
+}
+
+/// The folders of a restricted binding (RFC 0005 §4.3): `viewer` only, 1 to
+/// 16, each a relative folder ending with `/`, no two alike once lowercased.
+/// The server checks each one again as a vault path when it binds through
+/// the API; a folder no note can be in only ever matches nothing.
+pub fn check_paths(role: crate::VaultRole, paths: &[String]) -> Result<(), String> {
+    if role != crate::VaultRole::Viewer {
+        return Err(
+            "only a viewer binding may list folders; a writer reads the whole vault".into(),
+        );
+    }
+    if paths.is_empty() || paths.len() > 16 {
+        return Err("1 to 16 folders; delete a binding that should grant nothing".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for p in paths {
+        let Some(folder) = p.strip_suffix('/') else {
+            return Err(format!("{p:?}: a folder ending with /"));
+        };
+        let bad_segment = folder
+            .split('/')
+            .any(|s| s.is_empty() || s == "." || s == ".." || s.chars().any(char::is_control));
+        if bad_segment || folder.contains('\\') || folder.starts_with(".obsidian") {
+            return Err(format!("{p:?}: not a folder of the vault"));
+        }
+        if !seen.insert(p.to_lowercase()) {
+            return Err(format!("{p:?} is listed twice"));
+        }
+    }
+    Ok(())
 }
 
 fn check_removals(config: &Config, previous: &PreviousState, errors: &mut Vec<ConfigError>) {

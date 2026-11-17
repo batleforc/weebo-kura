@@ -2333,6 +2333,16 @@
           "managedBy": {
             "type": "string"
           },
+          "paths": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The folders a restricted viewer reads; absent: the whole vault."
+          },
           "role": {
             "type": "string"
           },
@@ -2959,6 +2969,16 @@
           "role"
         ],
         "properties": {
+          "paths": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "`viewer` only: 1 to 16 folders ending with `/`; absent: the whole\nvault (RFC 0005)."
+          },
           "role": {
             "type": "string",
             "description": "`viewer`, `editor` or `manager`, at most your own role.",
@@ -3298,6 +3318,16 @@
           },
           "namespace": {
             "type": "string"
+          },
+          "paths": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "For a restricted viewer: the folders they read (RFC 0005 §4.2);\nabsent: the whole vault."
           },
           "role": {
             "type": "string",
