@@ -18,3 +18,10 @@ ui:
   enabled: true
   dir: ui/dist
   oidc: { clientId: kura-web, discovery: "https://localhost:59443/application/o/kura-web/" }
+# Webhooks (RFC 0003): tests/heavy/notify.sh listens on 127.0.0.1:8443 with
+# the dev certificate, so that address and the dev CA are allowed here only.
+notifications:
+  enabled: true
+  webhook:
+    allowedCidrs: [127.0.0.1/32]
+    caFile: dev/certs/ca.pem

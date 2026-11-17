@@ -103,6 +103,45 @@ only the host is shown again. Rule creation needs object storage keys
 Events and deliveries are kept 7 days. `KuraNotificationsStalled` fires when
 a delivery has waited 15 minutes.
 
+#### The receiver's contract
+
+Each delivery is one `POST` of JSON to the rule's URL, `https` only:
+
+```text
+Content-Type: application/json
+Authorization: <the rule's value>      only when the rule has one
+User-Agent: kura-server/<version>
+X-Kura-Event: token.expiring
+X-Kura-Delivery: <uuid>                the same on every retry of this delivery
+X-Kura-Timestamp: <unix seconds>
+X-Kura-Signature: v1=<hex HMAC-SHA256(secret, timestamp + "." + body)>
+
+{"id":"…","type":"token.expiring","time":"2026-11-15T12:33:20Z",
+ "tenant":"jdr","vault":{"id":"…","name":"campaign"},
+ "title":"Token discord-recap expires in 7 days or less",
+ "message":"Vault campaign, tenant jdr: renew or replace it.",
+ "data":{"token":{"id":"…","name":"discord-recap"},"expiresAt":"…"}}
+```
+
+- **Verify** the signature with the rule's secret (`whsec_<base64url>`, the
+  bytes after the prefix, base64url-decoded) over the timestamp, a dot and
+  the raw body, and refuse a timestamp more than 5 minutes away from now.
+- **Deduplicate** on `X-Kura-Delivery`: delivery is at least once (a worker
+  that dies mid-request, a database restored from backup), and unordered.
+- **Answer** `2xx` within 5 seconds. Any other status, a timeout or a
+  redirect is a failure, retried after 1 min, 5 min, 30 min, 2 h and 6 h.
+  `410 Gone` switches the rule off at once. The response body is never read.
+- **Display** `title` and `message` as they are, or build your own text from
+  `type` and `data`. A payload names objects by id and name; it never holds
+  a note path or content, an OIDC subject, a device name or a secret.
+- A receiver that authenticates its senders by a key (as `weebo-notify-v2`
+  does with a `wnk_…` bearer) gets it in `Authorization`; the signature is
+  sent as well.
+
+Test a rule from the console's Notifications page, or with
+`POST /v1/tenants/{t}/notifications/{n}/test`: it sends `ping` at once and
+answers the attempt's result.
+
 Unknown fields are refused, so a typo stops the server instead of being
 ignored. Platform admins (the `platformAdmin` claim) may read
 `GET /v1/admin/status`.

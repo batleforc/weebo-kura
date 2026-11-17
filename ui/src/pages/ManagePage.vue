@@ -34,6 +34,7 @@ onMounted(async () => {
         <span class="min-w-40">{{ v.tenant }} ▸ {{ v.name }}</span>
         <RouterLink :to="`/manage/vaults/${v.id}/access`" class="underline">{{ t("manage.access") }}</RouterLink>
         <RouterLink :to="`/manage/vaults/${v.id}/keys`" class="underline">{{ t("manage.keys") }}</RouterLink>
+        <RouterLink :to="`/manage/tenants/${v.tenant}/notifications`" class="underline">{{ t("manage.notifications") }}</RouterLink>
       </li>
     </ul>
     <h2 v-if="managed.tenants.length" class="mt-4 font-bold">{{ t("manage.tenants") }}</h2>
@@ -42,6 +43,7 @@ onMounted(async () => {
         <span class="min-w-40">{{ slug }}</span>
         <RouterLink :to="`/manage/tenants/${slug}/vaults`" class="underline">{{ t("manage.tenantVaults") }}</RouterLink>
         <RouterLink to="/manage/devices" class="underline">{{ t("manage.devices") }}</RouterLink>
+        <RouterLink :to="`/manage/tenants/${slug}/notifications`" class="underline">{{ t("manage.notifications") }}</RouterLink>
       </li>
     </ul>
     <template v-if="managed.platform">

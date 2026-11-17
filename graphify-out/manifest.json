@@ -108,9 +108,9 @@
     "semantic_hash": ""
   },
   ".tasks/test.yaml": {
-    "mtime": 1794941301.712715,
-    "seen": 1794941530.113127,
-    "ast_hash": "dc2a70f524fb99973bea59979f831147",
+    "mtime": 1794943626.9717555,
+    "seen": 1794943699.1421468,
+    "ast_hash": "1b14277643737b6373cfa1c4ee860914",
     "semantic_hash": ""
   },
   "Cargo.toml": {
@@ -474,9 +474,9 @@
     "semantic_hash": ""
   },
   "docs/operator.md": {
-    "mtime": 1794943400.4181395,
-    "seen": 1794943403.5418484,
-    "ast_hash": "849a314599b9c8f6b66ba15059701f92",
+    "mtime": 1794943626.971985,
+    "seen": 1794943699.149299,
+    "ast_hash": "0f2e3e41b7ebfc42b25bd474b549951f",
     "semantic_hash": ""
   },
   "docs/readme.md": {
@@ -660,15 +660,15 @@
     "semantic_hash": ""
   },
   "dev/config/tenants.yaml": {
-    "mtime": 1794942181.7736423,
-    "seen": 1794942242.9174204,
+    "mtime": 1794943657.9215918,
+    "seen": 1794943699.1457584,
     "ast_hash": "3dc92d65a932cf3892cb2fe7c4054727",
     "semantic_hash": ""
   },
   "dev/server.yaml": {
-    "mtime": 1794941224.3323188,
-    "seen": 1794941530.1159685,
-    "ast_hash": "361c388f6a0b5647b048eed2ba21fcbd",
+    "mtime": 1794943564.4303236,
+    "seen": 1794943699.1457849,
+    "ast_hash": "4225262e55eb975a9fbf5cf5c3e9f3e3",
     "semantic_hash": ""
   },
   "dev/token.sh": {
@@ -1308,15 +1308,15 @@
     "semantic_hash": ""
   },
   "ui/src/locales/en.json": {
-    "mtime": 1794941879.3846364,
-    "seen": 1794942242.919456,
-    "ast_hash": "a88d86f2111f1a56b6c9de333501ee21",
+    "mtime": 1794943477.3847785,
+    "seen": 1794943699.147983,
+    "ast_hash": "e47a9eca953298c997580828be512abf",
     "semantic_hash": ""
   },
   "ui/src/locales/fr.json": {
-    "mtime": 1794941879.3848515,
-    "seen": 1794942242.919457,
-    "ast_hash": "b442e582e27f90a096a8415b4f283453",
+    "mtime": 1794943477.3850386,
+    "seen": 1794943699.1479838,
+    "ast_hash": "856be5cbf6b7dab1c36774102811ed83",
     "semantic_hash": ""
   },
   "ui/src/main.ts": {
@@ -1368,9 +1368,9 @@
     "semantic_hash": ""
   },
   "ui/src/router.ts": {
-    "mtime": 1794941879.452634,
-    "seen": 1794942242.920062,
-    "ast_hash": "62853d82889e19c06f6f63106f8b67f3",
+    "mtime": 1794943477.4492257,
+    "seen": 1794943699.1488588,
+    "ast_hash": "a9ab1225af0740bc8390b860dc96e6c1",
     "semantic_hash": ""
   },
   "ui/src/sw.spec.ts": {
@@ -1398,9 +1398,9 @@
     "semantic_hash": ""
   },
   "docs/RFC/rfc0003-implementation-plan.md": {
-    "mtime": 1794942239.8370156,
-    "seen": 1794942242.9203598,
-    "ast_hash": "cf62451f1f5fcff2cece08893f692c26",
+    "mtime": 1794943626.9721127,
+    "seen": 1794943699.1491547,
+    "ast_hash": "f100706d388eb283442bfcffefb1e77f",
     "semantic_hash": ""
   },
   "ui/index.html": {
@@ -1518,9 +1518,9 @@
     "semantic_hash": ""
   },
   "ui/e2e/console.spec.ts": {
-    "mtime": 1794942139.0003133,
-    "seen": 1794942242.9189453,
-    "ast_hash": "7fd2868a643653205fe45849f132ae96",
+    "mtime": 1794943532.4752874,
+    "seen": 1794943699.14738,
+    "ast_hash": "a748efc9850a46706d0447c2935a0038",
     "semantic_hash": ""
   },
   "ui/src/manage/targets.ts": {
@@ -1548,9 +1548,9 @@
     "semantic_hash": ""
   },
   "ui/src/pages/ManagePage.vue": {
-    "mtime": 1794941879.448109,
-    "seen": 1794942242.9196463,
-    "ast_hash": "45af7bef2ac4acb201c13be2cf8b4f1b",
+    "mtime": 1794943477.3851478,
+    "seen": 1794943699.1482947,
+    "ast_hash": "f1b71d67b0221403f4918dc3d855d811",
     "semantic_hash": ""
   },
   "ui/src/pages/StatusPage.vue": {
@@ -1605,6 +1605,42 @@
     "mtime": 1794942371.962068,
     "seen": 1794943403.5384793,
     "ast_hash": "1ce6c2147db8e7e59563760349c317b0",
+    "semantic_hash": ""
+  },
+  "tests/heavy/notify.sh": {
+    "mtime": 1794943572.2519352,
+    "seen": 1794943699.1472974,
+    "ast_hash": "401bdf16cce18e8998810f9ed3f4f4f3",
+    "semantic_hash": ""
+  },
+  "ui/e2e/helpers.ts": {
+    "mtime": 1794943532.4732876,
+    "seen": 1794943699.147381,
+    "ast_hash": "f18fdcbe785ae85abfd3b5e232aa9cd8",
+    "semantic_hash": ""
+  },
+  "ui/e2e/notify.spec.ts": {
+    "mtime": 1794943532.4172876,
+    "seen": 1794943699.1473818,
+    "ast_hash": "f62b9f67c670d262270d3e23bd123a82",
+    "semantic_hash": ""
+  },
+  "ui/src/pages/DeliveriesPage.vue": {
+    "mtime": 1794943477.4462256,
+    "seen": 1794943699.1481986,
+    "ast_hash": "bb649dd120f2126e3040c948a428a086",
+    "semantic_hash": ""
+  },
+  "ui/src/pages/NotificationsPage.vue": {
+    "mtime": 1794943477.4512258,
+    "seen": 1794943699.1482952,
+    "ast_hash": "73f4e0a904e0ae4df8af63313a1b55a2",
+    "semantic_hash": ""
+  },
+  "ui/src/pages/notifications-pages.spec.ts": {
+    "mtime": 1794943502.8912542,
+    "seen": 1794943699.148515,
+    "ast_hash": "2eb5d0f5d8feeae82e319651f98e49b3",
     "semantic_hash": ""
   },
   "plugin/pnpm-lock.yaml": {

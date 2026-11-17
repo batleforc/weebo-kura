@@ -105,7 +105,8 @@
     "platform": "Platform",
     "status": "Status",
     "forbidden": "Your role does not allow this page.",
-    "failed": "This page could not be loaded."
+    "failed": "This page could not be loaded.",
+    "notifications": "Notifications"
   },
   "access": {
     "subject": "Subject",
@@ -170,5 +171,36 @@
     "kind": "Kind",
     "ready": "Ready",
     "reason": "Reason"
+  },
+  "notifications": {
+    "title": "{tenant} ▸ Notifications",
+    "off": "Notifications are not enabled on this server.",
+    "switchedOff": "\"{name}\" was switched off ({reason}). Fix the receiver, then re-enable it.",
+    "created": "Rule created",
+    "once": "Shown once: your receiver checks X-Kura-Signature with it. The URL will be shown as its host only from now on.",
+    "tested": "Test of {rule}: {result}",
+    "empty": "No rule yet. A rule sends events of this tenant to a webhook.",
+    "events": "Events",
+    "vault": "Vault",
+    "to": "To",
+    "last": "Last",
+    "on": "on",
+    "offState": "off",
+    "test": "Test",
+    "reEnable": "Re-enable",
+    "disable": "Switch off",
+    "deliveries": "Deliveries",
+    "new": "New rule",
+    "scope": "Scope",
+    "tenantWide": "(whole tenant)",
+    "webhook": "Webhook URL",
+    "authorization": "Authorization (optional, hidden once saved)",
+    "back": "Back to the rules",
+    "deliveriesTitle": "Deliveries (last 50, kept 7 days)",
+    "noDelivery": "No delivery yet.",
+    "time": "Time",
+    "event": "Event",
+    "attempt": "Attempt",
+    "result": "Result"
   }
 }

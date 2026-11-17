@@ -108,6 +108,18 @@ export const routes: RouteRecordRaw[] = [
     component: () => import("@/pages/StatusPage.vue"),
     meta: { access: "member" },
   },
+  {
+    path: "/manage/tenants/:t/notifications",
+    name: "notifications",
+    component: () => import("@/pages/NotificationsPage.vue"),
+    meta: { access: "member" },
+  },
+  {
+    path: "/manage/tenants/:t/notifications/:n",
+    name: "deliveries",
+    component: () => import("@/pages/DeliveriesPage.vue"),
+    meta: { access: "member" },
+  },
   { path: "/:pathMatch(.*)*", redirect: "/vaults" },
 ];
 

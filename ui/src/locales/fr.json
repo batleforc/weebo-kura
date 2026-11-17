@@ -105,7 +105,8 @@
     "platform": "Plateforme",
     "status": "État",
     "forbidden": "Votre rôle ne donne pas accès à cette page.",
-    "failed": "Cette page n'a pas pu être chargée."
+    "failed": "Cette page n'a pas pu être chargée.",
+    "notifications": "Notifications"
   },
   "access": {
     "subject": "Sujet",
@@ -170,5 +171,36 @@
     "kind": "Type",
     "ready": "Prêt",
     "reason": "Raison"
+  },
+  "notifications": {
+    "title": "{tenant} ▸ Notifications",
+    "off": "Les notifications ne sont pas activées sur ce serveur.",
+    "switchedOff": "« {name} » a été désactivée ({reason}). Réparez le receveur, puis réactivez-la.",
+    "created": "Règle créée",
+    "once": "Montré une seule fois : votre receveur vérifie X-Kura-Signature avec. L'URL ne sera plus montrée que par son hôte.",
+    "tested": "Test de {rule} : {result}",
+    "empty": "Aucune règle pour l'instant. Une règle envoie les événements de ce tenant à un webhook.",
+    "events": "Événements",
+    "vault": "Coffre",
+    "to": "Vers",
+    "last": "Dernier",
+    "on": "active",
+    "offState": "désactivée",
+    "test": "Tester",
+    "reEnable": "Réactiver",
+    "disable": "Désactiver",
+    "deliveries": "Livraisons",
+    "new": "Nouvelle règle",
+    "scope": "Portée",
+    "tenantWide": "(tout le tenant)",
+    "webhook": "URL du webhook",
+    "authorization": "Authorization (facultatif, masqué une fois enregistré)",
+    "back": "Retour aux règles",
+    "deliveriesTitle": "Livraisons (50 dernières, gardées 7 jours)",
+    "noDelivery": "Aucune livraison pour l'instant.",
+    "time": "Heure",
+    "event": "Événement",
+    "attempt": "Essai",
+    "result": "Résultat"
   }
 }
