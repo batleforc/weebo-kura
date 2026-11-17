@@ -196,11 +196,19 @@ pub async fn register_device(
     let created = device(&row, None)?;
     sqlx::query("SELECT kura_device_link($1, $2)")
         .bind(created.id)
-        .bind(ids)
+        .bind(&ids)
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-    tracing::info!(target: "audit", event = "device_registered", sub = %sub, device = %created.id);
+    tracing::info!(target: "audit", event = "device_registered", sub = %sub, device = %created.id, profile = body.profile.as_str());
+    device_event(
+        &state,
+        &ids,
+        created.id,
+        Some(body.profile.as_str()),
+        "device.registered",
+    )
+    .await;
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -281,6 +289,7 @@ pub async fn revoke_device(
     .await?;
     tx.commit().await?;
     let mut revoked = own.is_some();
+    let mut admin_tenant = None;
     if !revoked {
         for m in members(&state, &caller.caller)?
             .iter()
@@ -294,6 +303,7 @@ pub async fn revoke_device(
             tx.commit().await?;
             if r.is_some() {
                 revoked = true;
+                admin_tenant = Some(m.tenant);
                 break;
             }
         }
@@ -302,11 +312,83 @@ pub async fn revoke_device(
         return Err(ApiError::of(ProblemType::NotFound));
     }
     tracing::info!(target: "audit", event = "device_revoked", sub = %sub, device = %d);
+    // The tenants the device is in: the caller's own, or the one an admin
+    // revoked it from.
+    let tenants: Vec<Uuid> = match (own, admin_tenant) {
+        (Some(_), _) => {
+            let snapshot = state
+                .snapshot()
+                .ok_or(ApiError::of(ProblemType::Unavailable))?;
+            crate::authz::device_tenants(&state.db, &snapshot, &caller.caller.principal).await?
+        }
+        (None, Some(t)) => vec![t],
+        (None, None) => Vec::new(),
+    };
+    device_event(&state, &tenants, d, None, "device.revoked").await;
     // Its sockets close on every replica (§6.2).
     if let Err(e) = crate::notify::notify_revoked(&state.db, d).await {
         tracing::warn!(error = %e, "revocation not broadcast; its sockets close at token expiry");
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `device.registered` or `device.revoked` in each of the device's tenants
+/// (RFC 0003 §4.2): its id and kind, never its name or owner (T5). A device
+/// belongs to a person, not a tenant, so each tenant's event has its own
+/// transaction, after the fact's; a failure is logged, the fact stands.
+async fn device_event(
+    state: &SharedState,
+    tenants: &[Uuid],
+    device: Uuid,
+    profile: Option<&str>,
+    kind: &'static str,
+) {
+    if state.notifier.is_none() {
+        return;
+    }
+    let Some(snapshot) = state.snapshot() else {
+        return;
+    };
+    for &tenant in tenants {
+        let Some(slug) = snapshot
+            .tenant_ids
+            .iter()
+            .find(|(_, id)| **id == tenant)
+            .map(|(s, _)| s.clone())
+        else {
+            continue;
+        };
+        let done = async {
+            let mut tx = db::begin_tenant(&state.db, tenant, None).await?;
+            let verb = if kind == "device.revoked" {
+                "revoked"
+            } else {
+                "registered"
+            };
+            crate::notifier::record(
+                state,
+                &mut tx,
+                crate::notifier::Fact {
+                    tenant,
+                    tenant_slug: &slug,
+                    vault: None,
+                    kind,
+                    title: format!("A device was {verb}"),
+                    message: format!(
+                        "Tenant {slug}: a {} device was {verb}.",
+                        profile.unwrap_or("member's")
+                    ),
+                    data: serde_json::json!({ "device": { "id": device, "profile": profile } }),
+                    dedupe: None,
+                },
+            )
+            .await?;
+            tx.commit().await.map_err(ApiError::from)
+        };
+        if let Err(e) = done.await {
+            tracing::warn!(error = %e, %kind, "notification event not recorded");
+        }
+    }
 }
 
 /// Sign this browser out (RFC 0003 §6.2): the caller's own `web` device

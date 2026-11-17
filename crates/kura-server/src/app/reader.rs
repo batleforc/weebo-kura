@@ -379,6 +379,15 @@ async fn verify_key(parts: &Parts, state: &SharedState, text: &str) -> Result<Ke
             .any(|n| n.contains(&ip))
     });
     if !allowed {
+        token_denied(
+            state,
+            &snap,
+            tenant,
+            row.try_get("vault_id")?,
+            token.id,
+            row.try_get("name")?,
+        )
+        .await;
         return Err(ApiError::of(ProblemType::AddressNotAllowed));
     }
     rate_limit(state, parts, &format!("key:{}", token.id))?;
@@ -406,6 +415,54 @@ async fn verify_key(parts: &Parts, state: &SharedState, text: &str) -> Result<Ke
         rules,
         name: row.try_get("name")?,
     })
+}
+
+/// RFC 0003 `token.denied`: a valid token from a refused address, one event
+/// a token an hour with the count, so a hammered key is one delivery an hour.
+async fn token_denied(
+    state: &SharedState,
+    snap: &crate::reconcile::snapshot::Snapshot,
+    tenant: Uuid,
+    vault: Uuid,
+    token: Uuid,
+    name: String,
+) {
+    if !state
+        .notifier
+        .as_ref()
+        .is_some_and(|n| n.subscribed(tenant, "token.denied"))
+    {
+        return;
+    }
+    let done = async {
+        let Some(a) = authz::key_access(&state.db, snap, tenant, vault, VaultRole::Viewer).await?
+        else {
+            return Ok(());
+        };
+        let hour = time::OffsetDateTime::now_utc()
+            .unix_timestamp()
+            .div_euclid(3600);
+        let mut tx = crate::db::begin_tenant(&state.db, tenant, None).await?;
+        crate::notifier::record(
+            state,
+            &mut tx,
+            crate::notifier::Fact {
+                dedupe: Some(format!("token.denied:{token}:{hour}")),
+                ..crate::notifier::Fact::vault(
+                    &a,
+                    "token.denied",
+                    format!("Token {name} used from a refused address"),
+                    format!("Vault {}, tenant {}: a valid key was presented from outside its address ranges.", a.name, a.tenant_slug),
+                    serde_json::json!({ "token": { "id": token, "name": name } }),
+                )
+            },
+        )
+        .await?;
+        tx.commit().await.map_err(ApiError::from)
+    };
+    if let Err(e) = done.await {
+        tracing::warn!(error = %e, "token.denied not recorded");
+    }
 }
 
 impl Reader {

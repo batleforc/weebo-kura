@@ -42,6 +42,30 @@ pub struct ServerConfig {
     /// The web console (RFC 0003 §4.1); absent: `/app` answers 404.
     #[serde(default)]
     pub ui: Option<UiConfig>,
+    /// Webhooks (RFC 0003 §4.1); absent: off, rule routes answer 409.
+    #[serde(default)]
+    pub notifications: NotificationsConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationsConfig {
+    /// Off by default: run the delivery worker and accept rules.
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub webhook: WebhookConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WebhookConfig {
+    /// Private ranges a webhook may reach; empty: public addresses only.
+    #[serde(default)]
+    pub allowed_cidrs: Vec<IpNet>,
+    /// An extra trust root, for webhooks only (a private CA).
+    #[serde(default)]
+    pub ca_file: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -247,6 +271,19 @@ impl ServerConfig {
             return Err(invalid("oidc.algorithms", "at least one algorithm".into()));
         }
         // The console's tokens are verified like any client's (RFC 0003 §4.1).
+        // A range covering everything would disable the guard (§4.3).
+        if config
+            .notifications
+            .webhook
+            .allowed_cidrs
+            .iter()
+            .any(|n| n.prefix_len() == 0)
+        {
+            return Err(invalid(
+                "notifications.webhook.allowedCidrs",
+                "0.0.0.0/0 and ::/0 would allow every address".into(),
+            ));
+        }
         if let Some(ui) = config.ui.as_ref().filter(|u| u.enabled) {
             if !config.oidc.audiences.contains(&ui.oidc.client_id) {
                 return Err(invalid(
@@ -369,6 +406,28 @@ vault:
                 .ui
                 .unwrap()
                 .enabled
+        );
+    }
+
+    #[test]
+    fn webhook_ranges_never_cover_everything() {
+        let with = |r: &str| {
+            format!(
+                "{EXAMPLE}notifications:\n  enabled: true\n  webhook: {{ allowedCidrs: [{r}] }}\n"
+            )
+        };
+        assert!(err(&with("0.0.0.0/0")).contains("allowedCidrs"));
+        assert!(err(&with("'::/0'")).contains("allowedCidrs"));
+        assert!(err(&with("nope")).contains("allowedCidrs"));
+        let ok = ServerConfig::parse("server.yaml", &with("10.42.7.15/32")).unwrap();
+        assert!(ok.notifications.enabled);
+        assert_eq!(ok.notifications.webhook.allowed_cidrs.len(), 1);
+        assert!(
+            !ServerConfig::parse("server.yaml", EXAMPLE)
+                .unwrap()
+                .notifications
+                .enabled,
+            "off by default"
         );
     }
 

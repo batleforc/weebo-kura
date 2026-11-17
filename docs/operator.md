@@ -77,7 +77,31 @@ ui:               # the web console (RFC 0003); absent or enabled: false: /app i
   oidc:
     clientId: kura-web           # must also be in oidc.audiences
     discovery: https://auth.example.org/application/o/kura-web/   # with Authentik: the console's own application
+notifications:    # webhooks (RFC 0003); absent or enabled: false: rule routes are 409, nothing is sent
+  enabled: true
+  webhook:
+    allowedCidrs: []                  # private ranges a webhook may reach; never 0.0.0.0/0 or ::/0
+    caFile: /etc/kura/hub-ca.pem      # an extra trust root, for webhooks only
 ```
+
+With notifications on, a tenant admin (or a vault manager, for vault events
+of their vaults) subscribes rules to a closed list of events: `token.created`,
+`token.revoked`, `token.expiring` (7 days before, once), `token.denied` (a
+valid key from a refused address, once an hour), `binding.changed`,
+`binding.removed`, `device.registered`, `device.revoked`, `vault.created`,
+`vault.deleted`, `vault.changed` (once a minute), `vault.conflict`,
+`quota.high` (crossing 90%), and `ping` (Test). A fact nobody subscribes to
+records nothing. The server only connects to public addresses, or to ranges
+of `allowedCidrs`, checked on every address it connects to, at every attempt
+(a name that later points inside is refused); `https` only, no redirect, 5 s
+per attempt. The URL, the signing secret and an optional `authorization`
+value are sealed with a per-tenant data key under the tenant's Transit key;
+only the host is shown again. Rule creation needs object storage keys
+(`503` without). Deliveries retry after 1 min, 5 min, 30 min, 2 h and 6 h;
+`410 Gone` and 20 failures in a row switch a rule off
+(`kura_notification_rules_disabled`, `KuraNotificationRuleDisabled`).
+Events and deliveries are kept 7 days. `KuraNotificationsStalled` fires when
+a delivery has waited 15 minutes.
 
 Unknown fields are refused, so a typo stops the server instead of being
 ignored. Platform admins (the `platformAdmin` claim) may read

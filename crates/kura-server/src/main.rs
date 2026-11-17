@@ -126,6 +126,31 @@ async fn connect(
         trusted_proxies: config.trusted_proxies.clone(),
     };
     let mut state = app::AppState::new(metrics, pool, verifier).with_http(http);
+    if config.notifications.enabled {
+        let webhook = &config.notifications.webhook;
+        // A caFile that cannot be read, or holds no certificate, stops the
+        // start: deliveries would fail one by one later (§4.3).
+        let ca = match &webhook.ca_file {
+            Some(path) => {
+                let pem = std::fs::read(path).map_err(|e| {
+                    anyhow::anyhow!("notifications.webhook.caFile {}: {e}", path.display())
+                })?;
+                let certs = reqwest::Certificate::from_pem_bundle(&pem)?;
+                anyhow::ensure!(
+                    !certs.is_empty(),
+                    "notifications.webhook.caFile {}: no certificate",
+                    path.display()
+                );
+                certs
+            }
+            None => Vec::new(),
+        };
+        let client = kura_server::net::webhook_client(webhook.allowed_cidrs.clone(), &ca)?;
+        state = state.with_notifier(kura_server::notifier::Notifier::new(
+            client,
+            webhook.allowed_cidrs.clone(),
+        ));
+    }
     if let Some(ui) = config.ui.as_ref().filter(|u| u.enabled) {
         let settings = app::ui::UiSettings::new(
             ui.dir.clone(),

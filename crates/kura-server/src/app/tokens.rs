@@ -355,6 +355,18 @@ pub async fn create_token(
     .bind(mode)
     .fetch_one(&mut *tx)
     .await?;
+    crate::notifier::record(
+        &state,
+        &mut tx,
+        crate::notifier::Fact::vault(
+            &a,
+            "token.created",
+            format!("Token {name} created"),
+            format!("Vault {}, tenant {}: a new key, expiring in {} days.", a.name, a.tenant_slug, body.expires_in_days),
+            serde_json::json!({ "token": { "id": token.id, "name": name }, "write": scope.can_write() }),
+        ),
+    )
+    .await?;
     tx.commit().await?;
     tracing::info!(target: "audit", event = "scoped_token_created", sub = %p.sub, vault = %v, token = %token.id, rules = rules.len(), write = scope.can_write());
     Ok((
@@ -421,18 +433,32 @@ pub async fn revoke_token(
 ) -> Result<StatusCode, ApiError> {
     let a = manage(&state, &caller, v).await?;
     let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
-    let done = sqlx::query(
-        "UPDATE scoped_token SET revoked_at = coalesce(revoked_at, now()) WHERE id = $1 AND vault_id = $2",
+    let revoked: Option<String> = sqlx::query_scalar(
+        "UPDATE scoped_token SET revoked_at = coalesce(revoked_at, now()) WHERE id = $1 AND vault_id = $2 RETURNING name",
     )
     .bind(t)
     .bind(v)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
-    tx.commit().await?;
-    if done == 0 {
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(name) = revoked else {
         return Err(ApiError::of(ProblemType::NotFound));
-    }
+    };
+    crate::notifier::record(
+        &state,
+        &mut tx,
+        crate::notifier::Fact::vault(
+            &a,
+            "token.revoked",
+            format!("Token {name} revoked"),
+            format!(
+                "Vault {}, tenant {}: the key stops working at once.",
+                a.name, a.tenant_slug
+            ),
+            serde_json::json!({ "token": { "id": t, "name": name } }),
+        ),
+    )
+    .await?;
+    tx.commit().await?;
     tracing::info!(target: "audit", event = "scoped_token_revoked", sub = %caller.caller.principal.sub, vault = %v, token = %t);
     Ok(StatusCode::NO_CONTENT)
 }

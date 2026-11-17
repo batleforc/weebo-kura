@@ -668,6 +668,47 @@ async fn decide(
     if !writes.is_empty() {
         // Delivered on commit only, to every replica's sockets (§6.3).
         crate::notify::notify_change(&mut tx, v, new_head).await?;
+        // RFC 0003: `vault.changed` at most once a vault a minute, with the
+        // number of commits; no path, ever (decision 7).
+        if !cx.space.is_config() {
+            let minute = time::OffsetDateTime::now_utc()
+                .unix_timestamp()
+                .div_euclid(60);
+            crate::notifier::record(
+                state,
+                &mut tx,
+                crate::notifier::Fact {
+                    dedupe: Some(format!("vault.changed:{v}:{minute}")),
+                    ..crate::notifier::Fact::vault(
+                        a,
+                        "vault.changed",
+                        format!("Vault {} changed", a.name),
+                        format!("Tenant {}: notes were changed in the vault.", a.tenant_slug),
+                        serde_json::json!({ "headSeq": new_head }),
+                    )
+                },
+            )
+            .await?;
+        }
+        let conflicts = response
+            .results
+            .iter()
+            .filter(|r| r.conflict.is_some())
+            .count();
+        if conflicts > 0 {
+            crate::notifier::record(
+                state,
+                &mut tx,
+                crate::notifier::Fact::vault(
+                    a,
+                    "vault.conflict",
+                    format!("A conflict in {}", a.name),
+                    format!("Tenant {}: {conflicts} conflict files were created; both versions are kept.", a.tenant_slug),
+                    serde_json::json!({ "conflicts": conflicts }),
+                ),
+            )
+            .await?;
+        }
     }
     sqlx::query(
         "INSERT INTO commit_record (vault_id, tenant_id, device_id, idempotency_key, request_hash, result)

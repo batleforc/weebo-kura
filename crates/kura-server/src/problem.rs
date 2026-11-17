@@ -22,6 +22,8 @@ pub enum ProblemType {
     SearchDisabled,
     /// RFC 0004 §4.3: a `write` rule in a tenant that did not opt in.
     TokenWriteDisabled,
+    /// RFC 0003 §4.3: a rule route while `notifications.enabled` is false.
+    NotificationsDisabled,
     CursorExpired,
     HistoryRewound,
     PayloadTooLarge,
@@ -48,7 +50,7 @@ impl ProblemType {
         )
     }
 
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::InvalidRequest,
         Self::InvalidToken,
         Self::DeviceRevoked,
@@ -58,6 +60,7 @@ impl ProblemType {
         Self::NotFound,
         Self::SearchDisabled,
         Self::TokenWriteDisabled,
+        Self::NotificationsDisabled,
         Self::CursorExpired,
         Self::HistoryRewound,
         Self::PayloadTooLarge,
@@ -81,6 +84,7 @@ impl ProblemType {
             Self::NotFound => "not_found",
             Self::SearchDisabled => "search_disabled",
             Self::TokenWriteDisabled => "token_write_disabled",
+            Self::NotificationsDisabled => "notifications_disabled",
             Self::CursorExpired => "cursor_expired",
             Self::HistoryRewound => "history_rewound",
             Self::PayloadTooLarge => "payload_too_large",
@@ -102,7 +106,9 @@ impl ProblemType {
             }
             Self::InsufficientRole | Self::AddressNotAllowed => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
-            Self::SearchDisabled | Self::TokenWriteDisabled => StatusCode::CONFLICT,
+            Self::SearchDisabled | Self::TokenWriteDisabled | Self::NotificationsDisabled => {
+                StatusCode::CONFLICT
+            }
             Self::CursorExpired | Self::HistoryRewound => StatusCode::GONE,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidPath

@@ -218,6 +218,21 @@ pub async fn create_vault(
         ProblemType::InvalidRequest,
         "a vault with this name exists",
     ))?;
+    crate::notifier::record(
+        &state,
+        &mut tx,
+        crate::notifier::Fact {
+            tenant: membership.tenant,
+            tenant_slug: &membership.slug,
+            vault: Some((id, name.as_str())),
+            kind: "vault.created",
+            title: format!("Vault {} created", name.as_str()),
+            message: format!("Tenant {}: a new vault.", membership.slug),
+            data: serde_json::json!({}),
+            dedupe: None,
+        },
+    )
+    .await?;
     tx.commit().await?;
     tracing::info!(target: "audit", event = "vault_created", sub = %p.sub, vault = %id);
     let access = authz::vault_access_in(&state.db, &snap, p, membership.tenant, id)
@@ -279,6 +294,21 @@ pub async fn delete_vault(
         .bind(v)
         .execute(&mut *tx)
         .await?;
+    crate::notifier::record(
+        &state,
+        &mut tx,
+        crate::notifier::Fact::vault(
+            &access,
+            "vault.deleted",
+            format!("Vault {} deleted", access.name),
+            format!(
+                "Tenant {}: disabled now, purged after 30 days.",
+                access.tenant_slug
+            ),
+            serde_json::json!({}),
+        ),
+    )
+    .await?;
     tx.commit().await?;
     tracing::warn!(target: "audit", event = "vault_deleted", sub = %caller.caller.principal.sub, vault = %v);
     Ok(StatusCode::NO_CONTENT)
@@ -401,6 +431,19 @@ pub async fn put_binding(
             "declared in configuration: read-only here",
         ));
     }
+    crate::notifier::record(
+        &state,
+        &mut tx,
+        crate::notifier::Fact::vault(
+            &access,
+            "binding.changed",
+            format!("Access to {} changed", access.name),
+            format!("Tenant {}: a {} binding of the vault is now {}.", access.tenant_slug, subject.kind(), role_name(body.role)),
+            // The kind and the role: never the subject itself (T5).
+            serde_json::json!({ "binding": { "kind": subject.kind(), "role": role_name(body.role), "folders": body.paths.as_ref().map(Vec::len) } }),
+        ),
+    )
+    .await?;
     tx.commit().await?;
     tracing::info!(target: "audit", event = "binding_changed", sub = %caller.caller.principal.sub, vault = %v, binding = %b, role = role_name(body.role), folders = body.paths.as_ref().map_or(0, Vec::len));
     Ok(Json(BindingView {
@@ -471,6 +514,22 @@ pub async fn delete_binding(
     .bind(subject.kind())
     .bind(subject.value())
     .execute(&mut *tx)
+    .await?;
+    crate::notifier::record(
+        &state,
+        &mut tx,
+        crate::notifier::Fact::vault(
+            &access,
+            "binding.removed",
+            format!("Access to {} removed", access.name),
+            format!(
+                "Tenant {}: a {} binding of the vault was removed.",
+                access.tenant_slug,
+                subject.kind()
+            ),
+            serde_json::json!({ "binding": { "kind": subject.kind() } }),
+        ),
+    )
     .await?;
     tx.commit().await?;
     tracing::info!(target: "audit", event = "binding_removed", sub = %caller.caller.principal.sub, vault = %v, binding = %b);

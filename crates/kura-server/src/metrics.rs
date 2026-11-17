@@ -29,6 +29,12 @@ pub struct Metrics {
     /// Writes asked by scoped tokens, by `outcome`: `applied`, `refused`
     /// (folder or possession), `disabled` (tenant switch) (RFC 0004 §10.1).
     pub token_writes_total: IntCounterVec,
+    /// Notification deliveries by coarse `outcome` (RFC 0003 §10.1).
+    pub notification_deliveries_total: IntCounterVec,
+    pub notification_pending: IntGauge,
+    pub notification_oldest_pending_seconds: Gauge,
+    /// Rules that switched themselves off after failures.
+    pub notification_rules_disabled: IntGauge,
     /// Three-way merges attempted, by `outcome`: `merged` or `conflict` (§10.1).
     pub merge_total: IntCounterVec,
     /// Items of the batch routes (RFC 0002), by `route` (`blobs`, `chunks`)
@@ -109,6 +115,27 @@ impl Metrics {
             &["outcome"],
         )?;
         registry.register(Box::new(token_writes_total.clone()))?;
+        let notification_deliveries_total = IntCounterVec::new(
+            Opts::new(
+                "notification_deliveries_total",
+                "Notification delivery attempts by outcome",
+            ),
+            &["outcome"],
+        )?;
+        registry.register(Box::new(notification_deliveries_total.clone()))?;
+        let notification_pending =
+            IntGauge::new("notification_pending", "Notification deliveries waiting")?;
+        registry.register(Box::new(notification_pending.clone()))?;
+        let notification_oldest_pending_seconds = Gauge::new(
+            "notification_oldest_pending_seconds",
+            "Age of the oldest delivery due and not sent",
+        )?;
+        registry.register(Box::new(notification_oldest_pending_seconds.clone()))?;
+        let notification_rules_disabled = IntGauge::new(
+            "notification_rules_disabled",
+            "Notification rules switched off after failures",
+        )?;
+        registry.register(Box::new(notification_rules_disabled.clone()))?;
         let merge_total = IntCounterVec::new(
             Opts::new("merge_total", "Three-way merges attempted"),
             &["outcome"],
@@ -241,6 +268,10 @@ impl Metrics {
             chunk_corrupt_total,
             commits_total,
             token_writes_total,
+            notification_deliveries_total,
+            notification_pending,
+            notification_oldest_pending_seconds,
+            notification_rules_disabled,
             merge_total,
             batch_items_total,
             batch_response_bytes,

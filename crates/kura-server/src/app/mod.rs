@@ -34,6 +34,7 @@ use crate::reconcile::snapshot::Snapshot;
         (name = "admin", description = "Platform administration"),
         (name = "devices", description = "Device registration and revocation"),
         (name = "me", description = "The signed-in caller"),
+        (name = "notifications", description = "A tenant's webhook rules and their deliveries"),
         (name = "vaults", description = "Vaults and their role bindings"),
         (name = "chunks", description = "Encrypted chunks and file manifests"),
         (name = "sync", description = "Commits and changes"),
@@ -96,6 +97,8 @@ pub struct AppState {
     pub batches: tokio::sync::Semaphore,
     /// The web console, when `ui.enabled` (RFC 0003 §6.1).
     pub ui: Option<ui::UiSettings>,
+    /// Outbound notifications, when `notifications.enabled` (RFC 0003 §6.4).
+    pub notifier: Option<Arc<crate::notifier::Notifier>>,
     snapshot: RwLock<Option<Arc<Snapshot>>>,
     /// This replica's last rejected configuration, for `GET /v1/admin/status`.
     rejection: Mutex<Option<Vec<kura_api::ConfigError>>>,
@@ -113,6 +116,7 @@ impl AppState {
             http: HttpSettings::default(),
             storage: None,
             ui: None,
+            notifier: None,
             hub,
             batches: tokio::sync::Semaphore::new(chunks::BATCHES_IN_FLIGHT),
             snapshot: RwLock::new(None),
@@ -181,6 +185,11 @@ impl Default for HttpSettings {
 }
 
 impl AppState {
+    pub fn with_notifier(mut self, n: crate::notifier::Notifier) -> Self {
+        self.notifier = Some(Arc::new(n));
+        self
+    }
+
     pub fn with_ui(mut self, ui: ui::UiSettings) -> Self {
         self.ui = Some(ui);
         self
@@ -238,6 +247,16 @@ fn v1_router() -> OpenApiRouter<SharedState> {
         .routes(routes!(devices::revoke_device))
         .routes(routes!(devices::sign_out_device))
         .routes(routes!(me::me))
+        .routes(routes!(
+            notifications::list_rules,
+            notifications::create_rule
+        ))
+        .routes(routes!(
+            notifications::update_rule,
+            notifications::delete_rule
+        ))
+        .routes(routes!(notifications::test_rule))
+        .routes(routes!(notifications::list_deliveries))
         .routes(routes!(vaults::list_vaults, vaults::create_vault))
         .routes(routes!(vaults::delete_vault))
         .routes(routes!(vaults::list_bindings))
@@ -483,6 +502,7 @@ pub mod device;
 pub mod devices;
 pub mod events;
 pub mod me;
+pub mod notifications;
 pub mod reader;
 pub mod search;
 pub mod space;
