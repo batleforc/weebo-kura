@@ -90,7 +90,8 @@
     "view": "Voir",
     "reach": "{n} dossiers",
     "whole": "coffre entier",
-    "open": "Ouvrir"
+    "open": "Ouvrir",
+    "byKey": "clé {name}"
   },
   "manage": {
     "title": "Gérer",

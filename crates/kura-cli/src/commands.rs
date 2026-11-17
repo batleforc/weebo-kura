@@ -82,11 +82,8 @@ fn scoped(ctx: &Ctx) -> Option<Uuid> {
     kura_core::token::ScopedToken::parse(t).ok().map(|t| t.id)
 }
 
-/// Full Unicode case folding then NFC, as the server compares folders.
-fn fold(s: &str) -> String {
-    use unicode_normalization::UnicodeNormalization as _;
-    caseless::default_case_fold_str(s).nfc().collect()
-}
+/// Folders compare as the server compares them (RFC 0004 §4.2).
+use kura_core::scope::fold;
 
 fn config(ctx: &Ctx) -> Result<Config, Fail> {
     if let Some(cfg) = Config::load(&ctx.home).map_err(Fail::local)? {
@@ -608,6 +605,18 @@ async fn sync_one(
             println!(
                 "{} remote changes wait for local edits to be pushed.",
                 r.deferred.len()
+            );
+        }
+        // A token says who is writing (RFC 0004 §4.5).
+        if let Some(token) = &v.token_name {
+            println!(
+                "{name}  token {token}  {} pushed  {} pulled",
+                if r.refused.is_some() || !r.not_writable.is_empty() {
+                    0
+                } else {
+                    r.pushed
+                },
+                r.pulled
             );
         }
         println!(

@@ -57,6 +57,17 @@ entries:
     identifiers: { name: kura-platform-admins }
     attrs: { name: kura-platform-admins }
 
+  # RFC 0005 §6.P: the tabletop tenant `jdr` of dev/config/tenants.yaml.
+  - model: authentik_core.group
+    id: group-jdr-mj
+    identifiers: { name: jdr-mj }
+    attrs: { name: jdr-mj }
+
+  - model: authentik_core.group
+    id: group-jdr-players
+    identifiers: { name: jdr-players }
+    attrs: { name: jdr-players }
+
   - model: authentik_core.user
     identifiers: { username: alice }
     attrs:
@@ -65,7 +76,7 @@ entries:
       email: alice@kura.local
       password: kura-dev
       is_active: true
-      groups: [!KeyOf group-owners, !KeyOf group-platform-admins]
+      groups: [!KeyOf group-owners, !KeyOf group-platform-admins, !KeyOf group-jdr-mj]
 
   - model: authentik_core.user
     identifiers: { username: bob }
@@ -75,7 +86,7 @@ entries:
       email: bob@kura.local
       password: kura-dev
       is_active: true
-      groups: [!KeyOf group-members]
+      groups: [!KeyOf group-members, !KeyOf group-jdr-players]
 
   - model: authentik_core.user
     identifiers: { username: carol }

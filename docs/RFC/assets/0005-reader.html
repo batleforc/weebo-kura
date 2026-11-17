@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RFC 0005 — reader mocks</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+<h1>RFC 0005 · Reader</h1>
+<p class="decides">The reader pages of §4.5, in the shell of RFC 0003 (<a href="0003-console.html">its mocks</a>), built from the batlehub-design tokens.</p>
+
+<h2>My vaults — nominal and empty</h2>
+<div class="frame"><div class="body"><table>
+  <tr><th>Name</th><th>Tenant</th><th>Your role</th><th>Reach</th><th>Updated</th></tr>
+  <tr><td><a>campaign</a></td><td>jdr</td><td>viewer</td><td>2 folders</td><td>2 h ago</td></tr>
+  <tr><td><a>notes</a></td><td>maxime</td><td>editor</td><td>whole vault</td><td>now</td></tr>
+</table></div></div>
+<div class="frame"><div class="body"><p class="dim">No vault is open to you yet. Ask a vault manager to add you, then reload.</p></div></div>
+<p class="decides">The role and the reach are on the first screen; the empty state says who can fix it.</p>
+
+<h2>Browse and read</h2>
+<div class="frame"><div class="bar"><span>My vaults ▸ campaign ▸ Sessions/2026-11-08 Session 12</span><span class="right"><a>Search</a></span></div>
+<div class="split"><nav><ul class="tree"><li>▾ Sessions<ul class="tree"><li>Session 10</li><li>Session 11</li><li><b>Session 12</b></li></ul></li><li>▸ Resumes</li></ul></nav>
+<article><h1>Session 12 — The salt mine</h1>
+<p>The party reached the mine at dusk. See <a>Session 11</a> for the map.</p>
+<p>The foreman mentioned <span class="unshared" title="not shared with you">Plan du MJ</span>.</p>
+<p class="dim" style="margin-top:var(--s4)">Last edited 2026-11-08 · <a>History</a></p></article></div></div>
+<p class="decides">Two panes; only shared folders in the tree; a link to a hidden note is plain text, with no hint beyond "not shared with you" on focus. The note itself renders in a sandboxed frame.</p>
+
+<h2>Not found, or hidden</h2>
+<div class="frame"><div class="body"><p class="note"><b>Not found.</b> This note does not exist, or is not shared with you.</p><p style="margin-top:var(--s2)"><a>Back to campaign</a></p></div></div>
+<p class="decides">One message for both cases: the page cannot tell them apart either.</p>
+
+<h2>Search — results, nothing, off</h2>
+<div class="frame"><div class="body">
+<p><input value="mine de sel"> <button>Search</button></p>
+<table style="margin-top:var(--s3)"><tr><th>3 results</th><th></th></tr>
+<tr><td><a>Sessions/2026-11-08 Session 12</a></td><td class="dim">…reached the mine at dusk…</td></tr>
+<tr><td><a>Resumes/Session 12</a></td><td class="dim">…la mine de sel abandonnée…</td></tr></table>
+<p class="dim" style="margin-top:var(--s3)">No note matches "dragon" in the folders shared with you.</p>
+<p class="note" style="margin-top:var(--s3)"><b>Search off.</b> Search is not enabled for this vault. Browse the folders instead.</p>
+</div></div>
+<p class="decides">The empty state names its limit ("in the folders shared with you"); snippets are text, never HTML.</p>
+
+<h2>History</h2>
+<div class="frame"><div class="body"><table>
+  <tr><th>Time</th><th>Path</th><th>By</th><th></th></tr>
+  <tr><td>2026-11-08 21:14</td><td>Sessions/Session 12.md</td><td>laptop</td><td><span class="state" data-s="ok">current</span></td></tr>
+  <tr><td>2026-11-08 20:02</td><td>Sessions/Session 12.md</td><td>key discord-recap</td><td><button>View</button></td></tr>
+  <tr><td>2026-11-07 09:30</td><td>Sessions/Session 12.md</td><td>phone</td><td><button>View</button></td></tr>
+</table></div></div>
+<p class="decides">A revision written by a token shows the token's name; a person's shows the device, never their subject; viewing is the only action.</p>
+
+<h2>Session ended, and server unavailable</h2>
+<div class="frame"><div class="body"><p class="note"><b>Session ended.</b> <button>Sign in again</button></p>
+<p class="note" style="margin-top:var(--s3)"><b>Unavailable.</b> Kura is not answering (503). <button>Retry</button></p></div></div>
+<p class="decides">An expired session never shows stale content behind it.</p>
+<script src="states.js"></script>
+</body>
+</html>

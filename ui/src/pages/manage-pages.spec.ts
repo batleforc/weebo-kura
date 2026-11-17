@@ -163,6 +163,32 @@ describe("access", () => {
     );
   });
 
+  it("offers the tenant's groups as a list", async () => {
+    vi.mocked(sdk.listBindings).mockResolvedValue({ data: [] } as never);
+    vi.mocked(sdk.listVaults).mockResolvedValue({
+      data: [
+        { ...vault("v1", "jdr", "manager"), groups: ["jdr-mj", "jdr-players"] },
+      ],
+    } as never);
+    const w = await at(
+      AccessPage,
+      "/manage/vaults/v1/access",
+      "/manage/vaults/:v/access",
+    );
+    await w.find("button.mt-4").trigger("click");
+    expect(w.findAll("[data-test=group] option").map((o) => o.text())).toEqual([
+      "jdr-mj",
+      "jdr-players",
+    ]);
+    await w.find("[data-test=group]").setValue("jdr-players");
+    await w.find("form").trigger("submit");
+    await flushPromises();
+    expect(vi.mocked(sdk.putBinding).mock.calls[0]?.[0]?.path).toEqual({
+      v: "v1",
+      b: "claim:jdr-players",
+    });
+  });
+
   it("says when the role does not allow the page", async () => {
     vi.mocked(sdk.listBindings).mockRejectedValue(
       refusal(403, "insufficient_role"),

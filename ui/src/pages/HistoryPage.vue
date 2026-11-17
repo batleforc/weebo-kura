@@ -79,6 +79,7 @@ onMounted(load);
         <li v-for="(r, i) in revisions" :key="r.revision" class="border-t border-rule-soft py-1">
           <time :datetime="r.createdAt">{{ r.createdAt.slice(0, 16).replace("T", " ") }}</time>
           <span class="ml-2">{{ r.path }}</span>
+          <span v-if="r.author" class="ml-2 text-ink-dim">{{ r.author.kind === "key" ? t("reader.byKey", { name: r.author.name }) : r.author.name }}</span>
           <span v-if="i === 0" class="ml-2 text-ink-dim">{{ t("reader.current") }}</span>
           <span v-else-if="r.deleted" class="ml-2 text-ink-dim">{{ t("reader.deleted") }}</span>
           <button v-else type="button" class="ml-2 border border-rule px-2" @click="view(r)">{{ t("reader.view") }}</button>

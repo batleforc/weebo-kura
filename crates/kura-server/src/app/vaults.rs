@@ -47,6 +47,14 @@ pub struct Vault {
     /// refuses a change outside them before sending it. Absent for a device.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scopes: Option<Vec<super::tokens::ScopeRule>>,
+    /// For whoever may bind on this vault (its manager, a tenant admin): the
+    /// claim values the tenant maps, the only groups a binding may name
+    /// (RFC 0003 §4.5, Add access).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<String>>,
+    /// For a scoped token: its own name, which its client shows (RFC 0004 §4.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
@@ -79,6 +87,8 @@ impl From<&VaultAccess> for Vault {
                 .collect(),
             head_seq: u64::try_from(a.head_seq).unwrap_or_default(),
             scopes: None,
+            groups: None,
+            token_name: None,
             paths: a.paths.clone(),
         }
     }
@@ -150,6 +160,7 @@ pub async fn list_vaults(
                 a.iter()
                     .map(|a| Vault {
                         scopes: Some(k.rules.clone()),
+                        token_name: Some(k.name.clone()),
                         ..Vault::from(a)
                     })
                     .collect(),
@@ -161,7 +172,33 @@ pub async fn list_vaults(
     // Every enabled tenant: a binding may open a vault without any tenant role.
     for &tenant in snap.tenant_ids.values() {
         for a in authz::vault_accesses_in(&state.db, &snap, p, tenant, MAX_LISTED).await? {
-            out.push(Vault::from(&a));
+            let binds = a.role == VaultRole::Manager
+                || a.tenant_role.is_some_and(|r| r >= TenantRole::Admin);
+            let groups = binds
+                .then(|| {
+                    snap.config
+                        .tenants
+                        .get(a.tenant_slug.as_str())
+                        .and_then(|t| t.doc.spec.claim_mappings.as_ref())
+                        .map(|m| {
+                            let mut all: Vec<String> = m
+                                .roles
+                                .owner
+                                .iter()
+                                .chain(&m.roles.admin)
+                                .chain(&m.roles.member)
+                                .cloned()
+                                .collect();
+                            all.sort();
+                            all.dedup();
+                            all
+                        })
+                })
+                .flatten();
+            out.push(Vault {
+                groups,
+                ..Vault::from(&a)
+            });
         }
     }
     Ok(Json(out))

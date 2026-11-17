@@ -888,6 +888,36 @@ async fn token_cannot_write_outside() {
         (format!("key:{id}"), id),
         "token_revision_names_the_key"
     );
+    // RFC 0005 §4.5: readers see the key's name, never its subject.
+    let (_, history) =
+        s.e.call(
+            "GET",
+            &format!("/v1/vaults/{}/entries/{recap}/revisions", s.v),
+            &s.admin,
+            Some(&s.ad),
+            None,
+        )
+        .await;
+    assert_eq!(
+        history["items"][0]["author"],
+        json!({ "kind": "key", "name": "discord-recap" })
+    );
+    let (_, sessions) =
+        s.e.call(
+            "GET",
+            &format!("/v1/vaults/{}/entries/{sess}/revisions", s.v),
+            &s.admin,
+            Some(&s.ad),
+            None,
+        )
+        .await;
+    assert_eq!(
+        sessions["items"][0]["author"],
+        json!({ "kind": "device", "name": "admin-desk" })
+    );
+    // RFC 0004 §4.5: the token knows its own name, for `kura sync`.
+    let (_, list) = send(&s.e, "GET", "/v1/vaults", &key, None, None, INSIDE).await;
+    assert_eq!(json_of(&list)[0]["tokenName"], "discord-recap");
     assert_eq!(s.token_writes("applied"), 1);
     // It reads back what it wrote: `write` reads its own folder.
     let (_, p) = s.as_key(&key, "GET", "/changes?since=0", None).await;

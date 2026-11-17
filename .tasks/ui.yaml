@@ -37,4 +37,9 @@ tasks:
     desc: Check the console's JavaScript dependencies for known vulnerabilities
     dir: ui
     cmds:
-      - pnpm audit
+      # GHSA-fc5q-39xc-vjpf (picomatch <=4.0.7, ReDoS on extglobs): no fixed
+      # version exists. Checked 2026-11-17: picomatch arrives through vue-router's route plugin (unplugin), a
+      # build-time glob matcher, and is in no shipped bundle
+      # (`grep -c picomatch dist/assets/*.js` is 0). Drop this ignore once
+      # `npm view picomatch versions` lists a release past 4.0.7.
+      - pnpm audit --ignore GHSA-fc5q-39xc-vjpf

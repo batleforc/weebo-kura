@@ -196,6 +196,21 @@ pub struct RevisionInfo {
     pub size: u64,
     /// RFC 3339, UTC.
     pub created_at: String,
+    /// Who wrote it, by the name readers may see (RFC 0005 §4.5); absent
+    /// from servers before it, or when the device was purged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<Author>,
+}
+
+/// The device or scoped token that wrote a revision, never the person's
+/// identity provider subject.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct Author {
+    /// `device` or `key`.
+    pub kind: String,
+    pub name: String,
 }
 
 /// An entry's history, newest first.

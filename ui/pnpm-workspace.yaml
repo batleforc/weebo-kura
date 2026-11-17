@@ -1,3 +1,6 @@
+auditConfig:
+  ignoreGhsas:
+    - GHSA-fc5q-39xc-vjpf
 overrides:
   # Dev only, through @hey-api/openapi-ts (client generation): GHSA quadratic
   # CPU on YAML merge keys and !!omap; fixed in 4.3.2.

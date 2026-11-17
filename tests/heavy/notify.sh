@@ -4,8 +4,8 @@
 # notifications for 127.0.0.1/32 and trusts dev/certs/ca.pem). The receiver is
 # a Python https listener with the dev certificate on 127.0.0.1:8443, logging
 # each request; a second one on 127.0.0.2:8443 must never be reached.
-# Observation 8 (`ui` and `notifications` off) needs other server settings:
-# tests/console.rs and tests/notifications.rs carry it.
+# Observations 6 (the half at send time) and 8 start two more servers on the
+# same database with other settings, on ports 58081 and 58082.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -108,4 +108,33 @@ row=$(sql "SELECT d.attempts || ' ' || d.status || ' ' || round(extract(epoch FR
 read -r attempts status wait <<<"$row"
 [ "$attempts" = 1 ] && [ "$status" = pending ] && [ "$wait" -ge 50 ] && [ "$wait" -le 65 ] || fail "7: $row"
 pass "7: a 500 leaves the delivery pending after 1 attempt, next in ${wait} s"
-echo "notify.sh: RFC 0003 §6.P observations 4 to 7 hold on $server"
+# 6 and 8: the same database, other settings. `serve <port> <sed script>`
+# starts a server with dev/server.yaml changed by the script.
+serve() {
+  local port=$1 metrics=$(( $1 + 1000 ))
+  sed -e "s/127.0.0.1:58080/127.0.0.1:$port/; s/127.0.0.1:59090/127.0.0.1:$metrics/" -e "$2" "$root/dev/server.yaml" > "$work/server-$port.yaml"
+  (cd "$root" && KURA_VAULT_TOKEN=kura-dev KURA_CONFIG_DIR=dev/config SSL_CERT_FILE=dev/certs/ca.pem \
+    ./target/debug/kura-server --config "$work/server-$port.yaml" > "$work/server-$port.log" 2>&1) &
+  pids+=($!)
+  for _ in $(seq 60); do curl -sf "http://127.0.0.1:$port/readyz" >/dev/null && return 0; sleep 1; done
+  fail "the server on $port did not start: $(tail -3 "$work/server-$port.log")"
+}
+cargo build -q -p kura-server
+# The console off, and no private range allowed any more.
+serve 58081 '/^ui:/,/oidc:/ s/enabled: true/enabled: false/; s#allowedCidrs: \[127.0.0.1/32\]#allowedCidrs: []#'
+[ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:58081/app/)" = 404 ] || fail "8: /app/ is served with ui.enabled false"
+pass "8: with ui.enabled false, /app/ is 404"
+before=$(wc -l < "$work/log-127.0.0.1")
+echo 200 > "$work/status"
+status=$(curl -s -o "$work/body" -w '%{http_code}' -H "authorization: Bearer $token" -H "x-kura-device: $device" -X POST "http://127.0.0.1:58081/v1/tenants/dev/notifications/$rule/test")
+[ "$status" = 200 ] && [ "$(jq -r .result "$work/body")" = address_refused ] || fail "6: $status $(cat "$work/body")"
+[ "$(wc -l < "$work/log-127.0.0.1")" = "$before" ] || fail "6: the refused address was connected to"
+pass "6: a rule saved while 127.0.0.1 was allowed is refused at send time once it is not (address_refused), and nothing connects"
+# Notifications off.
+serve 58082 '/^notifications:/,/caFile/ s/enabled: true/enabled: false/'
+status=$(curl -s -o "$work/body" -w '%{http_code}' -H "authorization: Bearer $token" -H "x-kura-device: $device" "http://127.0.0.1:58082/v1/tenants/dev/notifications")
+if [ "$status" != 409 ] || ! jq -e '.type == "/v1/problems/notifications_disabled"' "$work/body" >/dev/null; then
+  fail "8: $status $(cat "$work/body")"
+fi
+pass "8: with notifications.enabled false, the rule routes are 409 notifications_disabled"
+echo "notify.sh: RFC 0003 §6.P observations 4 to 8 hold on $server"

@@ -409,6 +409,26 @@ vault:
         );
     }
 
+    /// The Helm chart renders `server` from its values as is: its defaults,
+    /// and with the console and webhooks on, are accepted (RFC 0003).
+    #[test]
+    fn the_charts_server_values_parse() {
+        let values: serde_norway::Value =
+            serde_norway::from_str(include_str!("../../../deploy/helm/kura/values.yaml")).unwrap();
+        let server = values.get("server").unwrap().clone();
+        let text = serde_norway::to_string(&server).unwrap();
+        let defaults = ServerConfig::parse("values.yaml", &text).unwrap();
+        assert!(
+            !defaults.ui.unwrap().enabled && !defaults.notifications.enabled,
+            "off by default"
+        );
+        let on = text
+            .replace("enabled: false", "enabled: true")
+            .replace("- kura-plugin", "- kura-plugin\n  - kura-web");
+        let on = ServerConfig::parse("values.yaml", &on).unwrap();
+        assert!(on.ui.unwrap().enabled && on.notifications.enabled);
+    }
+
     #[test]
     fn webhook_ranges_never_cover_everything() {
         let with = |r: &str| {

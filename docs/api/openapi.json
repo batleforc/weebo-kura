@@ -2809,6 +2809,23 @@
           }
         }
       },
+      "Author": {
+        "type": "object",
+        "description": "The device or scoped token that wrote a revision, never the person's\nidentity provider subject.",
+        "required": [
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`device` or `key`."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "BindingView": {
         "type": "object",
         "required": [
@@ -3627,6 +3644,17 @@
           "createdAt"
         ],
         "properties": {
+          "author": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Author",
+                "description": "Who wrote it, by the name readers may see (RFC 0005 §4.5); absent\nfrom servers before it, or when the device was purged."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "blob": {
             "type": [
               "string",
@@ -4042,6 +4070,16 @@
             "format": "uuid",
             "description": "Send back with `changes?since=` (§6.3)."
           },
+          "groups": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "For whoever may bind on this vault (its manager, a tenant admin): the\nclaim values the tenant maps, the only groups a binding may name\n(RFC 0003 §4.5, Add access)."
+          },
           "headSeq": {
             "type": "integer",
             "format": "int64",
@@ -4087,6 +4125,13 @@
           },
           "tenant": {
             "type": "string"
+          },
+          "tokenName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a scoped token: its own name, which its client shows (RFC 0004 §4.5)."
           }
         }
       }

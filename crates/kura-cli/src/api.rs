@@ -189,6 +189,9 @@ pub struct VaultView {
     /// Present when the caller is a scoped token: its own folder rules.
     #[serde(default)]
     pub scopes: Option<Vec<ScopeRule>>,
+    /// Present when the caller is a scoped token: its name.
+    #[serde(default)]
+    pub token_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

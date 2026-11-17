@@ -7,7 +7,7 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { env, signIn } from "./helpers";
+import { env, signIn, signOut } from "./helpers";
 
 test("1 and 2: alice signs in, gets no cookie, and a key's secret is shown once", async ({
   page,
@@ -62,6 +62,7 @@ test("1 and 2: alice signs in, gets no cookie, and a key's secret is shown once"
   await expect(page.locator("tbody")).toContainText("127.0.0.0/8");
   expect(await page.content()).not.toContain(secret);
   expect(api.filter((a) => a.body.includes(secret))).toEqual([]);
+  await signOut(page);
 });
 
 test("3: bob, a viewer, is refused the keys of a vault, and is shown no key", async ({
@@ -85,4 +86,5 @@ test("3: bob, a viewer, is refused the keys of a vault, and is shown no key", as
   expect(refused[0]?.body).toContain("/v1/problems/insufficient_role");
   expect(refused[0]?.body).not.toContain("kura_");
   await expect(page.locator("[data-test=manage]")).toHaveCount(0);
+  await signOut(page);
 });

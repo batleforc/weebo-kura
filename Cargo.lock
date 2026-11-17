@@ -1451,7 +1451,6 @@ name = "kura-cli"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "caseless",
  "clap",
  "futures-util",
  "http",
@@ -1462,7 +1461,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite",
- "unicode-normalization",
  "uuid",
 ]
 
@@ -1471,6 +1469,7 @@ name = "kura-core"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "caseless",
  "diffy",
  "fastcdc",
  "serde",
@@ -1493,7 +1492,6 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "bytes",
- "caseless",
  "futures-util",
  "ipnet",
  "jsonwebtoken",
@@ -1520,7 +1518,6 @@ dependencies = [
  "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
- "unicode-normalization",
  "utoipa",
  "utoipa-axum",
  "utoipa-scalar",

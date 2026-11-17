@@ -90,7 +90,8 @@
     "view": "View",
     "reach": "{n} folders",
     "whole": "whole vault",
-    "open": "Open"
+    "open": "Open",
+    "byKey": "key {name}"
   },
   "manage": {
     "title": "Manage",

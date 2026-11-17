@@ -316,9 +316,9 @@ belong to answers `404`, as vaults do.
 
 ### 4.5 Mocks
 
-`batlehub-design` is not installed in this repository, so these are
-wireframes; the HTML mocks are built with its tokens in phase 1, under
-`docs/RFC/assets/`. The reader pages are drawn in RFC 0005 §4.5.
+These are wireframes; the HTML mocks, built with the `batlehub-design`
+tokens, are [`assets/0003-console.html`](assets/0003-console.html) and
+[`assets/0005-reader.html`](assets/0005-reader.html). The reader pages are drawn in RFC 0005 §4.5.
 
 **Signed out, and signing in**
 

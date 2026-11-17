@@ -145,7 +145,7 @@ pass "h. after the Authentik session ends the refresh still works, with the same
 server=${KURA_DEV_SERVER:-http://127.0.0.1:58080}
 if curl -sf "$server/app/config.json" >/dev/null; then
   vault_id() { podman exec kura-dev-postgres psql -U postgres -d kura -tAc "SELECT id FROM vault WHERE name = '$1'"; }
-  (cd "$root/ui" && KURA_E2E_NOTES=$(vault_id notes) KURA_E2E_CAMPAIGN=$(vault_id campaign) KURA_E2E_AUTHENTIK=$ak \
+  (cd "$root/ui" && KURA_E2E_NOTES=$(vault_id notes) KURA_E2E_CAMPAIGN=$(podman exec kura-dev-postgres psql -U postgres -d kura -tAc "SELECT id FROM vault WHERE namespace = 'jdr' AND name = 'campaign' AND disabled_at IS NULL") KURA_E2E_AUTHENTIK=$ak \
     KURA_DEV_SERVER=$server pnpm exec playwright test e2e/console.spec.ts --reporter=line) || fail "§6.P 1 to 3: the console's browser proof failed"
   pass "§6.P 1 to 3: alice signs in through Authentik with no cookie, a key's secret is shown once, bob is refused the keys"
 else

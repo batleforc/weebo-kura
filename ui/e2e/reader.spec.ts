@@ -6,6 +6,8 @@
  */
 import { expect, test } from "@playwright/test";
 
+import { signOut } from "./helpers";
+
 const env = (name: string): string => {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is not set: run tests/heavy/reader.sh`);
@@ -76,9 +78,18 @@ test("a restricted viewer reads the shared folders, and a hostile note runs noth
   expect(outside).toEqual([]);
   expect(violations.some((v) => /script-src/.test(v))).toBe(true);
 
+  // 3 (page half). The search page names the limit of what bob sees.
+  await page.goto(`/app/vaults/${vault}/search`);
+  await page.locator("[data-test=query]").fill("xyzzy");
+  await page.getByRole("button", { name: "Search" }).click();
+  await expect(page.locator("[data-test=no-hit]")).toHaveText(
+    'No note matches "xyzzy" in the folders shared with you.',
+  );
+
   // 5 (page half). The hidden note's address says it does not exist.
   await page.goto(`/app/vaults/${vault}/notes/${env("KURA_E2E_HIDDEN")}`);
   await expect(page.locator("[data-test=not-found]")).toContainText(
     "does not exist, or is not shared with you",
   );
+  await signOut(page);
 });

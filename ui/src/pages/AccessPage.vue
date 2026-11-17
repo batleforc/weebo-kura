@@ -8,6 +8,7 @@ import { withDevice } from "@/api/client";
 import {
   deleteBinding,
   listBindings,
+  listVaults,
   putBinding,
 } from "@/api/generated/sdk.gen";
 import type { BindingView } from "@/api/generated/types.gen";
@@ -44,6 +45,8 @@ const who = ref("");
 const role = ref("viewer");
 const folders = ref("");
 const refusal = ref<string | null>(null);
+/** The tenant's mapped claim values, the only groups a binding may name. */
+const groups = ref<string[]>([]);
 
 /** `claim:jdr-players` as the page says it: "group jdr-players". */
 function subject(b: BindingView): string {
@@ -104,7 +107,13 @@ async function remove(b: BindingView): Promise<void> {
   }
 }
 
-onMounted(load);
+onMounted(async () => {
+  await load();
+  const vaults = await withDevice(
+    async (headers) => (await listVaults({ headers, throwOnError: true })).data,
+  ).catch(() => []);
+  groups.value = vaults.find((x) => x.id === v.value)?.groups ?? [];
+});
 </script>
 
 <template>
@@ -167,7 +176,12 @@ onMounted(load);
           <label><input v-model="kind" type="radio" value="claim" /> {{ t("access.group") }}</label>
           <label><input v-model="kind" type="radio" value="user" /> {{ t("access.user") }}</label>
         </fieldset>
-        <label>{{ kind === "claim" ? t("access.group") : t("access.userSubject") }}
+        <label v-if="kind === 'claim' && groups.length">{{ t("access.group") }}
+          <select v-model="who" required class="ml-2 bg-ground" data-test="group">
+            <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
+          </select>
+        </label>
+        <label v-else>{{ kind === "claim" ? t("access.group") : t("access.userSubject") }}
           <input v-model="who" required class="ml-2 border border-rule bg-ground px-1" data-test="who" />
         </label>
         <label>{{ t("access.role") }}

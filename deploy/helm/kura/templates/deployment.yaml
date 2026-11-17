@@ -13,7 +13,7 @@ spec:
       annotations:
         # server.yaml is read at start; the documents are re-read live, so
         # only the former restarts the pods.
-        checksum/server: {{ toYaml .Values.server | sha256sum }}
+        checksum/server: {{ printf "%s%s" (toYaml .Values.server) (toYaml .Values.webhookCa) | sha256sum }}
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name }}
       securityContext: { fsGroup: 65532 }
@@ -47,8 +47,17 @@ spec:
             - { name: server, mountPath: /etc/kura/server, readOnly: true }
             # Never with subPath: the files must follow the ConfigMap (§6.10).
             - { name: documents, mountPath: /etc/kura/config, readOnly: true }
+            {{- if .Values.webhookCa.secretName }}
+            - { name: webhook-ca, mountPath: /etc/kura/webhook-ca, readOnly: true }
+            {{- end }}
       volumes:
         - name: server
           configMap: { name: {{ include "kura.name" . }}-server }
         - name: documents
           configMap: { name: {{ include "kura.name" . }}-documents }
+        {{- if .Values.webhookCa.secretName }}
+        - name: webhook-ca
+          secret:
+            secretName: {{ .Values.webhookCa.secretName }}
+            items: [{ key: {{ .Values.webhookCa.key }}, path: {{ .Values.webhookCa.key }} }]
+        {{- end }}

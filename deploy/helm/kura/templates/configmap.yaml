@@ -7,6 +7,13 @@ data:
   server.yaml: |
     {{- $server := deepCopy .Values.server }}
     {{- $_ := set $server "listen" (dict "api" "0.0.0.0:8080" "metrics" "0.0.0.0:9090") }}
+    {{- if .Values.webhookCa.secretName }}
+    {{- $notifications := default dict $server.notifications }}
+    {{- $webhook := default dict $notifications.webhook }}
+    {{- $_ := set $webhook "caFile" (printf "/etc/kura/webhook-ca/%s" .Values.webhookCa.key) }}
+    {{- $_ := set $notifications "webhook" $webhook }}
+    {{- $_ := set $server "notifications" $notifications }}
+    {{- end }}
     {{- toYaml $server | nindent 4 }}
 ---
 apiVersion: v1

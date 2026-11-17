@@ -7,7 +7,7 @@ import { writeFileSync } from "node:fs";
 
 import { expect, test } from "@playwright/test";
 
-import { env, signIn } from "./helpers";
+import { env, signIn, signOut } from "./helpers";
 
 test("4: alice creates a rule and tests it", async ({ page }) => {
   await signIn(page, "alice");
@@ -24,4 +24,5 @@ test("4: alice creates a rule and tests it", async ({ page }) => {
   await page.locator("[data-test=close]").click();
   await page.locator("tbody tr").last().locator("[data-test=test]").click();
   await expect(page.locator("[data-test=tested]")).toContainText(": 200");
+  await signOut(page);
 });

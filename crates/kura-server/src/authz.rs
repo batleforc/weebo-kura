@@ -440,91 +440,9 @@ pub async fn check_binding(
     Ok(())
 }
 
-/// Full Unicode case folding then NFC: the one comparison form of paths and
-/// token prefixes (§6.3), so a prefix check and a uniqueness check agree.
-pub fn fold(s: &str) -> String {
-    use unicode_normalization::UnicodeNormalization as _;
-    caseless::default_case_fold_str(s).nfc().collect()
-}
-
-/// Where a caller may read and write inside a vault (RFC 0004 §5.1): folded
-/// folder prefixes. "The whole vault" is `read: None`, never an empty list,
-/// so a scope that lost its rules sees nothing (T7).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PathScope {
-    read: Option<Vec<String>>,
-    /// Each is also readable (decision 9).
-    write: Vec<String>,
-}
-
-impl PathScope {
-    /// Every path, read only: a signed-in device, or a token without rules.
-    pub fn whole() -> Self {
-        Self {
-            read: None,
-            write: Vec::new(),
-        }
-    }
-
-    /// From `(path, writes)` rules, where `""` is the whole vault. `None`
-    /// for no rule at all, or a whole-vault write: neither is a scope.
-    pub fn from_rules<'a>(rules: impl IntoIterator<Item = (&'a str, bool)>) -> Option<Self> {
-        let (mut whole, mut read, mut write, mut any) = (false, Vec::new(), Vec::new(), false);
-        for (path, writes) in rules {
-            any = true;
-            match (path.is_empty(), writes) {
-                (true, true) => return None,
-                (true, false) => whole = true,
-                (false, true) => write.push(fold(path)),
-                (false, false) => read.push(fold(path)),
-            }
-        }
-        any.then_some(Self {
-            read: (!whole).then_some(read),
-            write,
-        })
-    }
-
-    /// §6.2, T16: whether a path is under a readable folder.
-    pub fn sees(&self, path: &str) -> bool {
-        let Some(read) = &self.read else { return true };
-        let key = fold(path);
-        read.iter().chain(&self.write).any(|p| key.starts_with(p))
-    }
-
-    /// Whether a path is under a `write` folder; reading grants no write.
-    pub fn writes(&self, path: &str) -> bool {
-        let key = fold(path);
-        self.write.iter().any(|p| key.starts_with(p))
-    }
-
-    pub fn can_write(&self) -> bool {
-        !self.write.is_empty()
-    }
-
-    /// The readable folders as SQL patterns for `path_key LIKE ANY($n)`
-    /// (backslash is `LIKE`'s default escape), wildcards escaped. No
-    /// pattern matches no row.
-    pub fn like_patterns(&self) -> Vec<String> {
-        let Some(read) = &self.read else {
-            return vec!["%".to_owned()];
-        };
-        read.iter()
-            .chain(&self.write)
-            .map(|prefix| {
-                let mut out = String::with_capacity(prefix.len().saturating_add(1));
-                for c in prefix.chars() {
-                    if matches!(c, '\\' | '%' | '_') {
-                        out.push('\\');
-                    }
-                    out.push(c);
-                }
-                out.push('%');
-                out
-            })
-            .collect()
-    }
-}
+/// Full Unicode case folding then NFC: one form for paths and folders, in
+/// `kura_core::scope` so the CLI and the fuzz build compare alike.
+pub use kura_core::scope::{PathScope, fold};
 
 /// A claim value of the caller that the tenant maps to `owner` or `admin`:
 /// what a token issued through the tenant role depends on.
@@ -618,54 +536,4 @@ pub async fn key_access(
         paths: None,
         scope: PathScope::whole(),
     }))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::PathScope;
-
-    #[test]
-    fn a_scope_reads_and_writes_under_its_folders_only() {
-        let s = PathScope::from_rules([("Sessions/", false), ("Résumés/", true)]).unwrap();
-        assert!(s.sees("sessions/2026/a.md"), "folded");
-        assert!(
-            s.sees("RÉSUMÉS/a.md") && s.writes("Re\u{301}sume\u{301}s/a.md"),
-            "NFC"
-        );
-        assert!(!s.writes("Sessions/a.md"), "read grants no write");
-        for outside in [
-            "MJ/secret.md",
-            "Sessions2/a.md",
-            "Sessions",
-            "a/Sessions/b.md",
-        ] {
-            assert!(!s.sees(outside) && !s.writes(outside), "{outside}");
-        }
-        // The whole vault readable, one folder writable.
-        let s = PathScope::from_rules([("", false), ("Out/", true)]).unwrap();
-        assert!(s.sees("MJ/secret.md") && !s.writes("MJ/secret.md") && s.writes("out/x.md"));
-        assert_eq!(s.like_patterns(), ["%"]);
-        assert!(PathScope::whole().sees("x.md") && !PathScope::whole().can_write());
-    }
-
-    /// RFC 0004 T7: nothing decodes to "everything" by accident.
-    #[test]
-    fn empty_scope_sees_nothing() {
-        assert_eq!(PathScope::from_rules([]), None);
-        assert_eq!(
-            PathScope::from_rules([("", true)]),
-            None,
-            "whole-vault write"
-        );
-        // Write rules only: the read list is empty, not absent.
-        let s = PathScope::from_rules([("Out/", true)]).unwrap();
-        assert!(!s.sees("x.md") && s.sees("Out/x.md"));
-        assert_eq!(s.like_patterns(), ["out/%"]);
-    }
-
-    #[test]
-    fn like_patterns_escape_wildcards() {
-        let s = PathScope::from_rules([("a_b%c\\d/", false)]).unwrap();
-        assert_eq!(s.like_patterns(), ["a\\_b\\%c\\\\d/%"]);
-    }
 }

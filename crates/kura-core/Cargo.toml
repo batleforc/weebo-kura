@@ -16,6 +16,7 @@ unicode-normalization = { workspace = true }
 utoipa = { workspace = true, optional = true }
 diffy = { workspace = true, optional = true }
 url = { version = "2", optional = true }
+caseless = { workspace = true, optional = true }
 
 [features]
 # The server derives its OpenAPI schemas from the wire types.
@@ -24,6 +25,9 @@ openapi = ["dep:utoipa", "utoipa/uuid"]
 merge = ["dep:diffy"]
 # The webhook target rules of RFC 0003, on the server and in the fuzz build.
 webhook = ["dep:url"]
+# Folder scopes of tokens and viewers (RFC 0004, 0005): the server, the CLI,
+# the fuzz build; the WASM core leaves it out.
+scope = ["dep:caseless"]
 
 [dev-dependencies]
 serde_json = { workspace = true }

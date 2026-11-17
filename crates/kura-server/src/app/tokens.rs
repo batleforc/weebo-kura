@@ -20,7 +20,7 @@ use uuid::Uuid;
 use super::SharedState;
 use super::body::Body;
 use super::device::DeviceCaller;
-use crate::authz::{self, PathScope, VaultAccess};
+use crate::authz::{self, VaultAccess};
 use crate::db;
 use crate::problem::{ApiError, Problem, ProblemType};
 
@@ -28,34 +28,7 @@ use crate::problem::{ApiError, Problem, ProblemType};
 pub const MAX_DAYS: u32 = 90;
 /// Addresses per token.
 pub const MAX_CIDRS: usize = 32;
-/// Folder rules per token (RFC 0004 decision 8).
-pub const MAX_SCOPES: usize = 16;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum ScopeMode {
-    Read,
-    /// Also reads that folder, and nothing else (decision 9).
-    Write,
-}
-
-/// One folder rule: the folder and everything under it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ScopeRule {
-    /// A folder ending with `/`; `""` is the whole vault, `read` only.
-    pub path: String,
-    pub mode: ScopeMode,
-}
-
-/// The scope a list of rules means; `None` when it means none (T7).
-pub fn scope_of(rules: &[ScopeRule]) -> Option<PathScope> {
-    PathScope::from_rules(
-        rules
-            .iter()
-            .map(|r| (r.path.as_str(), r.mode == ScopeMode::Write)),
-    )
-}
+pub use kura_core::scope::{MAX_SCOPES, ScopeMode, ScopeRule, scope_of};
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -125,48 +98,16 @@ pub fn check_folder(p: &str) -> Result<(), ApiError> {
 
 /// `""`, or a valid vault path followed by `/`.
 fn check_prefix(p: &str) -> Result<(), ApiError> {
-    if p.is_empty() {
-        return Ok(());
-    }
-    let folder = p
-        .strip_suffix('/')
-        .ok_or_else(|| invalid("prefix: a folder ending with /"))?;
-    VaultPath::parse(folder).map_err(|e| invalid(format!("prefix: {e}")))?;
-    Ok(())
+    kura_core::scope::check_folder(p).map_err(|e| invalid(format!("prefix: {e}")))
 }
 
-/// The rules a creation request means (RFC 0004 §4.2, §4.3).
+/// The rules a creation request means (RFC 0004 §4.2, §4.3), checked in
+/// `kura_core::scope`, which the fuzz target drives too.
 fn check_scopes(
     prefix: Option<String>,
     scopes: Option<Vec<ScopeRule>>,
 ) -> Result<Vec<ScopeRule>, ApiError> {
-    let rules = match (prefix, scopes) {
-        (Some(_), Some(_)) => return Err(invalid("prefix and scopes: give one of them")),
-        (prefix, None) => vec![ScopeRule {
-            path: prefix.unwrap_or_default(),
-            mode: ScopeMode::Read,
-        }],
-        (None, Some(rules)) => rules,
-    };
-    if rules.is_empty() || rules.len() > MAX_SCOPES {
-        return Err(invalid("scopes: 1 to 16 folder rules"));
-    }
-    let mut seen = std::collections::HashSet::new();
-    for r in &rules {
-        check_prefix(&r.path)?;
-        if r.path.is_empty() && r.mode == ScopeMode::Write {
-            return Err(invalid(
-                "scopes: write needs a folder; a token never writes the whole vault",
-            ));
-        }
-        if !seen.insert(authz::fold(&r.path)) {
-            return Err(invalid(format!(
-                "scopes: {:?} is given twice",
-                r.path.as_str()
-            )));
-        }
-    }
-    Ok(rules)
+    kura_core::scope::check_rules(prefix, scopes).map_err(|e| invalid(format!("scopes: {e}")))
 }
 
 /// Trimmed, 1 to 64 bytes, usable in a file name (it suffixes conflict

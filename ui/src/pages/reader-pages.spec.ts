@@ -273,6 +273,7 @@ describe("history", () => {
               size: 5,
               seq: 2,
               blob: "b-new",
+              author: { kind: "device", name: "laptop" },
             },
             {
               revision: "r1",
@@ -282,6 +283,7 @@ describe("history", () => {
               size: 5,
               seq: 1,
               blob: "b-old",
+              author: { kind: "key", name: "discord-recap" },
             },
           ],
         },
@@ -298,6 +300,8 @@ describe("history", () => {
     );
     expect(wrapper.text()).toContain("2026-11-08 21:14");
     expect(wrapper.text()).toContain("current");
+    expect(wrapper.text()).toContain("laptop");
+    expect(wrapper.text()).toContain("key discord-recap");
     await wrapper.find("button").trigger("click");
     await flushPromises();
     expect(

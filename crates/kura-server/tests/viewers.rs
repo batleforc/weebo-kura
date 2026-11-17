@@ -229,6 +229,25 @@ async fn a_restricted_viewer_reads_its_folders_only() {
         .await;
     assert_eq!(st, StatusCode::NOT_FOUND);
 
+    // The groups a binding may name, to whoever may bind; not to a viewer.
+    let (_, gm_vaults) = gm.get(&e, "/v1/vaults").await;
+    let mine = gm_vaults
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["name"] == "knowledge")
+        .unwrap();
+    assert_eq!(
+        mine["groups"],
+        json!([
+            "maxime-admins",
+            "maxime-members",
+            "maxime-owners",
+            "maxime-players"
+        ])
+    );
+    assert!(knowledge.get("groups").is_none());
+
     // The widest grant wins: a player who is also a member edits everything.
     let both = who(&e, "alice", &["maxime-players", "maxime-members"]).await;
     let (_, vaults) = both.get(&e, "/v1/vaults").await;
@@ -380,4 +399,86 @@ async fn folders_are_a_viewers_only() {
         "{vault}"
     );
     assert!(e.state.snapshot().unwrap().status.warnings() >= 1);
+}
+
+/// RFC 0005 §14, the gate: a restricted viewer walks every vault route of
+/// the API with the ids of a hidden note; nothing of it comes back. A route
+/// added later that reads content without `ReadAccess` fails here.
+#[tokio::test]
+async fn no_route_shows_a_restricted_viewer_a_hidden_note() {
+    let Some(st) = storage(module_path!()).await else {
+        return;
+    };
+    let Some(e) = env_with(module_path!(), Some(st)).await else {
+        return;
+    };
+    apply(
+        &e,
+        &config("{ role: viewer, claimValue: maxime-players, paths: [Sessions/] }"),
+    )
+    .await;
+    let v = vault_id(&e, "knowledge").await;
+    let gm = who(&e, "gm", &["maxime-admins"]).await;
+    file(&e, &gm, &v, "Sessions/s12.md", b"session twelve").await;
+    let secret = file(&e, &gm, &v, "MJ/secret.md", b"xyzzy the villain").await;
+    let chunk = ChunkHash::of(b"xyzzy the villain");
+    let blob = blob_hash(17, &[chunk]);
+    let bob = who(&e, "bob", &["maxime-players"]).await;
+    // What bob does not already know: the content and the hidden path. The
+    // ids and hashes he sent may come back (a batch's `missing` lists them,
+    // as for a random hash).
+    let needles = ["xyzzy".to_owned(), "villain".to_owned(), "MJ/".to_owned()];
+    let leaks = |body: &[u8]| {
+        let text = String::from_utf8_lossy(body);
+        needles.iter().any(|n| text.contains(n.as_str()))
+    };
+    let mut walked = 0;
+    for (method, route, _) in kura_server::limits::LIMITS {
+        if !route.starts_with("/v1/vaults/{v}") || route.ends_with("/events") {
+            continue;
+        }
+        let uri = route
+            .replace("{v}", &v)
+            .replace("{e}", &secret)
+            .replace("{hash}", &blob.to_string())
+            .replace("{b}", "claim:maxime-players")
+            .replace("{t}", &Uuid::now_v7().to_string());
+        let body = match *route {
+            "/v1/vaults/{v}/blobs/batch" => json!({ "blobs": [blob.to_string()] }),
+            "/v1/vaults/{v}/chunks/batch" => json!({ "chunks": [chunk.to_string()] }),
+            "/v1/vaults/{v}/chunks/missing" => json!({ "hashes": [chunk.to_string()] }),
+            "/v1/vaults/{v}/search" => json!({ "query": "xyzzy" }),
+            _ => json!({}),
+        };
+        let bytes = if *method == "GET" {
+            Vec::new()
+        } else {
+            body.to_string().into_bytes()
+        };
+        let request = axum::http::Request::builder()
+            .method(*method)
+            .uri(&uri)
+            .header("authorization", format!("Bearer {}", bob.token))
+            .header("x-kura-device", &bob.device)
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(bytes))
+            .unwrap();
+        let answer = tower::ServiceExt::oneshot(kura_server::app::app(e.state.clone()), request)
+            .await
+            .unwrap();
+        let status = answer.status();
+        let got = axum::body::to_bytes(answer.into_body(), 16 << 20)
+            .await
+            .unwrap();
+        assert!(
+            !leaks(&got),
+            "{method} {route} ({status}) shows the hidden note: {}",
+            String::from_utf8_lossy(&got)
+        );
+        walked += 1;
+    }
+    // The chunk route's own id is the chunk hash, not the blob's.
+    let (st, b) = bob.get(&e, &format!("/v1/vaults/{v}/chunks/{chunk}")).await;
+    assert!(st == StatusCode::NOT_FOUND && !leaks(b.to_string().as_bytes()));
+    assert!(walked >= 15, "walked {walked} routes");
 }

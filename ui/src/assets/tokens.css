@@ -1,4 +1,4 @@
-/* Copied from proxy-cache ui/src/design/tokens.css at e5fc1376 (RFC 0003 §6.1, R31): the BatleHub design tokens. The fonts it names are not shipped; the monospace fallbacks render. */
+/* Copied from proxy-cache ui/src/design/tokens.css at e5fc1376 (RFC 0003 §6.1, R31): the BatleHub design tokens. The fonts it names are bundled from @fontsource (main.css). */
 /* ═══════════════════════════════════════════════════════════════════════════
    BatleHub design tokens — the single place a colour, step, size or duration
    is decided. Derived from DESIGN.md; see RFC 0003 (docs/future-feature).

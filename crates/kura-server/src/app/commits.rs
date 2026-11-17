@@ -1416,6 +1416,20 @@ pub async fn get_revisions(
     .bind(REVISIONS_PAGE.saturating_add(1))
     .fetch_all(&mut *tx)
     .await?;
+    let ids: Vec<Uuid> = rows.iter().filter_map(|r| r.try_get("id").ok()).collect();
+    let authors: HashMap<Uuid, kura_core::wire::Author> = sqlx::query_as::<
+        _,
+        (Uuid, String, Option<String>),
+    >(
+        "SELECT id, kind, name FROM kura_revision_authors($1, $2)",
+    )
+    .bind(v)
+    .bind(&ids)
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .filter_map(|(id, kind, name)| name.map(|name| (id, kura_core::wire::Author { kind, name })))
+    .collect();
     tx.commit().await?;
     // The page ends at its last row read, visible or not.
     let page = usize::try_from(REVISIONS_PAGE).unwrap_or(usize::MAX);
@@ -1432,8 +1446,10 @@ pub async fn get_revisions(
         .filter(|r| r.try_get::<String, _>("path").is_ok_and(|p| ra.sees(&p)))
         .map(|r| {
             let created: time::OffsetDateTime = r.try_get("created_at")?;
+            let id: Uuid = r.try_get("id")?;
             Ok(RevisionInfo {
-                revision: r.try_get("id")?,
+                author: authors.get(&id).cloned(),
+                revision: id,
                 seq: u64::try_from(r.try_get::<i64, _>("seq")?).unwrap_or_default(),
                 path: stored_path(&r.try_get::<String, _>("path")?)?,
                 deleted: r.try_get("deleted")?,

@@ -40,15 +40,27 @@ spec:
   bindings:
     - { role: viewer, claimValue: kura-dev }
 ---
-# RFC 0005: members read two folders of this one, owners all of it
-# (tests/heavy/reader.sh writes Sessions/, Resumes/ and MJ/ as alice).
+# RFC 0005 §6.P: the tabletop tenant. alice (jdr-mj) owns it, bob
+# (jdr-players) reads two folders of `campaign`; search is on for the
+# reader's search page (tests/heavy/reader.sh writes Sessions/, Resumes/
+# and MJ/ as alice).
+apiVersion: kura.weebo.io/v1alpha1
+kind: KuraTenant
+metadata: { name: jdr }
+spec:
+  claimMappings:
+    claim: groups
+    roles: { owner: [jdr-mj], member: [jdr-players] }
+  vaultNamespaces: [jdr]
+  search: { enabled: true }
+---
 apiVersion: kura.weebo.io/v1alpha1
 kind: KuraVault
-metadata: { name: campaign, namespace: dev }
+metadata: { name: campaign, namespace: jdr }
 spec:
-  tenantRef: { name: dev }
+  tenantRef: { name: jdr }
   bindings:
-    - { role: viewer, claimValue: kura-dev, paths: [Sessions/, Resumes/] }
+    - { role: viewer, claimValue: jdr-players, paths: [Sessions/, Resumes/] }
 ---
 # Another tenant nobody of the dev users belongs to: its vault must answer
 # exactly as a missing one (§6.P observation 4, tests/heavy/authz.sh).

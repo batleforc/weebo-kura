@@ -164,7 +164,10 @@ tasks:
         bao() { podman exec -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN=kura-dev {{.VAULT_CONTAINER}} bao "$@"; }
         bao secrets list | grep -q '^mv/' || bao secrets enable -path=mv kv-v2
         bao secrets list | grep -q '^transit/' || bao secrets enable transit
-        bao read transit/keys/kura-dev >/dev/null 2>&1 || bao write -f transit/keys/kura-dev >/dev/null
+        # One Transit key per tenant of dev/config (decision 33): dev, and jdr (RFC 0005).
+        for t in dev jdr; do
+          bao read transit/keys/kura-$t >/dev/null 2>&1 || bao write -f transit/keys/kura-$t >/dev/null
+        done
         bao kv put -mount=mv kura/database url=postgres://kura_app:kura-test@127.0.0.1:{{.PG_PORT}}/kura >/dev/null
         bao kv put -mount=mv kura/bucket endpoint=http://127.0.0.1:{{.S3_PORT}} bucket=kura-dev accessKeyId=kura-dev secretAccessKey=kura-dev-secret >/dev/null
       - |

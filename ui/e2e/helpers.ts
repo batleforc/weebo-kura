@@ -10,6 +10,16 @@ export const env = (name: string): string => {
   return value;
 };
 
+/**
+ * Signs the console out, so a run leaves no live web device behind (each
+ * fresh browser is a new Authentik session, hence a new device).
+ */
+export async function signOut(page: Page): Promise<void> {
+  await page.goto("/app/devices");
+  await page.locator("[data-test=sign-out]").click();
+  await page.waitForURL(/\/app\/signin/);
+}
+
 /** Through the console's button and Authentik's own pages. */
 export async function signIn(page: Page, user: string): Promise<void> {
   await page.goto("/app/signin");
