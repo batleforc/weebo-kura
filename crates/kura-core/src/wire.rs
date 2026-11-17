@@ -309,6 +309,21 @@ pub enum RecordError {
 /// A hash with its bytes, or `None` for a chunk the server may not send.
 pub type Record<'a> = (ChunkHash, Option<&'a [u8]>);
 
+/// Appends one record: found (`Some`, status 0) or missing (status 1). The
+/// one writer of the framing, for `chunks/batch` answers and `chunks/upload`
+/// bodies alike (RFC 0002 §4.4). A chunk is at most 4 MiB, so its length
+/// fits the 4-byte field.
+pub fn write_record(out: &mut Vec<u8>, hash: &ChunkHash, data: Option<&[u8]>) {
+    out.extend_from_slice(hash.as_bytes());
+    let (status, data) = match data {
+        Some(d) => (0, d),
+        None => (1, &[][..]),
+    };
+    out.push(status);
+    out.extend_from_slice(&u32::try_from(data.len()).unwrap_or(u32::MAX).to_be_bytes());
+    out.extend_from_slice(data);
+}
+
 pub fn parse_records(mut body: &[u8]) -> Result<Vec<Record<'_>>, RecordError> {
     let mut out = Vec::new();
     while !body.is_empty() {
@@ -345,6 +360,19 @@ mod record_tests {
         out.extend_from_slice(&u32::try_from(data.len()).unwrap_or(u32::MAX).to_be_bytes());
         out.extend_from_slice(data);
         out
+    }
+
+    #[test]
+    fn the_writer_writes_what_the_parser_reads() {
+        let (a, b) = (ChunkHash::of(b"a"), ChunkHash::of(b"b"));
+        let mut body = Vec::new();
+        write_record(&mut body, &a, Some(b"a"));
+        write_record(&mut body, &b, None);
+        write_record(&mut body, &b, Some(b""));
+        assert_eq!(
+            parse_records(&body),
+            Ok(vec![(a, Some(&b"a"[..])), (b, None), (b, Some(&b""[..]))])
+        );
     }
 
     #[test]

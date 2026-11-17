@@ -234,9 +234,9 @@
     "semantic_hash": ""
   },
   "crates/kura-server/src/app/mod.rs": {
-    "mtime": 1794942818.695513,
-    "seen": 1794943403.5364618,
-    "ast_hash": "f58e64f90b6466577b3b01d2557eca0e",
+    "mtime": 1794946578.263028,
+    "seen": 1794948163.418547,
+    "ast_hash": "b96b60b20e685be099b2b9636326402f",
     "semantic_hash": ""
   },
   "crates/kura-server/src/app/tests.rs": {
@@ -300,9 +300,9 @@
     "semantic_hash": ""
   },
   "crates/kura-server/src/limits.rs": {
-    "mtime": 1794942809.902168,
-    "seen": 1794943403.5368516,
-    "ast_hash": "0d2117787d9181c9bbcc08a3a23d8b83",
+    "mtime": 1794946578.263268,
+    "seen": 1794948163.4191577,
+    "ast_hash": "20e20b666327854ce720a497b092f73d",
     "semantic_hash": ""
   },
   "crates/kura-server/src/main.rs": {
@@ -312,9 +312,9 @@
     "semantic_hash": ""
   },
   "crates/kura-server/src/metrics.rs": {
-    "mtime": 1794942818.726513,
-    "seen": 1794943403.5368867,
-    "ast_hash": "89ad2df420102f4af83bc76473f18d9d",
+    "mtime": 1794946610.8570623,
+    "seen": 1794948163.419223,
+    "ast_hash": "092f147b21454c5ffe44744bc9dbcf7f",
     "semantic_hash": ""
   },
   "crates/kura-server/src/net.rs": {
@@ -414,9 +414,9 @@
     "semantic_hash": ""
   },
   "docs/api/openapi.json": {
-    "mtime": 1794944885.8228447,
-    "seen": 1794945747.79918,
-    "ast_hash": "b73e3191e792bacb31dcf83052c46950",
+    "mtime": 1794947877.8335567,
+    "seen": 1794948163.420833,
+    "ast_hash": "764462ea19ab5a862cd9c57e1fb08db8",
     "semantic_hash": ""
   },
   "fuzz/Cargo.toml": {
@@ -474,9 +474,9 @@
     "semantic_hash": ""
   },
   "docs/operator.md": {
-    "mtime": 1794943626.971985,
-    "seen": 1794943699.149299,
-    "ast_hash": "0f2e3e41b7ebfc42b25bd474b549951f",
+    "mtime": 1794946590.1346705,
+    "seen": 1794948163.4246488,
+    "ast_hash": "185043be6a5d0a414772173e693fc83f",
     "semantic_hash": ""
   },
   "docs/readme.md": {
@@ -498,9 +498,9 @@
     "semantic_hash": ""
   },
   "crates/kura-server/src/app/chunks.rs": {
-    "mtime": 1794936058.0851345,
-    "seen": 1794937826.3935158,
-    "ast_hash": "8ea4e87801489a491c3344b0f029b4cf",
+    "mtime": 1794947350.0939498,
+    "seen": 1794948163.4183695,
+    "ast_hash": "14fd93a6aac37cdca929860df9ae24b7",
     "semantic_hash": ""
   },
   "crates/kura-server/src/store/crypto.rs": {
@@ -528,9 +528,9 @@
     "semantic_hash": ""
   },
   "crates/kura-server/tests/chunks.rs": {
-    "mtime": 1794710183.3444798,
-    "seen": 1794734509.9309607,
-    "ast_hash": "8013690485aa6432db725790b0524c9f",
+    "mtime": 1794946683.5691566,
+    "seen": 1794948163.4196575,
+    "ast_hash": "ec3ff679ace58015f252753f86bea3b1",
     "semantic_hash": ""
   },
   "crates/kura-server/tests/data_keys.rs": {
@@ -558,9 +558,9 @@
     "semantic_hash": ""
   },
   "crates/kura-cli/src/api.rs": {
-    "mtime": 1794944743.0595884,
-    "seen": 1794945747.7962394,
-    "ast_hash": "db65ecbe81b68ed2f3659eddd75978c0",
+    "mtime": 1794946610.7570622,
+    "seen": 1794948163.4177063,
+    "ast_hash": "17a219b3a89943cf784cb353b1f3641d",
     "semantic_hash": ""
   },
   "crates/kura-cli/src/commands.rs": {
@@ -600,21 +600,21 @@
     "semantic_hash": ""
   },
   "crates/kura-core/src/sync.rs": {
-    "mtime": 1794940272.8135753,
-    "seen": 1794941530.1137664,
-    "ast_hash": "177af354804c52183b86e033349c2b27",
+    "mtime": 1794946541.2008798,
+    "seen": 1794948163.4181,
+    "ast_hash": "d38dc569a5a5e7c7900bec377013458d",
     "semantic_hash": ""
   },
   "crates/kura-core/src/wire.rs": {
-    "mtime": 1794944721.6168807,
-    "seen": 1794945747.7966077,
-    "ast_hash": "37d9d29c64d648971b873fade8d1ba78",
+    "mtime": 1794946541.2004685,
+    "seen": 1794948163.4181678,
+    "ast_hash": "a5b19bd07419420ad02ff375fc7d3024",
     "semantic_hash": ""
   },
   "crates/kura-core/tests/engine.rs": {
-    "mtime": 1794936285.9251254,
-    "seen": 1794937826.3933847,
-    "ast_hash": "fed3e9f9f37878583b23461d8b1847f2",
+    "mtime": 1794946781.7164252,
+    "seen": 1794948163.4181685,
+    "ast_hash": "92965d51f61e414d962ff45528eb3bf4",
     "semantic_hash": ""
   },
   "crates/kura-server/src/app/changes.rs": {
@@ -636,9 +636,9 @@
     "semantic_hash": ""
   },
   "crates/kura-server/tests/sim.rs": {
-    "mtime": 1794936285.9252796,
-    "seen": 1794937826.3951898,
-    "ast_hash": "4885703c8375f4d82bf943715b4919be",
+    "mtime": 1794946664.9491324,
+    "seen": 1794948163.4202738,
+    "ast_hash": "cbee6a98e60f1369e932c3a4d23541f8",
     "semantic_hash": ""
   },
   "crates/kura-server/tests/sync.rs": {
@@ -738,9 +738,9 @@
     "semantic_hash": ""
   },
   "crates/kura-wasm/src/lib.rs": {
-    "mtime": 1794936285.9256272,
-    "seen": 1794937826.3953867,
-    "ast_hash": "b98042f62c1500d663e4b3526cff2d7a",
+    "mtime": 1794946610.9740624,
+    "seen": 1794948163.4204051,
+    "ast_hash": "4dcd1075cc921e648f4aef6c1251d117",
     "semantic_hash": ""
   },
   "fuzz/fuzz_targets/fuzz_merge.rs": {
@@ -816,9 +816,9 @@
     "semantic_hash": ""
   },
   "plugin/src/remote.ts": {
-    "mtime": 1794700864.7423046,
-    "seen": 1794734509.9324133,
-    "ast_hash": "cb02037b43cb0a90deba65688e3f6d1e",
+    "mtime": 1794946605.3878045,
+    "seen": 1794948163.4217193,
+    "ast_hash": "955eb5a49facf21d915307e8ad7555ba",
     "semantic_hash": ""
   },
   "plugin/src/settings.ts": {
@@ -858,15 +858,15 @@
     "semantic_hash": ""
   },
   "plugin/test/engine.test.ts": {
-    "mtime": 1794700936.3287773,
-    "seen": 1794734509.9325497,
-    "ast_hash": "6c9a8f7360fe8690b1adc1d0b0444331",
+    "mtime": 1794946822.089453,
+    "seen": 1794948163.4219031,
+    "ast_hash": "17da3093df9fb7013a1d531e6c5f5f89",
     "semantic_hash": ""
   },
   "plugin/test/fakes.ts": {
-    "mtime": 1794700946.9734602,
-    "seen": 1794734509.932551,
-    "ast_hash": "64de1fc1d38b913061f868cbb12e7f68",
+    "mtime": 1794946849.5109763,
+    "seen": 1794948163.421904,
+    "ast_hash": "2ec303d4dd0a2a87a3758f096c3c3772",
     "semantic_hash": ""
   },
   "plugin/test/host.test.ts": {
@@ -972,9 +972,9 @@
     "semantic_hash": ""
   },
   "perf/attach.sh": {
-    "mtime": 1794703618.5980337,
-    "seen": 1794734509.9319842,
-    "ast_hash": "f15f457f20bb88104e53b5d9e2690d6d",
+    "mtime": 1794946863.3478909,
+    "seen": 1794948163.4211643,
+    "ast_hash": "8d90a0adc088e65520c55fd9e2c3921c",
     "semantic_hash": ""
   },
   "perf/k6/config.js": {
@@ -1050,9 +1050,9 @@
     "semantic_hash": ""
   },
   "crates/kura-server/tests/tokens.rs": {
-    "mtime": 1794944843.5417955,
-    "seen": 1794945747.7987595,
-    "ast_hash": "be47a8bc9630e08321fc3714c93a5d70",
+    "mtime": 1794947606.4532435,
+    "seen": 1794948163.4203072,
+    "ast_hash": "aa58f0beb1fe677b5c88484a5ad6e682",
     "semantic_hash": ""
   },
   "fuzz/fuzz_targets/fuzz_scoped_token.rs": {
@@ -1122,9 +1122,9 @@
     "semantic_hash": ""
   },
   "docs/RFC/rfc0002-implementation-plan.md": {
-    "mtime": 1794708400.710467,
-    "seen": 1794734509.9327526,
-    "ast_hash": "6b5d1276a64ab8e196b39829e659374d",
+    "mtime": 1794948150.6126184,
+    "seen": 1794948163.42447,
+    "ast_hash": "a0376e7e7b23edd3584aaeb67fa2d8ae",
     "semantic_hash": ""
   },
   "crates/kura-server/build.rs": {

@@ -1165,6 +1165,17 @@ async fn token_cannot_launder_content() {
         answers.push((st, b["type"].clone(), b["detail"].clone()));
     }
     assert_eq!(answers[0], answers[1]);
+    // The batch form refuses it the same way (RFC 0002 phase 3).
+    let batch = json!({ "manifests": [{ "hash": secret_blob.to_string(), "size": 11, "chunks": [secret.to_string()] }] });
+    let (st, b) = s
+        .as_key(
+            &key,
+            "POST",
+            "/blobs/upload",
+            Some(Body::from(batch.to_string())),
+        )
+        .await;
+    assert!(not_uploaded(st, &b), "{st} {b}");
     // `token_cannot_launder_blob` (T2): nor a commit naming the outside blob.
     let stolen = Uuid::now_v7().to_string();
     let op = json!({ "op": "put", "entry": stolen, "path": "Resumes/stolen.md", "blob": secret_blob.to_string(), "size": 11 });
@@ -1174,7 +1185,7 @@ async fn token_cannot_launder_content() {
         .as_key(&key, "GET", &format!("/chunks/{secret}"), None)
         .await;
     assert_eq!(st, StatusCode::NOT_FOUND);
-    assert_eq!(s.token_writes("refused"), 3);
+    assert_eq!(s.token_writes("refused"), 4);
 
     // Sending the bytes is the proof: the same content, uploaded by the token.
     let (st, b) = s
@@ -1190,6 +1201,26 @@ async fn token_cannot_launder_content() {
         )
         .await;
     assert_eq!(b["missing"], json!([nowhere.to_string()]));
+    // Bytes sent in a batch are a proof too: the token may name them next.
+    let fresh = b"a fresh recap".to_vec();
+    let c = ChunkHash::of(&fresh);
+    let mut records = Vec::new();
+    kura_core::wire::write_record(&mut records, &c, Some(&fresh));
+    let (st, b) = s
+        .as_key(&key, "POST", "/chunks/upload", Some(Body::from(records)))
+        .await;
+    assert_eq!(st, StatusCode::NO_CONTENT, "{b}");
+    let size = fresh.len() as u64;
+    let batch = json!({ "manifests": [{ "hash": blob_hash(size, &[c]).to_string(), "size": size, "chunks": [c.to_string()] }] });
+    let (st, b) = s
+        .as_key(
+            &key,
+            "POST",
+            "/blobs/upload",
+            Some(Body::from(batch.to_string())),
+        )
+        .await;
+    assert_eq!(st, StatusCode::NO_CONTENT, "{b}");
 
     // `token_upload_is_purged` (T6): remembered 24 hours, gone with the token.
     let rows = || async {
@@ -1199,7 +1230,7 @@ async fn token_cannot_launder_content() {
             .await
             .unwrap()
     };
-    assert_eq!(rows().await, 2, "one chunk, one blob");
+    assert_eq!(rows().await, 4, "two chunks, two blobs");
     sqlx::query(
         "UPDATE token_upload SET created_at = now() - interval '25 hours' WHERE kind = 'chunk'",
     )
@@ -1210,7 +1241,7 @@ async fn token_cannot_launder_content() {
         .fetch_one(&s.e.t.app)
         .await
         .unwrap();
-    assert_eq!((purged, rows().await), (1, 1));
+    assert_eq!((purged, rows().await), (2, 2));
     sqlx::query("DELETE FROM scoped_token WHERE id = $1")
         .bind(id)
         .execute(&s.e.t.owner)
@@ -1280,6 +1311,9 @@ async fn only_writer_routes_accept_tokens() {
         "POST /v1/vaults/{v}/commits",
         "PUT /v1/vaults/{v}/blobs/{hash}",
         "PUT /v1/vaults/{v}/chunks/{hash}",
+        // ... and their batch forms (RFC 0002 phase 3), with the same checks.
+        "POST /v1/vaults/{v}/blobs/upload",
+        "POST /v1/vaults/{v}/chunks/upload",
     ];
     want.sort_unstable();
     assert_eq!(open, want);

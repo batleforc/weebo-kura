@@ -37,6 +37,8 @@ pub const LIMITS: &[(&str, &str, u32)] = &[
     // RFC 0002: up to 1,000 items or 4 MiB a call.
     ("POST", "/v1/vaults/{v}/blobs/batch", 60),
     ("POST", "/v1/vaults/{v}/chunks/batch", 60),
+    ("POST", "/v1/vaults/{v}/chunks/upload", 60),
+    ("POST", "/v1/vaults/{v}/blobs/upload", 60),
     ("POST", "/v1/vaults/{v}/commits", 120),
     ("GET", "/v1/vaults/{v}/changes", 600),
     ("GET", "/v1/vaults/{v}/entries", 60),

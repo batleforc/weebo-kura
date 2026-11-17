@@ -1396,6 +1396,87 @@
         ]
       }
     },
+    "/v1/vaults/{v}/blobs/upload": {
+      "post": {
+        "tags": [
+          "chunks"
+        ],
+        "summary": "Many manifests in one call (RFC 0002 phase 3), with the checks of\n`PUT /blobs/{hash}`: all stored, or none.",
+        "operationId": "upload_blobs",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlobUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Every manifest stored, or already present"
+          },
+          "400": {
+            "description": "No manifest, more than 1,000, or a malformed hash",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "A file over the tenant's maxFileSize",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A hash mismatch, a chunk missing, or sizes that disagree: nothing stored",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/v1/vaults/{v}/blobs/{hash}": {
       "get": {
         "tags": [
@@ -1805,6 +1886,93 @@
           },
           "404": {
             "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/chunks/upload": {
+      "post": {
+        "tags": [
+          "chunks"
+        ],
+        "summary": "Many chunks in one call (RFC 0002 phase 3): the records of `chunks/batch`,\nevery one found. Each chunk's BLAKE3 is checked before any is stored\n(T7), as `put_chunk` checks one.",
+        "operationId": "upload_chunks",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "1 to 1,000 records `hash[32] 0 length[4, big-endian] bytes`, at most 4 MiB of chunks",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Every chunk stored, or already present"
+          },
+          "400": {
+            "description": "A record cut short, missing, or no record",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Over 4 MiB of chunks",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A chunk that is not its address (nothing stored), or quota exceeded",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2914,6 +3082,22 @@
             "format": "int64",
             "description": "File size in bytes.",
             "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlobUploadRequest": {
+        "type": "object",
+        "required": [
+          "manifests"
+        ],
+        "properties": {
+          "manifests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HashedManifest"
+            },
+            "description": "1 to 1,000 manifests, each under its address."
           }
         },
         "additionalProperties": false

@@ -566,6 +566,36 @@ impl Remote for VaultRemote<'_> {
         }
     }
 
+    async fn put_chunks(&self, records: &[u8]) -> Result<bool, RemoteError> {
+        let r = self
+            .req(reqwest::Method::POST, "/chunks/upload")
+            .header("content-type", "application/octet-stream")
+            .body(records.to_vec());
+        match self.api.exchange(r).await {
+            Ok(_) => Ok(true),
+            Err(e) if older_server(&e) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn put_blobs(
+        &self,
+        manifests: &[kura_core::sync::Manifest],
+    ) -> Result<bool, RemoteError> {
+        let manifests: Vec<_> = manifests
+            .iter()
+            .map(|(hash, size, chunks)| json!({ "hash": hash, "size": size, "chunks": chunks }))
+            .collect();
+        let r = self
+            .req(reqwest::Method::POST, "/blobs/upload")
+            .json(&json!({ "manifests": manifests }));
+        match self.api.exchange(r).await {
+            Ok(_) => Ok(true),
+            Err(e) if older_server(&e) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     async fn commit(&self, req: &CommitRequest) -> Result<CommitResponse, RemoteError> {
         let mut req = req.clone();
         req.space = self.space.map(str::to_owned);

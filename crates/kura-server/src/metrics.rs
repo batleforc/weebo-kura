@@ -142,7 +142,10 @@ impl Metrics {
         )?;
         registry.register(Box::new(merge_total.clone()))?;
         let batch_items_total = IntCounterVec::new(
-            Opts::new("batch_items_total", "Items asked of the batch routes"),
+            Opts::new(
+                "batch_items_total",
+                "Items asked of, or sent to, the batch routes",
+            ),
             &["route", "outcome"],
         )?;
         registry.register(Box::new(batch_items_total.clone()))?;

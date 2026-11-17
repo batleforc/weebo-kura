@@ -446,7 +446,7 @@ provider, and with `frame-ancestors 'none'`.
 | `kura_backup_last_success_timestamp_seconds`, `kura_storage_refreshed_timestamp_seconds` | the last bucket copy; the last storage refresh |
 | `kura_index_queue_depth`, `kura_index_failed` | search index jobs waiting; given up after 5 attempts |
 | `kura_index_round_timestamp_seconds` | the indexer's last finished round |
-| `kura_batch_items_total{route,outcome}`, `kura_batch_response_bytes` | items asked of `blobs/batch` and `chunks/batch` (RFC 0002): `found` were fetched and sent, `missing` were unknown or not visible; the size of each chunk answer. A `chunks/batch` past the 8 a replica builds at once answers `429` with `Retry-After: 1`, so a busy replica never trips the dependency alert |
+| `kura_batch_items_total{route,outcome}`, `kura_batch_response_bytes` | items asked of `blobs/batch` and `chunks/batch` (RFC 0002): `found` were fetched and sent, `missing` were unknown or not visible; `{route="upload", outcome="stored"}` counts the chunks `chunks/upload` stored (phase 3); the size of each chunk answer. A `chunks/batch` past the 8 a replica builds at once answers `429` with `Retry-After: 1`, so a busy replica never trips the dependency alert |
 | Log target `audit`, `scoped_token_used`, `scoped_token_created`, `scoped_token_revoked` | every use of a scoped token (id, route, client), its issue and revocation |
 | `kura_maintenance_failures_total` | vaults whose maintenance failed in a pass (the others went on), and whole passes failed: alert on a rise |
 | `kura_maintenance_gc_timestamp_seconds` | the last pass that ran garbage collection (skipped while a backup holds the lock) |

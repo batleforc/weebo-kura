@@ -276,6 +276,7 @@ fn v1_router() -> OpenApiRouter<SharedState> {
             OpenApiRouter::new()
                 .routes(routes!(chunks::missing_chunks))
                 .routes(routes!(chunks::put_blob, chunks::get_blob))
+                .routes(routes!(chunks::upload_blobs))
                 .layer(axum::extract::DefaultBodyLimit::max(
                     commits::MAX_COMMIT_BYTES,
                 )),
@@ -293,6 +294,14 @@ fn v1_router() -> OpenApiRouter<SharedState> {
                 .routes(routes!(commits::post_commit))
                 .layer(axum::extract::DefaultBodyLimit::max(
                     commits::MAX_COMMIT_BYTES,
+                )),
+        )
+        .merge(
+            // RFC 0002 phase 3: 4 MiB of chunks and a header per record.
+            OpenApiRouter::new()
+                .routes(routes!(chunks::upload_chunks))
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    chunks::MAX_UPLOAD_BODY,
                 )),
         )
         .merge(
