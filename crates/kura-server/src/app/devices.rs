@@ -201,14 +201,7 @@ pub async fn register_device(
         .await?;
     tx.commit().await?;
     tracing::info!(target: "audit", event = "device_registered", sub = %sub, device = %created.id, profile = body.profile.as_str());
-    device_event(
-        &state,
-        &ids,
-        created.id,
-        Some(body.profile.as_str()),
-        "device.registered",
-    )
-    .await;
+    device_event(&state, &ids, created.id, "device.registered").await;
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -324,7 +317,7 @@ pub async fn revoke_device(
         (None, Some(t)) => vec![t],
         (None, None) => Vec::new(),
     };
-    device_event(&state, &tenants, d, None, "device.revoked").await;
+    device_event(&state, &tenants, d, "device.revoked").await;
     // Its sockets close on every replica (§6.2).
     if let Err(e) = crate::notify::notify_revoked(&state.db, d).await {
         tracing::warn!(error = %e, "revocation not broadcast; its sockets close at token expiry");
@@ -333,16 +326,10 @@ pub async fn revoke_device(
 }
 
 /// `device.registered` or `device.revoked` in each of the device's tenants
-/// (RFC 0003 §4.2): its id and kind, never its name or owner (T5). A device
+/// (RFC 0003 §4.2, §9): its id only, never its kind, name or owner (T5). A device
 /// belongs to a person, not a tenant, so each tenant's event has its own
 /// transaction, after the fact's; a failure is logged, the fact stands.
-async fn device_event(
-    state: &SharedState,
-    tenants: &[Uuid],
-    device: Uuid,
-    profile: Option<&str>,
-    kind: &'static str,
-) {
+async fn device_event(state: &SharedState, tenants: &[Uuid], device: Uuid, kind: &'static str) {
     if state.notifier.is_none() {
         return;
     }
@@ -374,11 +361,8 @@ async fn device_event(
                     vault: None,
                     kind,
                     title: format!("A device was {verb}"),
-                    message: format!(
-                        "Tenant {slug}: a {} device was {verb}.",
-                        profile.unwrap_or("member's")
-                    ),
-                    data: serde_json::json!({ "device": { "id": device, "profile": profile } }),
+                    message: format!("Tenant {slug}: a device was {verb}."),
+                    data: serde_json::json!({ "device": { "id": device } }),
                     dedupe: None,
                 },
             )

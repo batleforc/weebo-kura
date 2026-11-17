@@ -5,11 +5,14 @@ import { getEntries, listVaults } from "@/api/generated/sdk.gen";
 import type { EntryState, Vault } from "@/api/generated/types.gen";
 
 /** Pages of 1,000 at most; a vault larger than this many is cut (T9). */
-const MAX_PAGES = 50;
+export const MAX_PAGES = 50;
 
-export async function loadVault(
-  id: string,
-): Promise<{ vault: Vault | undefined; entries: EntryState[] }> {
+export async function loadVault(id: string): Promise<{
+  vault: Vault | undefined;
+  entries: EntryState[];
+  /** More entries follow than the reader lists: the tree is cut (T9). */
+  cut: boolean;
+}> {
   const vaults = await withDevice(
     async (headers) => (await listVaults({ headers, throwOnError: true })).data,
   );
@@ -26,8 +29,8 @@ export async function loadVault(
       }),
     );
     entries.push(...data.items);
-    if (!data.next) break;
+    if (!data.next) return { vault, entries, cut: false };
     after = data.next;
   }
-  return { vault, entries };
+  return { vault, entries, cut: true };
 }

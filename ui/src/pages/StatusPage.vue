@@ -7,6 +7,7 @@ import { withDevice } from "@/api/client";
 import { adminStatus } from "@/api/generated/sdk.gen";
 import type { AdminStatus } from "@/api/generated/types.gen";
 import AsyncState from "@/components/ui/AsyncState.vue";
+import ForbiddenState from "@/components/ui/ForbiddenState.vue";
 import { useLoad } from "@/manage/useLoad";
 
 interface Row {
@@ -22,6 +23,7 @@ const {
   loading,
   error,
   forbidden,
+  forbiddenDetail,
   load,
 } = useLoad<AdminStatus | null>(
   () =>
@@ -67,7 +69,7 @@ onMounted(load);
 <template>
   <section>
     <h1 class="mb-4">{{ t("manage.status") }}</h1>
-    <p v-if="forbidden" role="alert" data-test="forbidden">{{ t("manage.forbidden") }}</p>
+    <ForbiddenState v-if="forbidden" :detail="forbiddenDetail" />
     <AsyncState v-else :loading="loading" :error="error" :empty="false" empty-message="" :title="t('manage.failed')" @retry="load">
       <div v-if="status?.rejection.length" role="alert" class="mb-4 border border-accent p-3" data-test="rejection">
         <p class="font-bold">{{ t("status.rejected") }}</p>

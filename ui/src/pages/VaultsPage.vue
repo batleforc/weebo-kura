@@ -4,13 +4,15 @@ import { useI18n } from "vue-i18n";
 import { withDevice } from "@/api/client";
 import { listVaults } from "@/api/generated/sdk.gen";
 import type { Vault } from "@/api/generated/types.gen";
-import { messageOf } from "@/api/problem";
 import AsyncState from "@/components/ui/AsyncState.vue";
+import { useAutoRetry } from "@/reader/retry";
+import { ago, day } from "@/reader/time";
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const vaults = ref<Vault[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
+const failure = useAutoRetry(() => load());
 
 async function load(): Promise<void> {
   loading.value = true;
@@ -21,7 +23,7 @@ async function load(): Promise<void> {
         (await listVaults({ headers, throwOnError: true })).data,
     );
   } catch (e) {
-    error.value = messageOf(e);
+    error.value = failure(e);
   } finally {
     loading.value = false;
   }
@@ -47,6 +49,7 @@ onMounted(load);
             <th scope="col">{{ t("vaults.tenant") }}</th>
             <th scope="col">{{ t("vaults.role") }}</th>
             <th scope="col">{{ t("vaults.reach") }}</th>
+            <th scope="col">{{ t("vaults.updated") }}</th>
             <th scope="col"><span class="sr-only">{{ t("manage.title") }}</span></th>
             <th scope="col">{{ t("vaults.source") }}</th>
           </tr>
@@ -57,6 +60,9 @@ onMounted(load);
             <td>{{ v.tenant }}</td>
             <td>{{ v.role }}</td>
             <td>{{ v.paths ? t("reader.reach", { n: v.paths.length }) : t("reader.whole") }}</td>
+            <td>
+              <time v-if="v.updatedAt" :datetime="v.updatedAt" :title="day(v.updatedAt, locale)">{{ ago(v.updatedAt, locale) }}</time>
+            </td>
             <td>
               <RouterLink v-if="v.role === 'manager'" :to="`/manage/vaults/${v.id}/access`" class="underline">
                 {{ t("manage.access") }}

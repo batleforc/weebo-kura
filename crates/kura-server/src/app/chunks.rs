@@ -1173,6 +1173,9 @@ async fn open_object(
     hash: ChunkHash,
     object_key: &str,
 ) -> Result<Vec<u8>, ApiError> {
+    // Every object-storage read passes here: RFC 0005 §6.P observation 2
+    // checks a refused chunk never reaches it (RUST_LOG=kura::object_read=debug).
+    tracing::debug!(target: "kura::object_read", vault = %v, chunk = %hash, "object read");
     let stored = storage(state)?
         .objects()
         .get(&object_store::path::Path::from(object_key))

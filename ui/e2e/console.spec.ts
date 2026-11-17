@@ -79,8 +79,9 @@ test("3: bob, a viewer, is refused the keys of a vault, and is shown no key", as
   });
   await signIn(page, "bob");
   await page.goto(`/app/manage/vaults/${env("KURA_E2E_CAMPAIGN")}/keys`);
+  // The server's own insufficient_role detail (RFC 0003 §4.5, Forbidden).
   await expect(page.locator("[data-test=forbidden]")).toHaveText(
-    "Your role does not allow this page.",
+    "manager required, you are viewer",
   );
   expect(refused.map((r) => r.status)).toEqual([403]);
   expect(refused[0]?.body).toContain("/v1/problems/insufficient_role");

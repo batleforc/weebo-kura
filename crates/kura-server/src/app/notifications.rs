@@ -674,6 +674,7 @@ pub async fn test_rule(
             .await?;
     tx.commit().await?;
     let outcome = notifier::deliver(&state, delivery, scope.tenant, &scope.slug).await?;
+    tracing::info!(target: "audit", event = "notification_rule_tested", sub = %caller.caller.principal.sub, tenant = %scope.slug, rule = %n, result = %outcome.result());
     Ok(Json(TestResult {
         result: outcome.result(),
     }))
@@ -721,4 +722,29 @@ pub async fn list_deliveries(
         })
         .collect::<Result<_, ApiError>>()
         .map(Json)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// T4: the value is sent verbatim, so CR, LF, NUL and every other
+    /// control character are refused at input, as is a value over 1 KiB.
+    #[test]
+    fn authorization_rejects_control_characters() {
+        assert!(check_authorization("Bearer test-key").is_ok());
+        assert!(check_authorization(&"a".repeat(1024)).is_ok());
+        for bad in [
+            "Bearer x\r\nX-Injected: 1",
+            "Bearer x\nX-Injected: 1",
+            "Bearer x\r",
+            "Bearer \0x",
+            "Bearer \tx",
+            "Bearer \u{7f}x",
+            "Bearer \u{85}x",
+        ] {
+            assert!(check_authorization(bad).is_err(), "{bad:?}");
+        }
+        assert!(check_authorization(&"a".repeat(1025)).is_err());
+    }
 }

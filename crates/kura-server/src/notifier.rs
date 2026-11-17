@@ -607,20 +607,50 @@ async fn hourly(state: &SharedState) -> Result<(), ApiError> {
         .await?;
         tx.commit().await?;
     }
+    purge(&state.db).await?;
+    Ok(())
+}
+
+/// Events, and their deliveries, older than 7 days (§9), on or off.
+pub async fn purge(pool: &sqlx::PgPool) -> Result<i64, sqlx::Error> {
     let purged: i64 = sqlx::query_scalar("SELECT kura_notification_purge()")
-        .fetch_one(&state.db)
+        .fetch_one(pool)
         .await?;
     if purged > 0 {
         tracing::info!(purged, "old notification events purged");
     }
-    Ok(())
+    Ok(purged)
+}
+
+/// §4.3: while `notifications.enabled` is false, one `WARN` at startup with
+/// the number of stored rules (kept, never sent). One count query.
+pub async fn warn_rules_while_off(pool: &sqlx::PgPool) -> Result<i64, sqlx::Error> {
+    let rules: i64 = sqlx::query_scalar("SELECT kura_notification_rule_count()")
+        .fetch_one(pool)
+        .await?;
+    if rules > 0 {
+        tracing::warn!(
+            rules,
+            "notification rules are stored but notifications.enabled is false: nothing is sent"
+        );
+    }
+    Ok(rules)
 }
 
 /// The worker (§6.4): the subscription cache every 30 s, deliveries due
-/// every 2 s, four in flight, the gauges of §10.1; until `shutdown`.
+/// every 2 s, four in flight, the gauges of §10.1; until `shutdown`. With
+/// notifications off, only the hourly purge, so §9's 7 days still hold.
 pub async fn run(state: SharedState, shutdown: CancellationToken) {
     let Some(n) = state.notifier.clone() else {
-        return;
+        loop {
+            if let Err(e) = purge(&state.db).await {
+                tracing::warn!(error = %e, "the notification purge not run");
+            }
+            tokio::select! {
+                () = shutdown.cancelled() => return,
+                () = tokio::time::sleep(Duration::from_secs(3_600)) => {}
+            }
+        }
     };
     let mut refreshed = tokio::time::Instant::now()
         .checked_sub(SUBSCRIPTIONS_EVERY)
@@ -714,6 +744,25 @@ mod tests {
             signature(b"secret", 1, b"{}"),
             signature(b"secret", 2, b"{}")
         );
+    }
+
+    /// T3: a body altered by one byte, or the same body under another
+    /// secret, does not verify against the delivery's signature.
+    #[test]
+    fn signature_rejects_altered_body() {
+        let body = br#"{"type":"token.revoked","vault":{"id":"v"}}"#;
+        let signed = signature(b"secret", 1_763_210_000, body);
+        let mut altered = body.to_vec();
+        if let Some(b) = altered.last_mut() {
+            *b ^= 1;
+        }
+        assert_ne!(signature(b"secret", 1_763_210_000, &altered), signed);
+        assert_ne!(
+            signature(b"secret", 1_763_210_000, br#"{"type":"token.revoked"}"#),
+            signed
+        );
+        assert_ne!(signature(b"other", 1_763_210_000, body), signed);
+        assert_eq!(signature(b"secret", 1_763_210_000, body), signed);
     }
 
     #[test]

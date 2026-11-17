@@ -89,8 +89,8 @@ grep '"x-kura-event": "device.revoked"' "$work/log-127.0.0.1" | head -1 | jq -r 
 [ -s "$work/revoked" ] || fail "5: no device.revoked within 10 s"
 [ "$(jq -r .data.device.id "$work/revoked")" = "$spare" ] || fail "5: $(cat "$work/revoked")"
 [ "$(jq '[paths | .[-1] | select(. == "sub" or . == "path")] | length' "$work/revoked")" = 0 ] || fail "5: a subject or path key: $(cat "$work/revoked")"
-[ "$(jq '.data.device | has("name")' "$work/revoked")" = false ] || fail "5: the device's name was sent"
-pass "5: device.revoked arrives within 10 s with the device's id and kind, no subject, path or name"
+[ "$(jq -c '.data.device | keys' "$work/revoked")" = '["id"]' ] || fail "5: the device carries more than its id (kind, name): $(cat "$work/revoked")"
+pass "5: device.revoked arrives within 10 s with the device's id only, no kind, subject, path or name"
 
 # 6. An address not allowed: refused, and never connected to.
 [ "$(api -d "{\"name\":\"inside-$$\",\"events\":[\"ping\"],\"channel\":{\"type\":\"webhook\",\"url\":\"https://127.0.0.2:8443/hook\"}}" "$server/v1/tenants/dev/notifications")" = 400 ] \

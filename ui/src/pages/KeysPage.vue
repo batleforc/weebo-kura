@@ -13,6 +13,7 @@ import { createToken, listTokens, revokeToken } from "@/api/generated/sdk.gen";
 import type { ScopeRule, TokenView } from "@/api/generated/types.gen";
 import { messageOf } from "@/api/problem";
 import AsyncState from "@/components/ui/AsyncState.vue";
+import ForbiddenState from "@/components/ui/ForbiddenState.vue";
 import { useLoad } from "@/manage/useLoad";
 
 const { t } = useI18n();
@@ -23,6 +24,7 @@ const {
   loading,
   error,
   forbidden,
+  forbiddenDetail,
   load,
 } = useLoad<TokenView[]>(
   () =>
@@ -124,7 +126,7 @@ onMounted(load);
 <template>
   <section>
     <h1 class="mb-4">{{ t("manage.keys") }}</h1>
-    <p v-if="forbidden" role="alert" data-test="forbidden">{{ t("manage.forbidden") }}</p>
+    <ForbiddenState v-if="forbidden" :detail="forbiddenDetail" />
     <AsyncState
       v-else
       :loading="loading"

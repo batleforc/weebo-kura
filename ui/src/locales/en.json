@@ -27,13 +27,14 @@
   },
   "vaults": {
     "title": "My vaults",
-    "empty": "No vault is open to you yet.",
+    "empty": "No vault is open to you yet. Ask a vault manager to add you, then reload.",
     "failed": "Your vaults could not be loaded.",
     "name": "Name",
     "tenant": "Tenant",
     "role": "Your role",
     "source": "Declared in",
-    "reach": "Reach"
+    "reach": "Reach",
+    "updated": "Updated"
   },
   "devices": {
     "title": "My devices",
@@ -91,7 +92,11 @@
     "reach": "{n} folders",
     "whole": "whole vault",
     "open": "Open",
-    "byKey": "key {name}"
+    "byKey": "key {name}",
+    "lastEdited": "Last edited {date}",
+    "lastEditedBy": "Last edited {date} by {who}",
+    "cut": "This vault lists more than {n} entries: the folders show the first {n} only. Search finds the others.",
+    "unavailable": "Kura is not answering (503). Retrying in 30 s…"
   },
   "manage": {
     "title": "Manage",
@@ -129,7 +134,10 @@
     "addAction": "Add",
     "who": "Who",
     "folders": "Folders (viewer only)",
-    "foldersHint": "Sessions/, Resumes/ (empty: whole vault)"
+    "foldersHint": "Sessions/, Resumes/ (empty: whole vault)",
+    "noNotes": "0 notes",
+    "widened": "effective: whole vault",
+    "widenedWhy": "the tenant maps this group to owner or admin"
   },
   "keys": {
     "created": "Key created",
@@ -202,6 +210,17 @@
     "time": "Time",
     "event": "Event",
     "attempt": "Attempt",
-    "result": "Result"
+    "result": "Result",
+    "failed": "failed: {result}",
+    "pending": "pending ({result})",
+    "edit": "Edit",
+    "editTitle": "Edit the rule {name}",
+    "save": "Save",
+    "unchanged": "empty: unchanged ({host})",
+    "keptAuthorization": "empty: unchanged",
+    "removeAuthorization": "Remove the authorization",
+    "rotate": "Rotate secret",
+    "rotated": "New signing secret",
+    "confirmRotate": "Rotate the signing secret of {name}? The old one stops at once: the receiver refuses deliveries until it checks with the new one."
   }
 }

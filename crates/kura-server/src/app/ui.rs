@@ -60,6 +60,19 @@ impl UiSettings {
     }
 }
 
+/// RFC 0003 §4.3, §10.2: a `ui.dir` that is missing or has no `index.html`
+/// stops the start, rather than serving a half application.
+pub fn check_dir(dir: &std::path::Path) -> Result<(), String> {
+    match std::fs::metadata(dir.join("index.html")) {
+        Ok(m) if m.is_file() => Ok(()),
+        Ok(_) => Err(format!(
+            "ui.dir {}: index.html is not a file",
+            dir.display()
+        )),
+        Err(e) => Err(format!("ui.dir {}: no index.html ({e})", dir.display())),
+    }
+}
+
 /// The bridge's `'sha256-…'` from `frame-csp.txt`, written by the build;
 /// anything else in that file is ignored, so it can never widen the policy.
 fn frame_hash(dir: &std::path::Path) -> Option<String> {
@@ -207,5 +220,18 @@ mod tests {
             Some("https://a.example:8443")
         );
         assert_eq!(origin("not a url"), None);
+    }
+
+    /// §4.3: a missing `ui.dir`, or one without `index.html`, is refused.
+    #[test]
+    fn ui_dir_without_index_is_refused() {
+        let dir = std::env::temp_dir().join(format!("kura-ui-dir-{}", std::process::id()));
+        assert!(check_dir(&dir).unwrap_err().contains("no index.html"));
+        std::fs::create_dir_all(dir.join("index.html")).unwrap();
+        assert!(check_dir(&dir).unwrap_err().contains("not a file"));
+        std::fs::remove_dir(dir.join("index.html")).unwrap();
+        std::fs::write(dir.join("index.html"), "<!doctype html>").unwrap();
+        assert_eq!(check_dir(&dir), Ok(()));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

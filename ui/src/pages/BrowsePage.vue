@@ -1,13 +1,19 @@
 <script setup lang="ts">
 /** Browse and read (RFC 0005 §4.5): the shared folders, and one note. */
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
-import type { EntryState, Vault } from "@/api/generated/types.gen";
-import { messageOf } from "@/api/problem";
+import { withDevice } from "@/api/client";
+import { getRevisions } from "@/api/generated/sdk.gen";
+import type {
+  EntryState,
+  RevisionInfo,
+  Vault,
+} from "@/api/generated/types.gen";
 import AsyncState from "@/components/ui/AsyncState.vue";
 import { fileBytes } from "@/reader/content";
+import { type Watch, watchVault } from "@/reader/events";
 import FolderTree from "@/reader/FolderTree.vue";
 import NoteFrame from "@/reader/NoteFrame.vue";
 import {
@@ -16,10 +22,12 @@ import {
   MAX_RENDER,
   renderNote,
 } from "@/reader/render";
+import { useAutoRetry } from "@/reader/retry";
+import { day } from "@/reader/time";
 import { buildTree, noteName } from "@/reader/tree";
-import { loadVault } from "@/reader/vault";
+import { loadVault, MAX_PAGES } from "@/reader/vault";
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const vaultId = computed(() => String(route.params.v));
@@ -35,7 +43,10 @@ const note = ref<EntryState | undefined>();
 const doc = ref<string | null>(null);
 const download = ref<string | null>(null);
 const missing = ref(false);
+const cut = ref(false);
+const edited = ref<RevisionInfo | null>(null);
 const tree = computed(() => buildTree(entries.value));
+const failure = useAutoRetry(() => loadAll().then(open));
 
 async function loadAll(): Promise<void> {
   loading.value = true;
@@ -44,15 +55,46 @@ async function loadAll(): Promise<void> {
     const loaded = await loadVault(vaultId.value);
     vault.value = loaded.vault;
     entries.value = loaded.entries;
+    cut.value = loaded.cut;
   } catch (e) {
-    error.value = messageOf(e);
+    error.value = failure(e);
   } finally {
     loading.value = false;
   }
 }
 
+/** A `change` notice: the tree again, and the note if it moved on. */
+async function refresh(): Promise<void> {
+  try {
+    const before = note.value?.revision;
+    const loaded = await loadVault(vaultId.value);
+    vault.value = loaded.vault;
+    entries.value = loaded.entries;
+    cut.value = loaded.cut;
+    const now = entries.value.find(
+      (e) => e.entry === entryId.value && !e.deleted,
+    );
+    if (now?.revision !== before) await open();
+  } catch {
+    // The next notice, or a reload, tries again.
+  }
+}
+
+/** "Last edited … by …": the newest revision, when the server gives it. */
+async function lastEdit(v: string, entry: string): Promise<void> {
+  try {
+    const { data } = await withDevice((headers) =>
+      getRevisions({ headers, path: { v, e: entry }, throwOnError: true }),
+    );
+    if (entry === entryId.value) edited.value = data.items[0] ?? null;
+  } catch {
+    // A line less under the note, nothing worse.
+  }
+}
+
 async function open(): Promise<void> {
   doc.value = null;
+  edited.value = null;
   missing.value = false;
   if (download.value) URL.revokeObjectURL(download.value);
   download.value = null;
@@ -79,6 +121,7 @@ async function open(): Promise<void> {
   doc.value = await frameDocument(rendered, (e) =>
     e.blob ? fileBytes(vaultId.value, e.blob) : Promise.resolve(null),
   );
+  void lastEdit(vaultId.value, note.value.entry);
 }
 
 /** A link from the frame: an entry the caller was listed, or an external page. */
@@ -92,9 +135,25 @@ function follow(href: string): void {
   }
 }
 
+// One socket for the open vault, closed on leaving it (RFC 0005 §7.5); a
+// burst of notices becomes one refresh.
+let socket: Watch | null = null;
+let pending: ReturnType<typeof setTimeout> | undefined;
+const NOTICE_DEBOUNCE_MS = 1000;
+function noticed(): void {
+  clearTimeout(pending);
+  pending = setTimeout(() => void refresh(), NOTICE_DEBOUNCE_MS);
+}
+onBeforeUnmount(() => {
+  clearTimeout(pending);
+  socket?.close();
+});
+
 watch(
   vaultId,
-  async () => {
+  async (v) => {
+    socket?.close();
+    socket = watchVault(v, noticed);
     await loadAll();
     await open();
   },
@@ -105,6 +164,7 @@ watch(entryId, () => void open());
 
 <template>
   <section>
+    <h1 class="sr-only">{{ note ? noteName(note.path) : (vault?.name ?? t("reader.folders")) }}</h1>
     <nav :aria-label="t('reader.breadcrumb')" class="mb-3 flex flex-wrap gap-2">
       <RouterLink to="/vaults">{{ t("nav.vaults") }}</RouterLink>
       <span aria-hidden="true">▸</span>
@@ -122,6 +182,9 @@ watch(entryId, () => void open());
       :title="t('reader.failed')"
       @retry="loadAll"
     >
+      <p v-if="cut" role="status" class="mb-3 border border-rule p-2" data-test="cut">
+        {{ t("reader.cut", { n: (MAX_PAGES * 1000).toLocaleString(locale) }) }}
+      </p>
       <div class="grid gap-4 md:grid-cols-[16rem_1fr]">
         <nav :aria-label="t('reader.folders')" class="border-r border-rule-soft" data-test="tree">
           <FolderTree :folder="tree" :vault="vaultId" :current="entryId" />
@@ -137,7 +200,13 @@ watch(entryId, () => void open());
           </p>
           <template v-else-if="doc && note">
             <NoteFrame :document="doc" :title="noteName(note.path)" @link="follow" />
-            <p class="mt-2 text-ink-dim">
+            <p class="mt-2 text-ink-dim" data-test="last-edit">
+              <template v-if="edited">
+                {{ edited.author
+                  ? t("reader.lastEditedBy", { date: day(edited.createdAt, locale), who: edited.author.kind === "key" ? t("reader.byKey", { name: edited.author.name }) : edited.author.name })
+                  : t("reader.lastEdited", { date: day(edited.createdAt, locale) }) }}
+                <span aria-hidden="true">·</span>
+              </template>
               <RouterLink :to="`/vaults/${vaultId}/notes/${note.entry}/history`" class="underline">{{ t("reader.history") }}</RouterLink>
             </p>
           </template>

@@ -81,15 +81,28 @@ pub fn webhook_allowed(addr: IpAddr, allowed: &[IpNet]) -> bool {
 #[derive(Clone)]
 struct GuardedResolver {
     allowed: std::sync::Arc<Vec<IpNet>>,
+    lookup: Lookup,
 }
+
+/// Where the guarded resolver gets a name's addresses: the system's
+/// resolver in the server, a scripted one in the rebinding test.
+pub type Lookup = std::sync::Arc<
+    dyn Fn(
+            String,
+        ) -> std::pin::Pin<
+            Box<dyn Future<Output = std::io::Result<Vec<std::net::SocketAddr>>> + Send>,
+        > + Send
+        + Sync,
+>;
 
 impl reqwest::dns::Resolve for GuardedResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let allowed = self.allowed.clone();
-        let host = name.as_str().to_owned();
+        let answer = (self.lookup)(name.as_str().to_owned());
         Box::pin(async move {
-            let found: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+            let found: Vec<std::net::SocketAddr> = answer
                 .await?
+                .into_iter()
                 .filter(|a| webhook_allowed(a.ip(), &allowed))
                 .collect();
             if found.is_empty() {
@@ -113,12 +126,26 @@ pub fn webhook_client(
     allowed: Vec<IpNet>,
     ca: &[reqwest::Certificate],
 ) -> Result<reqwest::Client, reqwest::Error> {
+    let system: Lookup = std::sync::Arc::new(|host: String| {
+        Box::pin(async move { Ok(tokio::net::lookup_host((host.as_str(), 0)).await?.collect()) })
+    });
+    webhook_client_resolving(allowed, ca, system)
+}
+
+/// [`webhook_client`] with the names answered by `lookup`; every answer
+/// still goes through the guard.
+pub fn webhook_client_resolving(
+    allowed: Vec<IpNet>,
+    ca: &[reqwest::Certificate],
+    lookup: Lookup,
+) -> Result<reqwest::Client, reqwest::Error> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
         .https_only(true)
         .dns_resolver(GuardedResolver {
             allowed: std::sync::Arc::new(allowed),
+            lookup,
         })
         .connect_timeout(std::time::Duration::from_secs(3))
         .timeout(std::time::Duration::from_secs(5))

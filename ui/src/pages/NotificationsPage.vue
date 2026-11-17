@@ -2,9 +2,11 @@
 /**
  * A tenant's notification rules (RFC 0003 §4.5): only the host of a URL is
  * shown again; a rule that switched itself off is a banner, not a silent
- * state; the signing secret is shown once, as a key's is.
+ * state; the signing secret is shown once, as a key's is, on creation and
+ * on rotation. Editing keeps what is left empty: the URL and authorization
+ * are never shown again, so an empty field means "unchanged".
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute } from "vue-router";
 
@@ -20,6 +22,7 @@ import {
 import type { RuleView, Vault } from "@/api/generated/types.gen";
 import { messageOf, problemType } from "@/api/problem";
 import AsyncState from "@/components/ui/AsyncState.vue";
+import ForbiddenState from "@/components/ui/ForbiddenState.vue";
 import { useLoad } from "@/manage/useLoad";
 import { useMe } from "@/me";
 
@@ -57,6 +60,7 @@ const {
   loading,
   error,
   forbidden,
+  forbiddenDetail,
   load,
 } = useLoad<RuleView[]>(async () => {
   try {
@@ -98,6 +102,9 @@ const switchedOff = computed(() =>
 );
 
 const creating = ref(false);
+/** The rule being edited; `null` while creating. */
+const editing = ref<RuleView | null>(null);
+const removeAuthorization = ref(false);
 const name = ref("");
 const scope = ref<string>("");
 const events = ref<string[]>([]);
@@ -105,11 +112,138 @@ const url = ref("");
 const authorization = ref("");
 const refusal = ref<string | null>(null);
 const secret = ref<string | null>(null);
+const rotated = ref(false);
+const copied = ref(false);
+const rotating = ref<RuleView | null>(null);
+/** Where focus goes back when a form, dialog or confirmation closes (§11). */
+let opener: HTMLElement | null = null;
+const firstField = ref<HTMLInputElement | null>(null);
+const secretBox = ref<HTMLElement | null>(null);
+const confirmBox = ref<HTMLElement | null>(null);
+const newRule = ref<HTMLButtonElement | null>(null);
 const tested = ref<{ rule: string; result: string } | null>(null);
 
 function vaultName(id: string | null | undefined): string {
   if (!id) return t("notifications.tenantWide");
   return vaults.value.find((v) => v.id === id)?.name ?? id.slice(0, 8);
+}
+
+function remember(): void {
+  opener =
+    document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+}
+
+/** Back to the opener if it is still on the page, else to "New rule". */
+async function giveFocusBack(): Promise<void> {
+  await nextTick();
+  (opener?.isConnected ? opener : newRule.value)?.focus();
+  opener = null;
+}
+
+async function focusOn(el: { value: HTMLElement | null }): Promise<void> {
+  await nextTick();
+  el.value?.focus();
+}
+
+function openForm(r: RuleView | null): void {
+  remember();
+  editing.value = r;
+  creating.value = true;
+  refusal.value = null;
+  name.value = r?.name ?? "";
+  events.value = r ? [...r.events] : [];
+  url.value = "";
+  authorization.value = "";
+  removeAuthorization.value = false;
+  void focusOn(firstField);
+}
+
+function closeForm(): void {
+  creating.value = false;
+  editing.value = null;
+  void giveFocusBack();
+}
+
+async function showSecret(value: string | null | undefined): Promise<void> {
+  secret.value = value ?? null;
+  copied.value = false;
+  if (secret.value) await focusOn(secretBox);
+}
+
+async function copy(): Promise<void> {
+  if (secret.value) {
+    await navigator.clipboard.writeText(secret.value).catch(() => undefined);
+    copied.value = true;
+  }
+}
+
+function closeSecret(): void {
+  secret.value = null;
+  copied.value = false;
+  void giveFocusBack();
+}
+
+function submit(): Promise<void> {
+  return editing.value ? save(editing.value) : create();
+}
+
+async function save(r: RuleView): Promise<void> {
+  refusal.value = null;
+  try {
+    await withDevice((headers) =>
+      updateRule({
+        headers,
+        path: { t: tenant.value, n: r.id },
+        body: {
+          name: name.value,
+          events: events.value,
+          url: url.value || undefined,
+          authorization: removeAuthorization.value
+            ? ""
+            : authorization.value || undefined,
+        },
+        throwOnError: true,
+      }),
+    );
+    closeForm();
+    await load();
+  } catch (e) {
+    refusal.value = messageOf(e);
+  }
+}
+
+function askRotate(r: RuleView): void {
+  remember();
+  rotating.value = r;
+  void focusOn(confirmBox);
+}
+
+function cancelRotate(): void {
+  rotating.value = null;
+  void giveFocusBack();
+}
+
+async function rotate(r: RuleView): Promise<void> {
+  rotating.value = null;
+  refusal.value = null;
+  try {
+    const { data } = await withDevice((headers) =>
+      updateRule({
+        headers,
+        path: { t: tenant.value, n: r.id },
+        body: { rotateSecret: true },
+        throwOnError: true,
+      }),
+    );
+    rotated.value = true;
+    await load();
+    await showSecret(data.secret);
+  } catch (e) {
+    refusal.value = messageOf(e);
+    void giveFocusBack();
+  }
 }
 
 async function create(): Promise<void> {
@@ -132,11 +266,12 @@ async function create(): Promise<void> {
         throwOnError: true,
       }),
     );
-    secret.value = data.secret ?? null;
     creating.value = false;
     url.value = "";
     authorization.value = "";
+    rotated.value = false;
     await load();
+    await showSecret(data.secret);
   } catch (e) {
     refusal.value = messageOf(e);
   }
@@ -203,16 +338,22 @@ onMounted(async () => {
   <section>
     <h1 class="mb-4">{{ t("notifications.title", { tenant }) }}</h1>
     <p v-if="disabled" role="status" data-test="disabled">{{ t("notifications.off") }}</p>
-    <p v-else-if="forbidden" role="alert" data-test="forbidden">{{ t("manage.forbidden") }}</p>
+    <ForbiddenState v-else-if="forbidden" :detail="forbiddenDetail" />
     <AsyncState v-else :loading="loading" :error="error" :empty="false" empty-message="" :title="t('manage.failed')" @retry="load">
       <p v-for="r in switchedOff" :key="`off-${r.id}`" role="alert" class="mb-2 border border-accent p-2" data-test="switched-off">
         {{ t("notifications.switchedOff", { name: r.name, reason: r.disabledReason }) }}
       </p>
-      <div v-if="secret" role="dialog" aria-labelledby="rule-created" class="mb-4 border border-accent p-4" data-test="created">
-        <h2 id="rule-created" class="font-bold">{{ t("notifications.created") }}</h2>
+      <div v-if="secret" ref="secretBox" role="dialog" tabindex="-1" aria-labelledby="rule-created" aria-describedby="rule-once" class="mb-4 border border-accent p-4" data-test="created">
+        <h2 id="rule-created" class="font-bold">{{ rotated ? t("notifications.rotated") : t("notifications.created") }}</h2>
         <p class="my-2 break-all"><code data-test="secret">{{ secret }}</code></p>
-        <p class="my-2">{{ t("notifications.once") }}</p>
-        <button type="button" class="bg-accent px-3 text-accent-ink" data-test="close" @click="secret = null">{{ t("keys.stored") }}</button>
+        <button type="button" class="mr-2 border border-rule px-3" data-test="copy" @click="copy">{{ copied ? t("keys.copied") : t("keys.copy") }}</button>
+        <p id="rule-once" class="my-2">{{ t("notifications.once") }}</p>
+        <button type="button" class="bg-accent px-3 text-accent-ink" data-test="close" @click="closeSecret">{{ t("keys.stored") }}</button>
+      </div>
+      <div v-if="rotating" ref="confirmBox" role="alertdialog" tabindex="-1" aria-labelledby="rotate-question" class="mb-4 border border-accent p-4" data-test="confirm-rotate">
+        <p id="rotate-question">{{ t("notifications.confirmRotate", { name: rotating.name }) }}</p>
+        <button type="button" class="mr-2 bg-accent px-3 text-accent-ink" data-test="confirm" @click="rotate(rotating)">{{ t("notifications.rotate") }}</button>
+        <button type="button" class="border border-rule px-3" @click="cancelRotate">{{ t("devices.cancel") }}</button>
       </div>
       <p v-if="tested" role="status" class="mb-2" data-test="tested">{{ t("notifications.tested", tested) }}</p>
       <p v-if="refusal" role="alert" class="mb-2 border border-accent p-2">{{ refusal }}</p>
@@ -231,28 +372,34 @@ onMounted(async () => {
         </thead>
         <tbody>
           <tr v-for="r in rules" :key="r.id" class="border-t border-rule-soft" :data-rule="r.name">
-            <td>{{ r.name }}</td>
+            <th scope="row" class="font-normal">{{ r.name }}</th>
             <td>{{ r.events.join(", ") }}</td>
             <td>{{ vaultName(r.vault) }}</td>
             <td>{{ r.host }}</td>
             <td>{{ r.last ? `${r.last.result} · ${r.last.at.slice(0, 16).replace("T", " ")}` : "" }}</td>
             <td>{{ r.enabled ? t("notifications.on") : t("notifications.offState") }}</td>
-            <td class="flex gap-1">
-              <button type="button" class="border border-rule px-2" data-test="test" @click="test(r)">{{ t("notifications.test") }}</button>
-              <button v-if="!r.enabled" type="button" class="border border-rule px-2" @click="enable(r, true)">{{ t("notifications.reEnable") }}</button>
-              <button v-else type="button" class="border border-rule px-2" @click="enable(r, false)">{{ t("notifications.disable") }}</button>
-              <RouterLink :to="`/manage/tenants/${tenant}/notifications/${r.id}`" class="underline">{{ t("notifications.deliveries") }}</RouterLink>
-              <button type="button" class="border border-accent px-2" @click="remove(r)">{{ t("access.remove") }}</button>
+            <!-- Not `flex` on the cell itself: it drops the cell from the table for some screen readers. -->
+            <td>
+              <div class="flex flex-wrap gap-1">
+                <button type="button" class="border border-rule px-2" data-test="test" @click="test(r)">{{ t("notifications.test") }}</button>
+                <button v-if="!r.enabled" type="button" class="border border-rule px-2" @click="enable(r, true)">{{ t("notifications.reEnable") }}</button>
+                <button v-else type="button" class="border border-rule px-2" @click="enable(r, false)">{{ t("notifications.disable") }}</button>
+                <button type="button" class="border border-rule px-2" data-test="edit" @click="openForm(r)">{{ t("notifications.edit") }}</button>
+                <button type="button" class="border border-rule px-2" data-test="rotate" @click="askRotate(r)">{{ t("notifications.rotate") }}</button>
+                <RouterLink :to="`/manage/tenants/${tenant}/notifications/${r.id}`" class="underline">{{ t("notifications.deliveries") }}</RouterLink>
+                <button type="button" class="border border-accent px-2" @click="remove(r)">{{ t("access.remove") }}</button>
+              </div>
             </td>
           </tr>
         </tbody>
       </table>
-      <button v-if="!creating" type="button" class="mt-4 border border-rule px-3" data-test="new-rule" @click="creating = true">
+      <button v-if="!creating" ref="newRule" type="button" class="mt-4 border border-rule px-3" data-test="new-rule" @click="openForm(null)">
         {{ t("notifications.new") }}
       </button>
-      <form v-else class="mt-4 grid max-w-2xl gap-2 border border-rule p-4" @submit.prevent="create">
-        <label>{{ t("keys.name") }} <input v-model="name" required maxlength="64" class="ml-2 border border-rule bg-ground px-1" data-test="name" /></label>
-        <label>{{ t("notifications.scope") }}
+      <form v-else class="mt-4 grid max-w-2xl gap-2 border border-rule p-4" aria-labelledby="rule-form" @submit.prevent="submit">
+        <h2 id="rule-form" class="font-bold">{{ editing ? t("notifications.editTitle", { name: editing.name }) : t("notifications.new") }}</h2>
+        <label>{{ t("keys.name") }} <input ref="firstField" v-model="name" required maxlength="64" class="ml-2 border border-rule bg-ground px-1" data-test="name" /></label>
+        <label v-if="!editing">{{ t("notifications.scope") }}
           <select v-model="scope" class="ml-2 bg-ground" data-test="scope">
             <option v-if="admin" value="">{{ t("notifications.tenantWide") }}</option>
             <option v-for="v in mine" :key="v.id" :value="v.id">{{ v.name }}</option>
@@ -263,14 +410,15 @@ onMounted(async () => {
           <label v-for="e in offered" :key="e"><input v-model="events" type="checkbox" :value="e" /> {{ e }}</label>
         </fieldset>
         <label>{{ t("notifications.webhook") }}
-          <input v-model="url" required type="url" class="ml-2 w-96 border border-rule bg-ground px-1" placeholder="https://hub.example.org/hooks/kura" data-test="url" />
+          <input v-model="url" :required="!editing" type="url" class="ml-2 w-96 border border-rule bg-ground px-1" :placeholder="editing ? t('notifications.unchanged', { host: editing.host }) : 'https://hub.example.org/hooks/kura'" data-test="url" />
         </label>
         <label>{{ t("notifications.authorization") }}
-          <input v-model="authorization" type="password" autocomplete="off" class="ml-2 border border-rule bg-ground px-1" data-test="authorization" />
+          <input v-model="authorization" type="password" autocomplete="off" :disabled="removeAuthorization" :placeholder="editing?.hasAuthorization ? t('notifications.keptAuthorization') : undefined" class="ml-2 border border-rule bg-ground px-1" data-test="authorization" />
         </label>
+        <label v-if="editing?.hasAuthorization"><input v-model="removeAuthorization" type="checkbox" data-test="remove-authorization" /> {{ t("notifications.removeAuthorization") }}</label>
         <div class="flex gap-2">
-          <button type="button" class="border border-rule px-3" @click="creating = false">{{ t("devices.cancel") }}</button>
-          <button type="submit" class="bg-accent px-3 text-accent-ink" data-test="create">{{ t("keys.create") }}</button>
+          <button type="button" class="border border-rule px-3" @click="closeForm">{{ t("devices.cancel") }}</button>
+          <button type="submit" class="bg-accent px-3 text-accent-ink" data-test="create">{{ editing ? t("notifications.save") : t("keys.create") }}</button>
         </div>
       </form>
     </AsyncState>

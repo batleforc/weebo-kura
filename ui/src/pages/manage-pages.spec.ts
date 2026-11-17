@@ -163,6 +163,44 @@ describe("access", () => {
     );
   });
 
+  it("warns of a widened binding and of a folder with no note", async () => {
+    vi.mocked(sdk.listBindings).mockResolvedValue({
+      data: [
+        {
+          subject: "claim:jdr-mj",
+          role: "viewer",
+          managedBy: "config",
+          paths: ["Sessions/"],
+          widened: true,
+        },
+        {
+          subject: "claim:jdr-players",
+          role: "viewer",
+          managedBy: "config",
+          paths: ["Sessions/", "Cartes/"],
+          widened: false,
+          emptyFolders: ["Cartes/"],
+        },
+      ],
+    } as never);
+    const w = await at(
+      AccessPage,
+      "/manage/vaults/v1/access",
+      "/manage/vaults/:v/access",
+    );
+    const [mj, players] = [
+      w.find("[data-binding='claim:jdr-mj']"),
+      w.find("[data-binding='claim:jdr-players']"),
+    ];
+    expect(mj.find("[data-test=widened]").text()).toBe(
+      "effective: whole vault",
+    );
+    expect(mj.find("[data-test=no-notes]").exists()).toBe(false);
+    expect(players.find("[data-test=widened]").exists()).toBe(false);
+    expect(players.text()).toContain("Sessions/, Cartes/ (0 notes)");
+    expect(players.findAll("[data-test=no-notes]")).toHaveLength(1);
+  });
+
   it("offers the tenant's groups as a list", async () => {
     vi.mocked(sdk.listBindings).mockResolvedValue({ data: [] } as never);
     vi.mocked(sdk.listVaults).mockResolvedValue({

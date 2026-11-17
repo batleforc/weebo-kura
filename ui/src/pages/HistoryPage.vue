@@ -7,11 +7,12 @@ import { useRoute } from "vue-router";
 import { withDevice } from "@/api/client";
 import { getRevisions } from "@/api/generated/sdk.gen";
 import type { RevisionInfo } from "@/api/generated/types.gen";
-import { messageOf, problemType } from "@/api/problem";
+import { problemType } from "@/api/problem";
 import AsyncState from "@/components/ui/AsyncState.vue";
 import { fileBytes } from "@/reader/content";
 import NoteFrame from "@/reader/NoteFrame.vue";
 import { frameDocument, MAX_RENDER, renderNote } from "@/reader/render";
+import { useAutoRetry } from "@/reader/retry";
 import { loadVault } from "@/reader/vault";
 
 const { t } = useI18n();
@@ -23,6 +24,7 @@ const loading = ref(true);
 const error = ref<string | null>(null);
 const missing = ref(false);
 const shown = ref<{ revision: string; doc: string } | null>(null);
+const failure = useAutoRetry(() => load());
 
 async function load(): Promise<void> {
   loading.value = true;
@@ -38,7 +40,7 @@ async function load(): Promise<void> {
     revisions.value = data.items;
   } catch (e) {
     if (problemType(e) === "not_found") missing.value = true;
-    else error.value = messageOf(e);
+    else error.value = failure(e);
   } finally {
     loading.value = false;
   }

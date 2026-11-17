@@ -4,6 +4,9 @@
 # viewer of `campaign` restricted to Sessions/ and Resumes/, alice (jdr-mj)
 # owns it (dev/config/tenants.yaml). Clients: curl, the kura binary and, for
 # the pages, Chromium driven by Playwright (ui/e2e/reader.spec.ts).
+# KURA_DEV_LOG (default target/dev-server.log): the server's output, with its
+# object-storage reads logged, for observation 2:
+#   RUST_LOG=info,kura::object_read=debug task dev:run > target/dev-server.log 2>&1
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -15,7 +18,10 @@ work=$(mktemp -d)
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok: $*"; }
 sql() { podman exec kura-dev-postgres psql -U postgres -d kura -tAc "$1"; }
+log=${KURA_DEV_LOG:-$root/target/dev-server.log}
+moved_spec="$root/ui/e2e/reader-moved-$$.spec.ts"
 cleanup() {
+  rm -f "$moved_spec"
   sql "UPDATE device SET revoked_at = now() WHERE revoked_at IS NULL AND name LIKE 'reader-%-$$'" >/dev/null || true
   rm -rf "$work"
 }
@@ -23,6 +29,7 @@ trap cleanup EXIT
 
 curl -sf "$server/readyz" >/dev/null || fail "no server on $server: task dev:run"
 curl -sf "$server/app/frame-csp.txt" >/dev/null || fail "no console on $server/app: task ui:build"
+[ -f "$log" ] || fail "no server log at $log: start the server with RUST_LOG=info,kura::object_read=debug task dev:run > $log 2>&1, or set KURA_DEV_LOG"
 cargo build -q -p kura-cli
 declare -A tokens
 as() { local who=$1; shift; KURA_CLI_HOME="$work/$who" KURA_ACCESS_TOKEN="${tokens[$who]}" "$kura" "$@"; }
@@ -64,10 +71,22 @@ random=$(printf 'nobody %s' "$$" | sha256sum | cut -c1-64)
 a=$(api bob "/vaults/$vault/blobs/$blob"); ba=$(cat "$work/body")
 b=$(api bob "/vaults/$vault/blobs/$random"); bb=$(cat "$work/body")
 [ "$a" = 404 ] && [ "$ba" = "$bb" ] || fail "2: hidden $a $ba, random $b $bb"
-pass "2: bob lists no MJ/ entry, and its blob answers 404 exactly as a random hash"
+# The refused bytes were never fetched: bob asks for the hidden note's chunk,
+# then a visible one; only the visible one reaches object storage. The
+# visible read proves the log records reads, so the absence means something.
+chunk_of() { sql "SELECT encode(bc.chunk_hash, 'hex') FROM entry e JOIN revision r ON r.id = e.head_revision JOIN blob_chunk bc ON bc.vault_id = e.vault_id AND bc.blob_hash = r.blob_hash WHERE e.id = '$1' ORDER BY bc.position LIMIT 1"; }
+hidden_chunk=$(chunk_of "$hidden"); shown_chunk=$(chunk_of "$note")
+from=$(($(wc -l < "$log") + 1))
+[ "$(api bob "/vaults/$vault/chunks/$hidden_chunk")" = 404 ] || fail "2: the hidden chunk answered $(cat "$work/body")"
+[ "$(api bob "/vaults/$vault/chunks/$shown_chunk")" = 200 ] || fail "2: the shared chunk answered $(cat "$work/body")"
+for _ in $(seq 10); do tail -n +"$from" "$log" | grep -q "\"chunk\":\"$shown_chunk\"" && break; sleep 0.5; done
+tail -n +"$from" "$log" | grep -q "\"chunk\":\"$shown_chunk\"" || fail "2: $log records no object-storage read (RUST_LOG=info,kura::object_read=debug?)"
+! tail -n +"$from" "$log" | grep -q "\"chunk\":\"$hidden_chunk\"" || fail "2: the hidden chunk was read from object storage"
+pass "2: bob lists no MJ/ entry, its blob answers 404 exactly as a random hash, and its chunk is never read from object storage"
 
 # 3. Search: alice finds the hidden word once it is indexed; bob, never.
-hits() { api "$1" "/vaults/$vault/search" -H 'content-type: application/json' -d '{"query":"xyzzy"}' >/dev/null; jq '.results | length' "$work/body"; }
+# Earlier runs leave their own secret notes in the vault: count this run's.
+hits() { api "$1" "/vaults/$vault/search" -H 'content-type: application/json' -d '{"query":"xyzzy"}' >/dev/null; jq --arg p "MJ/secret-$$.md" '[.results[] | select(.path == $p)] | length' "$work/body"; }
 for _ in $(seq 60); do [ "$(hits alice)" = 1 ] && break; sleep 1; done
 [ "$(hits alice)" = 1 ] || fail "3: alice's search found $(cat "$work/body") after 60 s"
 [ "$(api bob "/vaults/$vault/search" -H 'content-type: application/json' -d '{"query":"xyzzy"}')" = 200 ] || fail "3: $(cat "$work/body")"
@@ -95,5 +114,32 @@ pass "1, 6: in Chromium bob reads Sessions/ and Resumes/; the hostile note ran n
 mv "$work/c/Sessions/s12-$$.md" "$work/c/MJ/s12-$$.md"
 as alice sync campaign >/dev/null
 [ "$(api bob "/vaults/$vault/entries/$note/revisions")" = 404 ] || fail "5: the moved note's history is still bob's"
-pass "5: a note moved under MJ/ is gone for bob, history included"
+# The page half after the move, at the note's address under MJ/ (the same
+# entry if the move kept it) and at its old one, in a fresh browser session.
+moved=$(entry "MJ/s12-$$.md")
+[ -n "$moved" ] || fail "5: the move did not reach the server"
+cat > "$moved_spec" <<'TS'
+import { expect, test } from "@playwright/test";
+
+import { env, signOut } from "./helpers";
+
+test("a note moved out of the shared folders says it does not exist", async ({ page }) => {
+  await page.addInitScript((token) => {
+    if (!sessionStorage.getItem("kura:refresh-token"))
+      sessionStorage.setItem("kura:refresh-token", token);
+  }, env("KURA_E2E_REFRESH"));
+  for (const entry of [env("KURA_E2E_MOVED"), env("KURA_E2E_NOTE")]) {
+    await page.goto(`/app/vaults/${env("KURA_E2E_VAULT")}/notes/${entry}`);
+    await expect(page.locator("[data-test=not-found]")).toContainText(
+      "does not exist, or is not shared with you",
+    );
+  }
+  await signOut(page);
+});
+TS
+refresh=$(bash "$root/tests/heavy/console.sh" --refresh-token bob)
+[ -n "$refresh" ] || fail "5: no kura-web refresh token for bob"
+(cd "$root/ui" && KURA_E2E_REFRESH=$refresh KURA_E2E_VAULT=$vault KURA_E2E_NOTE=$note KURA_E2E_MOVED=$moved \
+  KURA_DEV_SERVER=$server pnpm exec playwright test "e2e/reader-moved-$$.spec.ts" --reporter=line) || fail "5: the moved note's page is not the not-found page"
+pass "5: a note moved under MJ/ is gone for bob, history included, and its page says it does not exist"
 echo "reader.sh: RFC 0005 §6.P holds on $server"

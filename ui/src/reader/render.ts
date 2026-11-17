@@ -7,8 +7,11 @@
  */
 
 import DOMPurify from "dompurify";
+import type {
+  MarkdownIt as MarkdownItInstance,
+  StateInline,
+} from "markdown-it";
 import MarkdownIt from "markdown-it";
-import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 
 import type { EntryState } from "@/api/generated/types.gen";
 import { BRIDGE } from "./bridge";
@@ -24,7 +27,7 @@ export const MAX_IMAGE = 2 << 20;
 const IMAGE = /\.(png|jpe?g|gif|webp|avif|svg)$/i;
 
 /** `[[target|label]]` and `![[target]]`, as one inline token. */
-function wikilinks(md: MarkdownIt): void {
+function wikilinks(md: MarkdownItInstance): void {
   md.inline.ruler.before(
     "link",
     "wikilink",
@@ -80,18 +83,18 @@ export function renderNote(
   };
 
   md.renderer.rules.wikilink = (tokens, i) => {
-    const meta = tokens[i]?.meta as
-      | { target: string; label: string; embed: boolean }
-      | undefined;
-    if (!meta) return "";
-    const { target, label, embed } = meta;
+    const meta = tokens[i]?.meta;
+    const target = meta?.target;
+    const label = meta?.label;
+    if (typeof target !== "string" || typeof label !== "string") return "";
+    const embed = meta?.embed === true;
     const e = find(target);
     if (!e) return hidden(label);
     return embed && IMAGE.test(e.path) ? image(e, label) : internal(e, label);
   };
   md.renderer.rules.image = (tokens, i) => {
     const token = tokens[i];
-    const src = token?.attrGet("src") ?? "";
+    const src = String(token?.attrGet("src") ?? "");
     const alt = token?.content ?? "";
     // A remote image is never loaded: opening a note calls no third party (T7).
     if (/^[a-z][a-z0-9+.-]*:/i.test(src))
@@ -103,7 +106,7 @@ export function renderNote(
     md.renderer.rules.link_open ?? ((t, i, o, _e, s) => s.renderToken(t, i, o));
   md.renderer.rules.link_open = (tokens, i, options, env, self) => {
     const token = tokens[i];
-    const href = token?.attrGet("href") ?? "";
+    const href = String(token?.attrGet("href") ?? "");
     if (token && !/^(https?:|mailto:)/i.test(href)) {
       const e = find(href);
       token.attrSet("href", e ? `${ENTRY_LINK}${e.entry}` : "#");

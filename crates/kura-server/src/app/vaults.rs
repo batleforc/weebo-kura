@@ -37,6 +37,10 @@ pub struct Vault {
     /// Send back with `changes?since=` (§6.3).
     pub epoch: Uuid,
     pub head_seq: u64,
+    /// When `headSeq` was written, RFC 3339 (RFC 0005 §4.5, "updated");
+    /// absent before the first commit or once that revision is purged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
     /// The Obsidian configuration categories that sync (§6.8); empty: none.
     pub config_sync: Vec<String>,
     /// For a restricted viewer: the folders they read (RFC 0005 §4.2);
@@ -86,6 +90,7 @@ impl From<&VaultAccess> for Vault {
                 .filter_map(|v| v.as_str().map(str::to_owned))
                 .collect(),
             head_seq: u64::try_from(a.head_seq).unwrap_or_default(),
+            updated_at: None,
             scopes: None,
             groups: None,
             token_name: None,
@@ -125,6 +130,48 @@ pub struct BindingView {
     /// The folders a restricted viewer reads; absent: the whole vault.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paths: Option<Vec<String>>,
+    /// RFC 0005 §4.3: folders listed, but the tenant maps this group to
+    /// `owner` or `admin`, so the whole vault is open to it anyway.
+    #[serde(default)]
+    pub widened: bool,
+    /// RFC 0005 §4.3: the bound folders under which no note exists yet
+    /// (filled by the listing only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub empty_folders: Vec<String>,
+}
+
+/// RFC 0005 §4.3: a restricted claim binding whose value the tenant maps to
+/// `owner` or `admin` (the `RestrictedBindingWidened` rule, for every source).
+fn widened(
+    snap: &Snapshot,
+    access: &VaultAccess,
+    subject: &str,
+    paths: Option<&Vec<String>>,
+) -> bool {
+    let Some(value) = subject.strip_prefix("claim:") else {
+        return false;
+    };
+    paths.is_some()
+        && snap
+            .config
+            .tenants
+            .get(access.tenant_slug.as_str())
+            .and_then(|t| t.doc.spec.claim_mappings.as_ref())
+            .is_some_and(|m| {
+                m.roles
+                    .owner
+                    .iter()
+                    .chain(&m.roles.admin)
+                    .any(|c| c == value)
+            })
+}
+
+/// The `LIKE` pattern of one bound folder, as the read routes apply it.
+fn folder_pattern(folder: &str) -> Option<String> {
+    authz::PathScope::from_rules([(folder, false)])?
+        .like_patterns()
+        .into_iter()
+        .next()
 }
 
 fn snapshot(state: &SharedState) -> Result<std::sync::Arc<Snapshot>, ApiError> {
@@ -171,7 +218,9 @@ pub async fn list_vaults(
     let mut out = Vec::new();
     // Every enabled tenant: a binding may open a vault without any tenant role.
     for &tenant in snap.tenant_ids.values() {
-        for a in authz::vault_accesses_in(&state.db, &snap, p, tenant, MAX_LISTED).await? {
+        let accesses = authz::vault_accesses_in(&state.db, &snap, p, tenant, MAX_LISTED).await?;
+        let updated = updated_at(&state.db, tenant, &p.sub, &accesses).await?;
+        for a in accesses {
             let binds = a.role == VaultRole::Manager
                 || a.tenant_role.is_some_and(|r| r >= TenantRole::Admin);
             let groups = binds
@@ -197,11 +246,51 @@ pub async fn list_vaults(
                 .flatten();
             out.push(Vault {
                 groups,
+                updated_at: updated.get(&a.vault).cloned(),
                 ..Vault::from(&a)
             });
         }
     }
     Ok(Json(out))
+}
+
+/// When each vault's head revision was written, in one query per tenant.
+/// A restricted viewer already sees `headSeq` move (§4.2); the time of
+/// that move says no more about the hidden folders.
+async fn updated_at(
+    pool: &sqlx::PgPool,
+    tenant: Uuid,
+    sub: &str,
+    accesses: &[VaultAccess],
+) -> Result<std::collections::HashMap<Uuid, String>, ApiError> {
+    use sqlx::Row as _;
+    let (ids, seqs): (Vec<Uuid>, Vec<i64>) = accesses
+        .iter()
+        .filter(|a| a.head_seq > 0)
+        .map(|a| (a.vault, a.head_seq))
+        .unzip();
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let mut tx = db::begin_tenant(pool, tenant, Some(sub)).await?;
+    let rows = sqlx::query(
+        "SELECT r.vault_id, r.created_at FROM revision r
+           JOIN unnest($1::uuid[], $2::bigint[]) AS h(id, seq) ON r.vault_id = h.id AND r.seq = h.seq",
+    )
+    .bind(&ids)
+    .bind(&seqs)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    rows.iter()
+        .map(|r| {
+            let at: time::OffsetDateTime = r.try_get("created_at")?;
+            let at = at
+                .format(&time::format_description::well_known::Rfc3339)
+                .map_err(|e| ApiError::Unavailable(e.to_string()))?;
+            Ok((r.try_get("vault_id")?, at))
+        })
+        .collect()
 }
 
 /// Create an API-managed vault (tenant admin).
@@ -380,7 +469,7 @@ pub async fn list_bindings(
     caller: DeviceCaller,
     Path(v): Path<Uuid>,
 ) -> Result<Json<Vec<BindingView>>, ApiError> {
-    let (_, access) = manageable(&state, &caller, v).await?;
+    let (snap, access) = manageable(&state, &caller, v).await?;
     let can_manage = access.role == VaultRole::Manager
         || access.tenant_role.is_some_and(|r| r >= TenantRole::Admin);
     if !can_manage {
@@ -397,14 +486,47 @@ pub async fn list_bindings(
     .bind(v)
     .fetch_all(&mut *tx)
     .await?;
+    // RFC 0005 §4.3 "0 notes": the bound folders' patterns that match no
+    // note, in one query; EXISTS stops at the first note found.
+    let mut patterns: Vec<String> = rows
+        .iter()
+        .filter_map(|r| r.4.as_ref())
+        .flatten()
+        .filter_map(|f| folder_pattern(f))
+        .collect();
+    patterns.sort_unstable();
+    patterns.dedup();
+    let empty: Vec<String> = if patterns.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_scalar(
+            "SELECT p FROM unnest($2::text[]) AS p WHERE NOT EXISTS (SELECT 1 FROM entry e
+             WHERE e.vault_id = $1 AND e.namespace = 'notes' AND NOT e.deleted AND e.path_key LIKE p)",
+        )
+        .bind(v)
+        .bind(&patterns)
+        .fetch_all(&mut *tx)
+        .await?
+    };
     tx.commit().await?;
     Ok(Json(
         rows.into_iter()
-            .map(|(kind, subject, role, managed_by, paths)| BindingView {
-                subject: format!("{kind}:{subject}"),
-                role,
-                managed_by,
-                paths,
+            .map(|(kind, subject, role, managed_by, paths)| {
+                let subject = format!("{kind}:{subject}");
+                let empty_folders = paths
+                    .iter()
+                    .flatten()
+                    .filter(|f| folder_pattern(f).is_some_and(|p| empty.contains(&p)))
+                    .cloned()
+                    .collect();
+                BindingView {
+                    widened: widened(&snap, &access, &subject, paths.as_ref()),
+                    subject,
+                    role,
+                    managed_by,
+                    paths,
+                    empty_folders,
+                }
             })
             .collect(),
     ))
@@ -482,12 +604,14 @@ pub async fn put_binding(
     )
     .await?;
     tx.commit().await?;
-    tracing::info!(target: "audit", event = "binding_changed", sub = %caller.caller.principal.sub, vault = %v, binding = %b, role = role_name(body.role), folders = body.paths.as_ref().map_or(0, Vec::len));
+    tracing::info!(target: "audit", event = "binding_changed", sub = %caller.caller.principal.sub, vault = %v, binding = %b, role = role_name(body.role), restricted = body.paths.is_some(), folders = body.paths.as_ref().map_or(0, Vec::len));
     Ok(Json(BindingView {
+        widened: widened(&snap, &access, &b, body.paths.as_ref()),
         subject: b,
         role: role_name(body.role).into(),
         managed_by: "api".into(),
         paths: body.paths,
+        empty_folders: Vec::new(),
     }))
 }
 

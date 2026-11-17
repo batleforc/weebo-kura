@@ -27,13 +27,14 @@
   },
   "vaults": {
     "title": "Mes coffres",
-    "empty": "Aucun coffre ne vous est encore ouvert.",
+    "empty": "Aucun coffre ne vous est encore ouvert. Demandez à un gestionnaire du coffre de vous ajouter, puis rechargez.",
     "failed": "Vos coffres n'ont pas pu être chargés.",
     "name": "Nom",
     "tenant": "Tenant",
     "role": "Votre rôle",
     "source": "Déclaré dans",
-    "reach": "Portée"
+    "reach": "Portée",
+    "updated": "Modifié"
   },
   "devices": {
     "title": "Mes appareils",
@@ -91,7 +92,11 @@
     "reach": "{n} dossiers",
     "whole": "coffre entier",
     "open": "Ouvrir",
-    "byKey": "clé {name}"
+    "byKey": "clé {name}",
+    "lastEdited": "Modifiée le {date}",
+    "lastEditedBy": "Modifiée le {date} par {who}",
+    "cut": "Ce coffre compte plus de {n} entrées : les dossiers n'affichent que les {n} premières. La recherche trouve les autres.",
+    "unavailable": "Kura ne répond pas (503). Nouvel essai dans 30 s…"
   },
   "manage": {
     "title": "Gérer",
@@ -129,7 +134,10 @@
     "addAction": "Ajouter",
     "who": "Qui",
     "folders": "Dossiers (lecteur seulement)",
-    "foldersHint": "Sessions/, Resumes/ (vide : coffre entier)"
+    "foldersHint": "Sessions/, Resumes/ (vide : coffre entier)",
+    "noNotes": "0 note",
+    "widened": "effectif : coffre entier",
+    "widenedWhy": "le tenant associe ce groupe à owner ou admin"
   },
   "keys": {
     "created": "Clé créée",
@@ -202,6 +210,17 @@
     "time": "Heure",
     "event": "Événement",
     "attempt": "Essai",
-    "result": "Résultat"
+    "result": "Résultat",
+    "failed": "échec : {result}",
+    "pending": "en attente ({result})",
+    "edit": "Modifier",
+    "editTitle": "Modifier la règle {name}",
+    "save": "Enregistrer",
+    "unchanged": "vide : inchangée ({host})",
+    "keptAuthorization": "vide : inchangé",
+    "removeAuthorization": "Retirer l'Authorization",
+    "rotate": "Changer le secret",
+    "rotated": "Nouveau secret de signature",
+    "confirmRotate": "Changer le secret de signature de {name} ? L'ancien cesse aussitôt : le receveur refuse les livraisons jusqu'à ce qu'il vérifie avec le nouveau."
   }
 }

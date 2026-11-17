@@ -14,6 +14,15 @@ export function problemType(error: unknown): string | undefined {
     : undefined;
 }
 
+/** The problem's `detail` (English, from the server); `undefined` without one. */
+export function detailOf(error: unknown): string | undefined {
+  if (!axios.isAxiosError(error)) return undefined;
+  const detail: unknown = (
+    error.response?.data as { detail?: unknown } | undefined
+  )?.detail;
+  return typeof detail === "string" && detail !== "" ? detail : undefined;
+}
+
 const KNOWN = new Set([
   "insufficient_role",
   "not_found",
@@ -30,10 +39,10 @@ export function messageOf(error: unknown): string {
   const type = problemType(error);
   if (type && KNOWN.has(type)) return t(`problem.${type}`);
   if (axios.isAxiosError(error)) {
-    const detail = (error.response?.data as { detail?: unknown } | undefined)
-      ?.detail;
-    if (typeof detail === "string") return detail;
-    return t("problem.status", { status: error.response?.status ?? 0 });
+    return (
+      detailOf(error) ??
+      t("problem.status", { status: error.response?.status ?? 0 })
+    );
   }
   return error instanceof Error ? error.message : t("problem.unexpected");
 }

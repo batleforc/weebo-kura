@@ -152,6 +152,7 @@ async fn connect(
         ));
     }
     if let Some(ui) = config.ui.as_ref().filter(|u| u.enabled) {
+        app::ui::check_dir(&ui.dir).map_err(anyhow::Error::msg)?;
         let settings = app::ui::UiSettings::new(
             ui.dir.clone(),
             ui.oidc.client_id.clone(),
@@ -256,6 +257,12 @@ async fn run(config_path: PathBuf) -> anyhow::Result<()> {
         .with_context(|| format!("{CONFIG_DIR_ENV} is not set"))?;
     let persisted = state.verifier.keys.load_persisted().await?;
     tracing::info!(keys = persisted, "persisted signing keys loaded");
+    if !config.notifications.enabled
+        && let Err(e) = kura_server::notifier::warn_rules_while_off(&state.db).await
+    {
+        // Only a warning is lost; the server works the same.
+        tracing::warn!(error = %e, "stored notification rules not counted");
+    }
     let state = std::sync::Arc::new(state);
     let shutdown = CancellationToken::new();
     tokio::spawn(stop_on_signal(shutdown.clone()));

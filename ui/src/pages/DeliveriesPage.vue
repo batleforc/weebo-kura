@@ -8,6 +8,7 @@ import { withDevice } from "@/api/client";
 import { listDeliveries } from "@/api/generated/sdk.gen";
 import type { DeliveryView } from "@/api/generated/types.gen";
 import AsyncState from "@/components/ui/AsyncState.vue";
+import ForbiddenState from "@/components/ui/ForbiddenState.vue";
 import { useLoad } from "@/manage/useLoad";
 
 const { t } = useI18n();
@@ -18,6 +19,8 @@ const {
   data: deliveries,
   loading,
   error,
+  forbidden,
+  forbiddenDetail,
   load,
 } = useLoad<DeliveryView[]>(
   () =>
@@ -40,7 +43,8 @@ onMounted(load);
   <section>
     <p class="mb-3"><RouterLink :to="`/manage/tenants/${tenant}/notifications`" class="underline">{{ t("notifications.back") }}</RouterLink></p>
     <h1 class="mb-4">{{ t("notifications.deliveriesTitle") }}</h1>
-    <AsyncState :loading="loading" :error="error" :empty="deliveries.length === 0" :empty-message="t('notifications.noDelivery')" :title="t('manage.failed')" @retry="load">
+    <ForbiddenState v-if="forbidden" :detail="forbiddenDetail" />
+    <AsyncState v-else :loading="loading" :error="error" :empty="deliveries.length === 0" :empty-message="t('notifications.noDelivery')" :title="t('manage.failed')" @retry="load">
       <table class="w-full text-left">
         <thead>
           <tr>
@@ -55,7 +59,7 @@ onMounted(load);
             <td>{{ d.at.slice(0, 19).replace("T", " ") }}</td>
             <td>{{ d.event }}</td>
             <td>{{ d.attempts }}</td>
-            <td>{{ d.status === "failed" ? `failed: ${d.result ?? ""}` : d.status === "pending" ? `pending (${d.result ?? ""})` : d.result }}</td>
+            <td>{{ d.status === "failed" || d.status === "pending" ? t(`notifications.${d.status}`, { result: d.result ?? "" }) : d.result }}</td>
           </tr>
         </tbody>
       </table>

@@ -247,12 +247,7 @@ async fn vault_accesses(
     let mut out = Vec::new();
     for row in &rows {
         let vault: Uuid = row.try_get("id")?;
-        let mut role = tenant_role.and_then(tenant_vault_role);
-        // RFC 0005 §5.1, the widest grant wins: the tenant role or one
-        // binding without folders opens the whole vault; otherwise the
-        // union of the folders of the matching restricted bindings.
-        let mut whole = role.is_some();
-        let mut folders: Vec<String> = Vec::new();
+        let mut matching = Vec::new();
         for b in &bindings {
             let (v, kind, subject, r): (Uuid, String, String, String) = (
                 b.try_get("vault_id")?,
@@ -267,24 +262,17 @@ async fn vault_accesses(
                     _ => false,
                 };
             if matches {
-                role = role.max(parse_role(&r));
-                match b.try_get::<Option<Vec<String>>, _>("paths")? {
-                    None => whole = true,
-                    Some(p) => folders.extend(p),
-                }
+                matching.push((
+                    parse_role(&r),
+                    b.try_get::<Option<Vec<String>>, _>("paths")?,
+                ));
             }
         }
-        let Some(role) = role else { continue };
-        let paths = (!whole).then(|| {
-            let mut seen = std::collections::HashSet::new();
-            folders.retain(|f| seen.insert(fold(f)));
-            folders
-        });
-        // A restricted binding is a viewer's (the database's CHECK); a role
-        // above viewer without the whole vault would be a broken row: refused.
+        let Some((role, paths)) = settle(tenant_role.and_then(tenant_vault_role), matching) else {
+            continue;
+        };
         let scope = match &paths {
             None => PathScope::whole(),
-            Some(_) if role > VaultRole::Viewer => continue,
             Some(f) => {
                 PathScope::from_rules(f.iter().map(|p| (p.as_str(), false))).ok_or_else(|| {
                     ApiError::Unavailable("a restricted binding with no folder".into())
@@ -311,6 +299,38 @@ async fn vault_accesses(
         });
     }
     Ok(out)
+}
+
+/// RFC 0005 §5.1, the widest grant wins: the tenant role's grant or one
+/// matching binding without folders opens the whole vault (`None`); otherwise
+/// the union of the folders of the matching restricted bindings, deduplicated
+/// folded. `None` overall: no grant, or a broken row (folders above viewer).
+fn settle(
+    tenant: Option<VaultRole>,
+    matching: Vec<(Option<VaultRole>, Option<Vec<String>>)>,
+) -> Option<(VaultRole, Option<Vec<String>>)> {
+    let mut role = tenant;
+    let mut whole = role.is_some();
+    let mut folders: Vec<String> = Vec::new();
+    for (r, paths) in matching {
+        role = role.max(r);
+        match paths {
+            None => whole = true,
+            Some(p) => folders.extend(p),
+        }
+    }
+    let role = role?;
+    let paths = (!whole).then(|| {
+        let mut seen = std::collections::HashSet::new();
+        folders.retain(|f| seen.insert(fold(f)));
+        folders
+    });
+    // A restricted binding is a viewer's (the database's CHECK); a role
+    // above viewer without the whole vault would be a broken row: refused.
+    if paths.is_some() && role > VaultRole::Viewer {
+        return None;
+    }
+    Some((role, paths))
 }
 
 /// `authz::require_role`: checked on the vault before any work. A vault the
@@ -536,4 +556,82 @@ pub async fn key_access(
         paths: None,
         scope: PathScope::whole(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn folders(f: &[&str]) -> Option<Vec<String>> {
+        Some(f.iter().map(|s| (*s).to_owned()).collect())
+    }
+
+    const V: Option<VaultRole> = Some(VaultRole::Viewer);
+
+    #[test]
+    fn no_grant_is_no_access() {
+        assert_eq!(settle(None, vec![]), None);
+    }
+
+    #[test]
+    fn a_tenant_role_grant_overrides_folders() {
+        assert_eq!(
+            settle(V, vec![(V, folders(&["Sessions/"]))]),
+            Some((VaultRole::Viewer, None))
+        );
+    }
+
+    #[test]
+    fn a_binding_without_folders_overrides_folders() {
+        // A claim binding restricted, a user binding unrestricted, either order.
+        for m in [
+            vec![(V, folders(&["Sessions/"])), (V, None)],
+            vec![(V, None), (V, folders(&["Sessions/"]))],
+        ] {
+            assert_eq!(settle(None, m), Some((VaultRole::Viewer, None)));
+        }
+    }
+
+    #[test]
+    fn restricted_bindings_union_their_folders_once() {
+        let got = settle(
+            None,
+            vec![
+                (V, folders(&["Sessions/", "Resumes/"])),
+                (V, folders(&["sessions/", "Cartes/"])),
+            ],
+        );
+        assert_eq!(
+            got,
+            Some((
+                VaultRole::Viewer,
+                folders(&["Sessions/", "Resumes/", "Cartes/"])
+            ))
+        );
+    }
+
+    #[test]
+    fn the_highest_role_wins_with_the_whole_vault() {
+        assert_eq!(
+            settle(
+                None,
+                vec![
+                    (V, folders(&["Sessions/"])),
+                    (Some(VaultRole::Editor), None)
+                ]
+            ),
+            Some((VaultRole::Editor, None))
+        );
+    }
+
+    #[test]
+    fn folders_above_viewer_are_a_broken_row() {
+        assert_eq!(
+            settle(
+                None,
+                vec![(Some(VaultRole::Editor), folders(&["Sessions/"]))]
+            ),
+            None
+        );
+    }
 }

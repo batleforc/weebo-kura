@@ -1,11 +1,12 @@
 import { mount } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { EntryState } from "@/api/generated/types.gen";
 import { BRIDGE, bridgeHash } from "./bridge";
 import { parseRecords } from "./content";
 import NoteFrame from "./NoteFrame.vue";
-import { ENTRY_LINK, frameDocument, renderNote } from "./render";
+import { ENTRY_LINK, frameDocument, MAX_IMAGE, renderNote } from "./render";
+import { ago, day } from "./time";
 import { buildTree, noteName, resolver } from "./tree";
 
 const entry = (path: string, id = path, size = 10): EntryState => ({
@@ -108,6 +109,33 @@ describe("render", () => {
       async () => null,
     );
     expect(unreadable).not.toContain("<img");
+  });
+});
+
+describe("caps (T9)", () => {
+  it("never fetches an image over MAX_IMAGE, and shows its name instead", async () => {
+    const big = [entry("Sessions/huge.png", "huge", MAX_IMAGE + 1)];
+    const load = vi.fn(async () => new Uint8Array([1]));
+    const doc = await frameDocument(
+      renderNote("![[huge.png|the map]]", big),
+      load,
+    );
+    expect(load).not.toHaveBeenCalled();
+    expect(doc).not.toContain("<img");
+    expect(doc).toContain("the map");
+    const atCap = [entry("Sessions/huge.png", "huge", MAX_IMAGE)];
+    await frameDocument(renderNote("![[huge.png]]", atCap), load);
+    expect(load).toHaveBeenCalledOnce();
+  });
+});
+
+describe("time", () => {
+  it("says how long ago, and a calendar day", () => {
+    const now = Date.parse("2026-11-17T12:00:00Z");
+    expect(ago("2026-11-17T10:00:00Z", "en", now)).toBe("2 hours ago");
+    expect(ago("2026-11-17T11:59:50Z", "en", now)).toBe("now");
+    expect(ago("2026-11-14T12:00:00Z", "fr", now)).toBe("il y a 3 jours");
+    expect(day("2026-11-08T21:14:00Z", "en")).toContain("2026");
   });
 });
 

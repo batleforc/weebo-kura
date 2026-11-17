@@ -87,8 +87,8 @@ async fn bindings_need_manager() {
     assert_eq!(
         list,
         json!([
-            { "subject": "claim:maxime-members", "role": "editor", "managedBy": "config" },
-            { "subject": "claim:maxime-owners", "role": "viewer", "managedBy": "api" },
+            { "subject": "claim:maxime-members", "role": "editor", "managedBy": "config", "widened": false },
+            { "subject": "claim:maxime-owners", "role": "viewer", "managedBy": "api", "widened": false },
         ])
     );
     let member = e.key.token("u1", "s2", &["maxime-members"]);

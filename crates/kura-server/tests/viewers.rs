@@ -248,6 +248,30 @@ async fn a_restricted_viewer_reads_its_folders_only() {
     );
     assert!(knowledge.get("groups").is_none());
 
+    // §4.3 "0 notes": the bindings page names a bound folder under which no
+    // note exists, folded as the read routes compare ("resumes/" has one).
+    let (st, _) = e
+        .call(
+            "PUT",
+            &format!("/v1/vaults/{v}/bindings/user:bob"),
+            &gm.token,
+            Some(&gm.device),
+            Some(json!({ "role": "viewer", "paths": ["Cartes/", "Sessions/"] })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, list) = gm.get(&e, &format!("/v1/vaults/{v}/bindings")).await;
+    let of = |s: &str| {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["subject"] == s)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(of("user:bob")["emptyFolders"], json!(["Cartes/"]));
+    assert!(of("claim:maxime-players").get("emptyFolders").is_none());
+
     // The widest grant wins: a player who is also a member edits everything.
     let both = who(&e, "alice", &["maxime-players", "maxime-members"]).await;
     let (_, vaults) = both.get(&e, "/v1/vaults").await;
@@ -366,6 +390,16 @@ async fn folders_are_a_viewers_only() {
     }
     let (st, b) = put(json!({ "role": "viewer", "paths": ["Notes/"] })).await;
     assert_eq!((st, &b["paths"]), (StatusCode::OK, &json!(["Notes/"])));
+    // §4.3: the tenant maps maxime-owners to owner, so the folders widen.
+    assert_eq!(b["widened"], true, "{b}");
+    let (_, list) = admin.get(&e, &format!("/v1/vaults/{v}/bindings")).await;
+    let owners = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["subject"] == "claim:maxime-owners")
+        .unwrap();
+    assert_eq!(owners["widened"], true, "{owners}");
     let (st, b) = put(json!({ "role": "editor" })).await;
     assert_eq!(
         (st, b.get("paths")),
@@ -380,6 +414,7 @@ async fn folders_are_a_viewers_only() {
         .find(|b| b["subject"] == "claim:maxime-players")
         .unwrap();
     assert_eq!(players["paths"], json!(["Sessions/", "Resumes/"]));
+    assert_eq!(players["widened"], false, "{players}");
 
     // §4.3's warning: folders on a claim the tenant maps to admin.
     apply(
@@ -481,4 +516,55 @@ async fn no_route_shows_a_restricted_viewer_a_hidden_note() {
     let (st, b) = bob.get(&e, &format!("/v1/vaults/{v}/chunks/{chunk}")).await;
     assert!(st == StatusCode::NOT_FOUND && !leaks(b.to_string().as_bytes()));
     assert!(walked >= 15, "walked {walked} routes");
+}
+
+/// T10, in process: every route the reader calls answers an anonymous
+/// request `401 invalid_token`, before any vault lookup.
+#[tokio::test]
+async fn anonymous_is_401() {
+    let Some(e) = common::app::env(module_path!()).await else {
+        return;
+    };
+    let v = vault_id(&e, "knowledge").await;
+    let (h, entry) = (ChunkHash::of(b"anything"), Uuid::now_v7());
+    for (method, uri, body) in [
+        ("GET", "/v1/vaults".to_owned(), None),
+        ("GET", format!("/v1/vaults/{v}/entries"), None),
+        ("GET", format!("/v1/vaults/{v}/blobs/{h}"), None),
+        (
+            "GET",
+            format!("/v1/vaults/{v}/entries/{entry}/revisions"),
+            None,
+        ),
+        (
+            "POST",
+            format!("/v1/vaults/{v}/chunks/batch"),
+            Some(json!({ "chunks": [h.to_string()] })),
+        ),
+        (
+            "POST",
+            format!("/v1/vaults/{v}/search"),
+            Some(json!({ "query": "xyzzy" })),
+        ),
+    ] {
+        let mut req = axum::http::Request::builder().method(method).uri(&uri);
+        let req = match body {
+            Some(b) => {
+                req = req.header("content-type", "application/json");
+                req.body(axum::body::Body::from(b.to_string()))
+            }
+            None => req.body(axum::body::Body::empty()),
+        };
+        let r = tower::ServiceExt::oneshot(kura_server::app::app(e.state.clone()), req.unwrap())
+            .await
+            .unwrap();
+        let st = r.status();
+        let bytes = axum::body::to_bytes(r.into_body(), 1 << 16).await.unwrap();
+        let b: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            (st, problem(&b)),
+            (StatusCode::UNAUTHORIZED, "/v1/problems/invalid_token"),
+            "{method} {uri}"
+        );
+    }
 }

@@ -6,6 +6,7 @@ import vue from "@vitejs/plugin-vue";
 import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 
+import { buildChecks } from "./build-checks.ts";
 import { BRIDGE } from "./src/reader/bridge.ts";
 
 /**
@@ -32,12 +33,13 @@ function frameHash(): Plugin {
 // Served by kura-server under /app (RFC 0003 §6.1), same origin as the API.
 export default defineConfig({
   base: "/app/",
-  plugins: [vue(), tailwindcss(), frameHash()],
+  plugins: [vue(), tailwindcss(), frameHash(), buildChecks()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   server: {
     // `pnpm dev` against `task dev:run`: the API and config.json come from it.
     proxy: {
-      "/v1": "http://127.0.0.1:58080",
+      // `ws`: the reader's event socket (RFC 0005 §7.5).
+      "/v1": { target: "http://127.0.0.1:58080", ws: true },
       "/app/config.json": "http://127.0.0.1:58080",
     },
   },

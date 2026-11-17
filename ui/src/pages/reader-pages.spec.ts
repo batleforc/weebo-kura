@@ -24,12 +24,27 @@ vi.mock("@/api/generated/sdk.gen", () => ({
   registerDevice: vi.fn(async () => ({ data: { id: "dev" } })),
 }));
 
+/** The event socket, driven by the tests (its own spec is reader/events.spec.ts). */
+const socket = vi.hoisted(() => ({
+  notice: undefined as (() => void) | undefined,
+  close: vi.fn(),
+}));
+vi.mock("@/reader/events", () => ({
+  watchVault: vi.fn((_v: string, notice: () => void) => {
+    socket.notice = notice;
+    return { close: socket.close };
+  }),
+}));
+
 import * as sdk from "@/api/generated/sdk.gen";
 import { useSession } from "@/auth/session";
 import { fileBytes } from "@/reader/content";
+import { MAX_RENDER } from "@/reader/render";
+import { MAX_PAGES } from "@/reader/vault";
 import BrowsePage from "./BrowsePage.vue";
 import HistoryPage from "./HistoryPage.vue";
 import SearchPage from "./SearchPage.vue";
+import VaultsPage from "./VaultsPage.vue";
 
 const entry = (path: string, id: string, blob: string | null = `b-${id}`) => ({
   entry: id,
@@ -75,12 +90,10 @@ function contentServer(files: Record<string, string>) {
           parts.push(
             ...(h.match(/../g) ?? []).map((x) => Number.parseInt(x, 16)),
             data ? 0 : 1,
-            0,
-            0,
-            0,
-            data?.length ?? 0,
-            ...(data ?? []),
+            ...[24, 16, 8, 0].map((s) => ((data?.length ?? 0) >>> s) & 255),
           );
+          // Not spread: a 1 MiB argument list overflows the stack.
+          for (const b of data ?? []) parts.push(b);
         }
         return new Response(new Uint8Array(parts));
       }
@@ -220,7 +233,186 @@ describe("browse and read", () => {
   });
 });
 
+describe("reader gaps of RFC 0005 §18", () => {
+  it("says when the tree is cut at MAX_PAGES (T9)", async () => {
+    vi.mocked(sdk.getEntries).mockResolvedValue({
+      data: {
+        items: [entry("Sessions/s12.md", "s12")],
+        epoch: "e",
+        headSeq: 1,
+        next: "more",
+      },
+    } as never);
+    const { wrapper } = await mountAt(BrowsePage, "/vaults/v1", "/vaults/:v");
+    expect(sdk.getEntries).toHaveBeenCalledTimes(MAX_PAGES);
+    expect(wrapper.find("[data-test=cut]").text()).toContain(
+      "more than 50,000 entries",
+    );
+  });
+
+  it("offers a note over MAX_RENDER as a download, unrendered (T9)", async () => {
+    vi.mocked(sdk.getEntries).mockResolvedValue({
+      data: {
+        items: [entry("Sessions/big.md", "big")],
+        epoch: "e",
+        headSeq: 1,
+      },
+    } as never);
+    contentServer({ "b-big": "x".repeat(MAX_RENDER + 1) });
+    vi.stubGlobal(
+      "URL",
+      Object.assign(URL, {
+        createObjectURL: () => "blob:big",
+        revokeObjectURL: () => undefined,
+      }),
+    );
+    const { wrapper } = await mountAt(
+      BrowsePage,
+      "/vaults/v1/notes/big",
+      "/vaults/:v/notes/:entry",
+    );
+    expect(wrapper.find("a[download]").attributes("href")).toBe("blob:big");
+    expect(wrapper.find("[data-test=note-frame]").exists()).toBe(false);
+  });
+
+  it("says who edited the note last, and refreshes on a notice, closing the socket on leaving", async () => {
+    vi.mocked(sdk.getEntries).mockResolvedValue({
+      data: {
+        items: [entry("Sessions/s12.md", "s12")],
+        epoch: "e",
+        headSeq: 1,
+      },
+    } as never);
+    vi.mocked(sdk.getRevisions).mockResolvedValue({
+      data: {
+        items: [
+          {
+            revision: "r-s12",
+            path: "Sessions/s12.md",
+            createdAt: "2026-11-08T21:14:00Z",
+            deleted: false,
+            size: 5,
+            seq: 1,
+            author: { kind: "key", name: "discord-recap" },
+          },
+        ],
+      },
+    } as never);
+    contentServer({ "b-s12": "first", "b-s12b": "second" });
+    const { wrapper } = await mountAt(
+      BrowsePage,
+      "/vaults/v1/notes/s12",
+      "/vaults/:v/notes/:entry",
+    );
+    await flushPromises();
+    expect(wrapper.find("[data-test=last-edit]").text()).toContain(
+      "Last edited Nov 8, 2026 by key discord-recap",
+    );
+    vi.mocked(sdk.getEntries).mockResolvedValue({
+      data: {
+        items: [
+          { ...entry("Sessions/s12.md", "s12", "b-s12b"), revision: "r2" },
+        ],
+        epoch: "e",
+        headSeq: 2,
+      },
+    } as never);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      socket.notice?.();
+      socket.notice?.();
+      await vi.advanceTimersByTimeAsync(1000);
+    } finally {
+      vi.useRealTimers();
+    }
+    await flushPromises();
+    await flushPromises();
+    // Two notices, one refresh: listVaults once on mount, once now.
+    expect(sdk.listVaults).toHaveBeenCalledTimes(2);
+    expect(
+      wrapper.find("[data-test=note-frame]").attributes("srcdoc"),
+    ).toContain("second");
+    wrapper.unmount();
+    expect(socket.close).toHaveBeenCalled();
+  });
+
+  it("retries a 503 by itself every 30 s, and keeps the button", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      vi.mocked(sdk.getEntries)
+        .mockRejectedValueOnce(refusal(503, "unavailable"))
+        .mockResolvedValue({
+          data: {
+            items: [entry("Sessions/s12.md", "s12")],
+            epoch: "e",
+            headSeq: 1,
+          },
+        } as never);
+      const { wrapper } = await mountAt(BrowsePage, "/vaults/v1", "/vaults/:v");
+      expect(wrapper.find("[role=alert]").text()).toContain(
+        "Kura is not answering (503). Retrying in 30 s",
+      );
+      expect(wrapper.find("[role=alert] button").exists()).toBe(true);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await flushPromises();
+      expect(wrapper.find("[data-test=tree]").text()).toContain("s12");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows when each vault was updated, and whom to ask when there is none", async () => {
+    vi.mocked(sdk.listVaults)
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: "v1",
+            name: "campaign",
+            tenant: "jdr",
+            role: "viewer",
+            paths: ["Sessions/", "Resumes/"],
+            managedBy: "config",
+            updatedAt: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+          },
+        ],
+      } as never)
+      .mockResolvedValueOnce({ data: [] } as never);
+    const { wrapper } = await mountAt(VaultsPage, "/vaults", "/vaults");
+    expect(wrapper.find("tbody").text()).toContain("2 folders");
+    expect(wrapper.find("tbody time").text()).toBe("2 hours ago");
+    const empty = await mountAt(VaultsPage, "/vaults", "/vaults");
+    expect(empty.wrapper.text()).toContain("Ask a vault manager to add you");
+  });
+});
+
 describe("search", () => {
+  it("searches as the user types, once after a pause, keeping only the latest answer", async () => {
+    vi.mocked(sdk.search).mockResolvedValue({
+      data: { results: [] },
+    } as never);
+    const { wrapper } = await mountAt(
+      SearchPage,
+      "/vaults/v1/search",
+      "/vaults/:v/search",
+    );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await wrapper.find("[data-test=query]").setValue("mi");
+      await wrapper.find("[data-test=query]").setValue("mine");
+      await vi.advanceTimersByTimeAsync(399);
+      expect(sdk.search).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+    } finally {
+      vi.useRealTimers();
+    }
+    await flushPromises();
+    expect(sdk.search).toHaveBeenCalledOnce();
+    expect(vi.mocked(sdk.search).mock.calls[0]?.[0]?.body).toEqual({
+      query: "mine",
+    });
+    expect(wrapper.find("[role=status]").text()).toContain('"mine"');
+  });
+
   it("shows hits as text, names the limit when nothing matches, and says when search is off", async () => {
     vi.mocked(sdk.search)
       .mockResolvedValueOnce({

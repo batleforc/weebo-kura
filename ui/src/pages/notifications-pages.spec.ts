@@ -195,6 +195,139 @@ describe("notifications page", () => {
   });
 });
 
+describe("notifications page, edit and rotate", () => {
+  beforeEach(() => {
+    vi.mocked(sdk.me).mockResolvedValue({
+      data: {
+        subject: "a",
+        platformAdmin: false,
+        tenants: [{ slug: "jdr", role: "admin" }],
+      },
+    } as never);
+    vi.mocked(sdk.listRules).mockResolvedValue({ data: [ruleView()] } as never);
+  });
+
+  it("edits a rule, keeping what is left empty and removing the authorization when asked", async () => {
+    vi.mocked(sdk.updateRule)
+      .mockRejectedValueOnce(
+        refusal(400, "invalid_request", "events: at least one event type"),
+      )
+      .mockResolvedValueOnce({ data: ruleView() } as never);
+    const w = await at(
+      NotificationsPage,
+      "/manage/tenants/jdr/notifications",
+      "/manage/tenants/:t/notifications",
+    );
+    await w.find("[data-rule=hub] [data-test=edit]").trigger("click");
+    expect(w.find("form h2").text()).toBe("Edit the rule hub");
+    expect(w.find<HTMLInputElement>("[data-test=name]").element.value).toBe(
+      "hub",
+    );
+    expect(w.find("[data-test=scope]").exists()).toBe(false);
+    expect(w.find("[data-test=url]").attributes("required")).toBeUndefined();
+    await w.find("[data-test=name]").setValue("hub2");
+    await w.find("input[value='token.expiring']").setValue(false);
+    await w.find("input[value='quota.high']").setValue(false);
+    await w.find("form").trigger("submit");
+    await flushPromises();
+    expect(w.find("[role=alert]").text()).toContain("at least one event");
+    await w.find("input[value='vault.changed']").setValue(true);
+    await w.find("[data-test=remove-authorization]").setValue(true);
+    await w.find("form").trigger("submit");
+    await flushPromises();
+    expect(vi.mocked(sdk.updateRule).mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        path: { t: "jdr", n: "r1" },
+        body: { name: "hub2", events: ["vault.changed"], authorization: "" },
+      }),
+    );
+    expect(w.find("form").exists()).toBe(false);
+    await w.find("[data-rule=hub] [data-test=edit]").trigger("click");
+    await w.find("[data-test=url]").setValue("https://hub2.example.org/hook");
+    await w.find("[data-test=authorization]").setValue("Bearer new");
+    await w.find("form").trigger("submit");
+    await flushPromises();
+    expect(vi.mocked(sdk.updateRule).mock.calls[2]?.[0]?.body).toEqual({
+      name: "hub",
+      events: ["token.expiring", "quota.high"],
+      url: "https://hub2.example.org/hook",
+      authorization: "Bearer new",
+    });
+  });
+
+  it("rotates the secret after a confirmation, shows it once, and copies it", async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    vi.mocked(sdk.updateRule).mockResolvedValue({
+      data: { ...ruleView(), secret: "whsec_new" },
+    } as never);
+    const w = await at(
+      NotificationsPage,
+      "/manage/tenants/jdr/notifications",
+      "/manage/tenants/:t/notifications",
+    );
+    await w.find("[data-rule=hub] [data-test=rotate]").trigger("click");
+    expect(w.find("[role=alertdialog]").text()).toContain(
+      "Rotate the signing secret of hub?",
+    );
+    await w.find("[role=alertdialog] button.border-rule").trigger("click");
+    expect(w.find("[role=alertdialog]").exists()).toBe(false);
+    expect(sdk.updateRule).not.toHaveBeenCalled();
+    await w.find("[data-rule=hub] [data-test=rotate]").trigger("click");
+    await w.find("[data-test=confirm]").trigger("click");
+    await flushPromises();
+    expect(vi.mocked(sdk.updateRule).mock.calls[0]?.[0]).toMatchObject({
+      path: { t: "jdr", n: "r1" },
+      body: { rotateSecret: true },
+    });
+    expect(w.find("[data-test=created] h2").text()).toBe("New signing secret");
+    expect(w.find("[data-test=secret]").text()).toBe("whsec_new");
+    await w.find("[data-test=copy]").trigger("click");
+    await flushPromises();
+    expect(writeText).toHaveBeenCalledWith("whsec_new");
+    expect(w.find("[data-test=copy]").text()).toBe("Copied");
+    await w.find("[data-test=close]").trigger("click");
+    expect(w.text()).not.toContain("whsec_new");
+  });
+
+  it("shows a refused rotation", async () => {
+    vi.mocked(sdk.updateRule).mockRejectedValue(refusal(503, "unavailable"));
+    const w = await at(
+      NotificationsPage,
+      "/manage/tenants/jdr/notifications",
+      "/manage/tenants/:t/notifications",
+    );
+    await w.find("[data-rule=hub] [data-test=rotate]").trigger("click");
+    await w.find("[data-test=confirm]").trigger("click");
+    await flushPromises();
+    expect(w.find("[role=alert]").text()).toContain("unavailable");
+    expect(w.find("[data-test=created]").exists()).toBe(false);
+  });
+
+  it("repeats the server's insufficient_role detail, in English", async () => {
+    vi.mocked(sdk.listRules).mockRejectedValue(
+      refusal(
+        403,
+        "insufficient_role",
+        "notifications need a tenant admin, or a vault manager",
+      ),
+    );
+    const w = await at(
+      NotificationsPage,
+      "/manage/tenants/jdr/notifications",
+      "/manage/tenants/:t/notifications",
+    );
+    const forbidden = w.find("[data-test=forbidden]");
+    expect(forbidden.attributes("role")).toBe("alert");
+    expect(forbidden.find("[lang=en]").text()).toBe(
+      "notifications need a tenant admin, or a vault manager",
+    );
+  });
+});
+
 describe("deliveries page", () => {
   it("lists coarse results", async () => {
     vi.mocked(sdk.listDeliveries).mockResolvedValue({
@@ -225,5 +358,20 @@ describe("deliveries page", () => {
     const rows = w.findAll("tbody tr").map((r) => r.text());
     expect(rows[0]).toContain("2026-11-15 12:33:21");
     expect(rows[1]).toContain("failed: status_5xx");
+  });
+
+  it("says forbidden, with the generic text when the server gave no detail", async () => {
+    vi.mocked(sdk.listDeliveries).mockRejectedValue(
+      refusal(403, "insufficient_role"),
+    );
+    const w = await at(
+      DeliveriesPage,
+      "/manage/tenants/jdr/notifications/r1",
+      "/manage/tenants/:t/notifications/:n",
+    );
+    expect(w.find("[data-test=forbidden]").text()).toBe(
+      "Your role does not allow this page.",
+    );
+    expect(w.text()).not.toContain("No delivery yet");
   });
 });

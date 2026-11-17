@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | In review (2026-11-15); every phase landed, gaps listed in §18 (2026-11-17) |
+| Status | Implemented (2026-11-17) |
 | Short | Restricted viewers, web reader |
 | Settles | How people without Obsidian (the players of a tabletop campaign) read and search the folders of a vault that a manager opens to them, and nothing else |
 | Author | Maxime (batleforc) |
@@ -768,16 +768,18 @@ accepted by a server that does not filter would be T1.
 | R20 | [Implementation plan](rfc0005-implementation-plan.md): progress and divergences D1 to D8 | `49e1b7d` | §18 |
 | R21 | `tests/heavy/reader.sh`, `ui/e2e/reader.spec.ts` (Playwright 1.64.1, Chromium), run on the dev stack 2026-11-17 | `49e1b7d` | §18.3 |
 | R22 | `docs/RFC/assets/0005-reader.html` (HTML mock, batlehub-design tokens) | `49e1b7d` | §18.6 |
+| R24 | The change closing the landing gaps (§18.8): `authz::settle` and its tests, `BindingView.{widened, emptyFolders}`, `VaultView.updatedAt`, the `kura::object_read` debug event, `ui/src/reader/{events,retry,time}.ts`, `perf/attach.sh` (decision 5); 283 Rust tests, 96 console tests and the six heavy suites green on the dev stack | 2026-11-17, the commit after `1c22fce` | §18.8 |
 | R23 | `ui/package.json`, `ui/pnpm-lock.yaml` (`markdown-it` 14.3.3, `dompurify` 3.4.18), `ui/src/reader/vault.ts` (`MAX_PAGES`), `ui/src/reader/render.ts` (`MAX_RENDER`, `MAX_IMAGE`), `crates/kura-server/src/app/vaults.rs` (`binding_changed`), `deny.toml`; `task audit` run 2026-11-17 | `49e1b7d` | §18.2, §18.5 |
 
 ---
 
-## 18. Revision against the tree (2026-11-17, gaps still open)
+## 18. Revision against the tree (2026-11-17)
 
-Every question of §15 is settled and every phase of §16 is done, but the RFC
-stays `In review`: landing it found behaviour the text promises and the tree
-lacks (§18.2, the divergences the plan does not record). It moves to
-`Implemented` once each is built or accepted as a divergence. The implementation plan [R20] holds the
+Every question of §15 is settled and every phase of §16 is done. Landing
+first found behaviour the text promises and the tree lacked (§18.2, the
+divergences the plan does not record); §18.8 records how each was closed the
+same day [R24], after which the maintainer moved the RFC to `Implemented`. It
+was never formally `Accepted`. The implementation plan [R20] holds the
 detail and the divergence table D1 to D8; this section is the delta.
 
 ### 18.1 What shipped
@@ -934,3 +936,58 @@ system is `docs/RFC/assets/0005-reader.html` [R22].
 
 `Risk` stays high: the filter on people is one place, as the rating of §7
 says, and the deltas above do not widen it.
+
+### 18.8 Gaps closed on landing (2026-11-17)
+
+Each gap of §18.2 found in the tree, and each §7 row §18.4 left without a
+test of its own, closed the same day [R24]:
+
+- **§8**: `markdown-it` 15.0.3 as written (released 2026-10-16; it ships
+  its own types, so `@types/markdown-it` is gone); `task ui:audit` adds
+  nothing.
+- **§7.5**: the reader holds one event socket per open vault
+  (`ui/src/reader/events.ts`, a ticket then `…/events`), refreshes once per
+  burst of notices, reconnects from 1 s to 60 s, stops on `4002` and `4005`,
+  and never polls; search runs 400 ms after typing stops, the button still
+  at once. The socket's survival without a close frame has no watchdog
+  (a `shortcut:` comment).
+- **§4.2, T9**: the 50,000-entry bound stays and the Browse page says the
+  tree was cut and that search finds the rest.
+- **§10.3, decision 5**: measured by `perf/attach.sh`: the first load of
+  10,000 notes (the vault list, then 10 pages of entries) takes 247 to
+  262 ms, under the 2 s that would call for a `prefix` query, so none was
+  added.
+- **§10.1**: `binding_changed` carries `restricted=true|false` beside the
+  `folders` count.
+- **§13**: `docs/operator.md` gives the query listing restricted bindings,
+  which must return no row before a binary older than RFC 0004 starts.
+- **§4.3 warnings**: the bindings listing gains `widened` (a restricted
+  claim value the tenant maps to owner or admin, D2's rule, now also for
+  bindings made through the API) and `emptyFolders` (bound folders with no
+  note, one `NOT EXISTS` query); the Access page shows "effective: whole
+  vault" and "(0 notes)". A person also in an unrestricted group is still
+  known only at request time (D2).
+- **§6.P observation 2**: `open_object` logs a debug event under target
+  `kura::object_read`; `reader.sh` requires the line for a visible chunk
+  and its absence for the hidden one (`KURA_DEV_LOG`, the server run with
+  `RUST_LOG=info,kura::object_read=debug`). Observation 5 now checks the
+  not-found page at the moved note's new address and its old one.
+- **§4.5**: an Updated column (`updatedAt`, the time of the vault's latest
+  revision; a restricted viewer sees it move for hidden folders, as
+  `headSeq` already did), "Ask a vault manager to add you, then reload.",
+  "Last edited … by …" under a note, and a retry by itself after 30 s on a
+  `503` beside the Retry button. Not drawn as mocked: the "History (4)"
+  count and a live countdown.
+- **§11**: the tree stays native `<details>` in a labelled `nav`: §11's
+  "keyboard navigable `tree`" is read as the kind of widget, which the
+  native one is. Search results are announced in a live region, and Browse
+  and Search gained their headings.
+- **§14 and §7**: `authz::settle`, the scope rule of §5.1 as a pure
+  function, has six unit tests; T5 is `tests/events.rs::notice_has_no_path`;
+  T10 is `tests/viewers.rs::anonymous_is_401` (six reader routes); T9's caps
+  are tested in `reader.spec.ts` (`MAX_IMAGE`, never fetched above) and
+  `reader-pages.spec.ts` (`MAX_RENDER`, a download link and no frame).
+
+Still divergences, accepted as written in §18.2: D1 to D8, the remaining
+§14 names, and `reader.sh`'s suite counting only its own run's secret note,
+since earlier runs leave theirs in the vault.

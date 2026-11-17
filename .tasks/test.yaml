@@ -2,7 +2,7 @@ version: "3"
 
 tasks:
   test:heavy:
-    desc: "Run the §6.P proofs against the local stack with the real kura binary and Chromium (task dev:stack, task ui:build and task dev:run first)"
+    desc: "Run the §6.P proofs against the local stack with the real kura binary and Chromium (task dev:stack, task ui:build, then RUST_LOG=info,kura::object_read=debug task dev:run > target/dev-server.log 2>&1, the log reader.sh reads)"
     cmds:
       - tests/heavy/sync.sh
       - tests/heavy/authz.sh

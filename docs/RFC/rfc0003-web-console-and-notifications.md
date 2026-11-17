@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | In review (2026-11-15); every phase landed, gaps listed in §18 (2026-11-17) |
+| Status | Implemented (2026-11-17) |
 | Short | Web console, webhooks |
 | Settles | How members and managers use Kura from a browser (their vaults and devices; access, keys and notifications), and how a tenant is notified of events on a webhook |
 | Author | Maxime (batleforc) |
@@ -1248,17 +1248,18 @@ and the device binding land in phase 1 with the first page.
 | R40 | `49e1b7d` feat: close the remaining gaps of RFC 0003, 0004 and 0005 | 2026-11-17 | §18, gaps |
 | R41 | `fda4845` chore: dated audit exceptions, and a suite vault apart from obsidian (`.tasks/security.yaml`) | 2026-11-17 | §18.5 |
 | R42 | [`rfc0003-implementation-plan.md`](rfc0003-implementation-plan.md): progress table and divergences D1 to D19 | working tree on `5a01ea4`, 2026-11-17 | §18 |
+| R44 | The change closing the landing gaps (§18.7): `app/ui.rs::check_dir`, migration `0026`, `notifier::{warn_rules_while_off, purge}`, `net::webhook_client_resolving`, `tests/notification_logs.rs`, `ui/build-checks.ts`, `ForbiddenState.vue`, `NotificationsPage.vue`; `task lint`, 283 Rust tests, 96 console tests and the six heavy suites green on the dev stack | 2026-11-17, the commit after `1c22fce` | §18.7 |
 | R43 | `ui/pnpm-lock.yaml`, `ui/node_modules/*/package.json` (resolved versions and licences), `Cargo.lock` (`tower-http` 0.7.1, `reqwest` 0.13.5, `url` 2.5.8, `rcgen` 0.14.10, `tokio-rustls` 0.26.6, `aws-lc-rs` 1.19.0), `Containerfile:35` (`node:24-trixie-slim` by digest) | working tree on `5a01ea4`, read 2026-11-17 | §18.5 |
 
 ---
 
-## 18. Revision against the tree (2026-11-17, gaps still open)
+## 18. Revision against the tree (2026-11-17)
 
 Every question of §15 is settled and every phase of the implementation plan
-is done [R42], but the RFC stays In review: landing it found behaviour the
-text promises and the tree lacks (§18.2, the divergences the plan does not
-record). It moves to Implemented once each is built or accepted as a
-divergence. The record of each
+is done [R42]. Landing first found behaviour the text promises and the tree
+lacked (§18.2, the divergences the plan does not record); §18.7 records how
+each was closed the same day [R44], after which the maintainer moved the RFC
+to Implemented. It was never formally Accepted. The record of each
 phase, its tests and its divergences is that plan; this section summarises
 it against the text above, which stays as written.
 
@@ -1465,3 +1466,59 @@ pages the browser suites drove; no screenshot was taken on landing.
   sentence fewer.
 - **Platform status**: as drawn, rejection first.
 - The HTML mocks are `docs/RFC/assets/0003-console.html` (D6).
+
+### 18.7 Gaps closed on landing (2026-11-17)
+
+Each gap of §18.2 found in the tree, and each §7 row §18.4 left without a
+test, closed the same day [R44]:
+
+- **`ui.dir` at startup** (§4.3, §10.2): `app::ui::check_dir` refuses a
+  missing directory or one without `index.html` before the server listens
+  (`ui_dir_without_index_is_refused`). `connect()` is shared, so
+  `maintain`, `backup` and `check-chunks` with the console on need it too.
+- **The startup `WARN`** (§4.3): `notifier::warn_rules_while_off` logs
+  `rules=N` once when notifications are off and rules are stored. Row-level
+  security forbids a cross-tenant count to the server's role, so migration
+  `0026` adds `kura_notification_rule_count()`, which returns a number only.
+- **Retention while off** (§9, found while closing the above): the 7-day
+  purge of events and deliveries stopped with the notifier when
+  `notifications.enabled` was false. `notifier::purge` now runs hourly
+  either way; the token-expiry check stays off, so no warning is consumed
+  unsent (`old_events_are_purged_while_notifications_are_off`).
+- **Device payloads** (§9): `device.*` carry `{"device":{"id":…}}` only;
+  the kind is gone, and `notify.sh` observation 5 asserts the keys are
+  exactly `["id"]`.
+- **Forbidden** (§4.5): `ForbiddenState` shows the server's
+  `insufficient_role` detail ("manager required, you are viewer"), the
+  generic sentence only when there is none; `console.spec.ts` asserts it.
+- **Edit and rotate** (§4.5): the Notifications page edits a rule with the
+  fields `PUT` takes (URL and authorization blank mean unchanged, a box
+  removes the authorization) and rotates the secret behind a confirmation,
+  showing the new one once. The old secret stops at once, as the server
+  has no overlap.
+- **T8 and the budget** (§7, §10.3): `ui/build-checks.ts`, a Vite plugin,
+  fails `vite build` on any built HTML with an inline script, and above
+  300 kB of gzipped JS and CSS. Measured 193.6 kB with the reader included,
+  stricter than the text, which counts the console without it.
+- **T13**: `rule_changes_are_audited` (`tests/notification_logs.rs`) sees
+  one audit line per create, change, test and delete with the rule id, and
+  no URL path, authorization or secret in any line. Testing a rule was not
+  audited at all: `notification_rule_tested` now is, beyond T13's list.
+- **T1**: `webhook_redirect_is_failure` (a `302` is `redirect`, the target
+  gets nothing) and `webhook_rebinding_is_refused_at_send` (a name that
+  resolves to a refused address at the second attempt is `address_refused`
+  and nothing connects), through the seam `net::webhook_client_resolving`;
+  the production client keeps the system resolver.
+- **T2**: `delivery_result_is_coarse_and_body_unread`: a `200` followed by
+  a 1 GiB body is settled in under 3 s and under 64 MiB leaves the receiver.
+- **T3**: `notifier::tests::signature_rejects_altered_body`.
+- **T4**: `authorization_rejects_control_characters` (CR, LF, NUL, TAB,
+  DEL, U+0085, 1,024 bytes); the logs half is in `rule_changes_are_audited`.
+- **Accessibility** (§11): the dialogs take and return focus, a rule's name
+  is its row header, Deliveries is translated and shows the forbidden state.
+  Reviewed by hand against RGAA 4; the `accessibilite-check` agent was not
+  run.
+
+Still divergences, accepted as written in §18.2: the migration numbers, the
+extra coarse result words, and the measurements §18.2 lists as not run
+(`perf:run:commit` with a `vault.changed` rule, the rollback run).

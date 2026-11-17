@@ -118,7 +118,10 @@ describe("my vaults", () => {
       } as never);
     const { wrapper } = await page(VaultsPage);
     await flushPromises();
-    expect(wrapper.find("[role=alert]").text()).toContain("unavailable");
+    // RFC 0005 §4.5: a 503 says it retries by itself, and keeps the button.
+    expect(wrapper.find("[role=alert]").text()).toContain(
+      "not answering (503). Retrying in 30 s",
+    );
     await wrapper.find("[role=alert] button").trigger("click");
     await flushPromises();
     expect(wrapper.find("tbody").text()).toContain("campaign");

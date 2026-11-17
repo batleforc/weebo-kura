@@ -159,6 +159,13 @@ async fn fast_forward_rename_and_delete() {
         .find(|x| x["name"] == "knowledge")
         .unwrap();
     assert_eq!(k["headSeq"], 4);
+    // The time of the head revision (RFC 0005 §4.5, "updated").
+    let updated = k["updatedAt"].as_str().unwrap();
+    assert!(
+        time::OffsetDateTime::parse(updated, &time::format_description::well_known::Rfc3339)
+            .is_ok(),
+        "{updated}"
+    );
     assert_eq!(k["chunking"]["max"], 4 << 20);
 }
 

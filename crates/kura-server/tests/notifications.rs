@@ -11,6 +11,7 @@
 
 mod common;
 
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::http::StatusCode;
@@ -43,15 +44,25 @@ impl Got {
 }
 
 /// An https listener on 127.0.0.1 with a certificate made for the test; it
-/// logs each request and answers `status`.
+/// logs each request and answers `status` with the `extra` header lines, or,
+/// when `endless`, a 200 whose body it streams until the client goes
+/// (counting the bytes in `streamed`).
 struct Receiver {
     url: String,
     ca: reqwest::Certificate,
     got: Arc<Mutex<Vec<Got>>>,
     status: Arc<Mutex<u16>>,
+    extra: Arc<Mutex<String>>,
+    endless: Arc<AtomicBool>,
+    streamed: Arc<AtomicU64>,
 }
 
 async fn receiver() -> Receiver {
+    receiver_on("127.0.0.1:0").await
+}
+
+/// [`receiver`] listening on `bind` (its URL still names 127.0.0.1).
+async fn receiver_on(bind: &str) -> Receiver {
     let key = rcgen::KeyPair::generate().unwrap();
     let params =
         rcgen::CertificateParams::new(vec!["localhost".into(), "127.0.0.1".into()]).unwrap();
@@ -69,17 +80,33 @@ async fn receiver() -> Receiver {
         )
         .unwrap();
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind(bind).await.unwrap();
     let url = format!(
         "https://127.0.0.1:{}/hook",
         listener.local_addr().unwrap().port()
     );
     let got = Arc::new(Mutex::new(Vec::new()));
     let status = Arc::new(Mutex::new(200u16));
-    let (g, st) = (got.clone(), status.clone());
+    let extra = Arc::new(Mutex::new(String::new()));
+    let endless = Arc::new(AtomicBool::new(false));
+    let streamed = Arc::new(AtomicU64::new(0));
+    let (g, st, ex, en, sd) = (
+        got.clone(),
+        status.clone(),
+        extra.clone(),
+        endless.clone(),
+        streamed.clone(),
+    );
     tokio::spawn(async move {
         while let Ok((tcp, _)) = listener.accept().await {
-            let (acceptor, g, st) = (acceptor.clone(), g.clone(), st.clone());
+            let (acceptor, g, st, ex, en, sd) = (
+                acceptor.clone(),
+                g.clone(),
+                st.clone(),
+                ex.clone(),
+                en.clone(),
+                sd.clone(),
+            );
             tokio::spawn(async move {
                 let Ok(mut tls) = acceptor.accept(tcp).await else {
                     return;
@@ -110,8 +137,21 @@ async fn receiver() -> Receiver {
                                 body: buf[end + 4..end + 4 + len].to_vec(),
                             });
                             let code = *st.lock().unwrap();
+                            let extra = ex.lock().unwrap().clone();
+                            if en.load(Ordering::SeqCst) {
+                                // A 1 GiB body, sent until the client hangs up.
+                                let head = "HTTP/1.1 200 X\r\ncontent-length: 1073741824\r\nconnection: close\r\n\r\n";
+                                drop(tls.write_all(head.as_bytes()).await);
+                                let block = [b'x'; 16 * 1024];
+                                while sd.load(Ordering::SeqCst) < 1 << 30
+                                    && tls.write_all(&block).await.is_ok()
+                                {
+                                    sd.fetch_add(block.len() as u64, Ordering::SeqCst);
+                                }
+                                return;
+                            }
                             let answer = format!(
-                                "HTTP/1.1 {code} X\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                                "HTTP/1.1 {code} X\r\ncontent-length: 0\r\n{extra}connection: close\r\n\r\n"
                             );
                             drop(tls.write_all(answer.as_bytes()).await);
                             drop(tls.shutdown().await);
@@ -127,6 +167,9 @@ async fn receiver() -> Receiver {
         ca,
         got,
         status,
+        extra,
+        endless,
+        streamed,
     }
 }
 
@@ -448,7 +491,9 @@ async fn events_reach_their_rules_with_ids_only_and_retries_back_off() {
         .find(|g| g.header("x-kura-event").as_deref() == Some("device.revoked"))
         .unwrap();
     let body = revoked.json();
-    assert_eq!(body["data"]["device"]["id"], json!(phone));
+    // §9: the device by its id only, not its kind.
+    assert_eq!(body["data"]["device"], json!({ "id": phone }));
+    assert_eq!(body["message"], "Tenant maxime: a device was revoked.");
     let flat = body.to_string();
     for personal in ["u1", "alice's phone", "\"sub\"", "\"path\""] {
         assert!(!flat.contains(personal), "{personal} in {flat}");
@@ -674,5 +719,216 @@ async fn a_manager_sees_their_vaults_only_and_off_means_409() {
     assert_eq!(
         (st, problem(&b)),
         (StatusCode::CONFLICT, "/v1/problems/notifications_disabled")
+    );
+}
+
+/// One signed `ping` through `n`, as the worker sends it.
+async fn ping(n: &Notifier, url: &str) -> kura_server::notifier::Outcome {
+    kura_server::notifier::post(
+        n,
+        url,
+        b"secret",
+        None,
+        "ping",
+        Uuid::now_v7(),
+        b"{}".to_vec(),
+    )
+    .await
+}
+
+fn port(url: &str) -> u16 {
+    url.split(':')
+        .nth(2)
+        .unwrap()
+        .split('/')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+/// T1: a receiver that answers a redirect is not followed; the attempt
+/// fails as `redirect` and the target of `location` is never reached.
+#[tokio::test]
+async fn webhook_redirect_is_failure() {
+    let (r, inside) = (receiver().await, receiver().await);
+    *r.status.lock().unwrap() = 302;
+    *r.extra.lock().unwrap() = format!("location: {}\r\n", inside.url);
+    let allowed: Vec<ipnet::IpNet> = vec!["127.0.0.1/32".parse().unwrap()];
+    let client =
+        kura_server::net::webhook_client(allowed.clone(), &[r.ca.clone(), inside.ca.clone()])
+            .unwrap();
+    let n = Notifier::new(client, allowed);
+    assert_eq!(
+        ping(&n, &r.url).await,
+        kura_server::notifier::Outcome::Failed("redirect")
+    );
+    assert_eq!(r.got.lock().unwrap().len(), 1);
+    assert!(
+        inside.got.lock().unwrap().is_empty(),
+        "the redirect was followed"
+    );
+}
+
+/// T2: the response body is never read. A receiver that answers 200 and
+/// then streams a 1 GiB body: the attempt ends at the status, well within
+/// the client's 5 s, and its result is the status alone.
+#[tokio::test]
+async fn delivery_result_is_coarse_and_body_unread() {
+    let r = receiver().await;
+    r.endless.store(true, Ordering::SeqCst);
+    let allowed: Vec<ipnet::IpNet> = vec!["127.0.0.1/32".parse().unwrap()];
+    let client =
+        kura_server::net::webhook_client(allowed.clone(), std::slice::from_ref(&r.ca)).unwrap();
+    let n = Notifier::new(client, allowed);
+    let start = std::time::Instant::now();
+    let outcome = ping(&n, &r.url).await;
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(3),
+        "{:?}",
+        start.elapsed()
+    );
+    assert_eq!(outcome, kura_server::notifier::Outcome::Delivered(200));
+    assert_eq!(outcome.result(), "200");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let streamed = r.streamed.load(Ordering::SeqCst);
+    assert!(
+        streamed < 64 << 20,
+        "{streamed} bytes left the receiver: the body was read"
+    );
+}
+
+/// T1, DNS rebinding: the name resolves to an allowed address for one
+/// attempt, then to a refused one. The guard runs on the resolver's answer
+/// at every connection, so the second attempt is `address_refused` and the
+/// refused address is never connected to.
+#[tokio::test]
+async fn webhook_rebinding_is_refused_at_send() {
+    let r = receiver().await;
+    let port = port(&r.url);
+    // Something listening at the refused address, to see that nothing came.
+    let inside = tokio::net::TcpListener::bind(("127.0.0.2", port))
+        .await
+        .unwrap();
+    let reached = Arc::new(AtomicUsize::new(0));
+    let seen = reached.clone();
+    tokio::spawn(async move {
+        while inside.accept().await.is_ok() {
+            seen.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    let asked = Arc::new(AtomicUsize::new(0));
+    let count = asked.clone();
+    let lookup: kura_server::net::Lookup = Arc::new(move |host: String| {
+        let first = count.fetch_add(1, Ordering::SeqCst) == 0;
+        Box::pin(async move {
+            assert_eq!(host, "localhost");
+            let ip = if first { "127.0.0.1" } else { "127.0.0.2" };
+            Ok(vec![std::net::SocketAddr::new(ip.parse().unwrap(), 0)])
+        })
+    });
+    let allowed: Vec<ipnet::IpNet> = vec!["127.0.0.1/32".parse().unwrap()];
+    let client = kura_server::net::webhook_client_resolving(
+        allowed.clone(),
+        std::slice::from_ref(&r.ca),
+        lookup,
+    )
+    .unwrap();
+    let n = Notifier::new(client, allowed);
+    let url = format!("https://localhost:{port}/hook");
+    assert_eq!(
+        ping(&n, &url).await,
+        kura_server::notifier::Outcome::Delivered(200)
+    );
+    assert_eq!(
+        ping(&n, &url).await,
+        kura_server::notifier::Outcome::Refused("address_refused")
+    );
+    assert_eq!(asked.load(Ordering::SeqCst), 2, "asked at every attempt");
+    assert_eq!(r.got.lock().unwrap().len(), 1);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(
+        reached.load(Ordering::SeqCst),
+        0,
+        "the refused address was reached"
+    );
+}
+
+/// §9: with notifications off, events older than 7 days, and their
+/// deliveries, are still purged; a fresh one stays.
+#[tokio::test]
+async fn old_events_are_purged_while_notifications_are_off() {
+    let Some(e) = common::app::env(module_path!()).await else {
+        return;
+    };
+    assert!(e.state.notifier.is_none());
+    let tenant: Uuid = sqlx::query_scalar("SELECT id FROM tenant WHERE slug = 'maxime'")
+        .fetch_one(&e.t.owner)
+        .await
+        .unwrap();
+    let rule = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO notification_rule (id, tenant_id, name, events, host, sealed_url, sealed_secret, created_by)
+         VALUES ($1, $2, 'kept', '{ping}', 'example.org', '\\x00', '\\x00', 'test')",
+    )
+    .bind(rule)
+    .bind(tenant)
+    .execute(&e.t.owner)
+    .await
+    .unwrap();
+    for (age, id) in [(8, Uuid::now_v7()), (1, Uuid::now_v7())] {
+        sqlx::query(
+            "INSERT INTO notification_event (id, tenant_id, type, payload, created_at)
+             VALUES ($1, $2, 'ping', '{}', now() - make_interval(days => $3))",
+        )
+        .bind(id)
+        .bind(tenant)
+        .bind(age)
+        .execute(&e.t.owner)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO notification_delivery (id, tenant_id, event_id, rule_id) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(tenant)
+        .bind(id)
+        .bind(rule)
+        .execute(&e.t.owner)
+        .await
+        .unwrap();
+    }
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let worker = tokio::spawn(kura_server::notifier::run(
+        e.state.clone(),
+        shutdown.clone(),
+    ));
+    let count = |table: &'static str| {
+        let owner = e.t.owner.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(table)
+                .fetch_one(&owner)
+                .await
+                .unwrap()
+        }
+    };
+    for _ in 0..50 {
+        if count("SELECT count(*) FROM notification_event").await == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    shutdown.cancel();
+    worker.await.unwrap();
+    assert_eq!(
+        count("SELECT count(*) FROM notification_event").await,
+        1,
+        "the fresh event stays, the old one goes"
+    );
+    assert_eq!(count("SELECT count(*) FROM notification_delivery").await, 1);
+    assert_eq!(
+        count("SELECT count(*) FROM notification_rule").await,
+        1,
+        "rules are kept"
     );
 }

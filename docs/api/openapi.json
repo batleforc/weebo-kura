@@ -3002,6 +3002,13 @@
           "managedBy"
         ],
         "properties": {
+          "emptyFolders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "RFC 0005 §4.3: the bound folders under which no note exists yet\n(filled by the listing only)."
+          },
           "managedBy": {
             "type": "string"
           },
@@ -3021,6 +3028,10 @@
           "subject": {
             "type": "string",
             "description": "`claim:<value>` or `user:<sub>`."
+          },
+          "widened": {
+            "type": "boolean",
+            "description": "RFC 0005 §4.3: folders listed, but the tenant maps this group to\n`owner` or `admin`, so the whole vault is open to it anyway."
           }
         }
       },
@@ -4316,6 +4327,13 @@
               "null"
             ],
             "description": "For a scoped token: its own name, which its client shows (RFC 0004 §4.5)."
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When `headSeq` was written, RFC 3339 (RFC 0005 §4.5, \"updated\");\nabsent before the first commit or once that revision is purged."
           }
         }
       }

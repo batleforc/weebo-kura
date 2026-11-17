@@ -14,6 +14,7 @@ import {
 import type { BindingView } from "@/api/generated/types.gen";
 import { messageOf } from "@/api/problem";
 import AsyncState from "@/components/ui/AsyncState.vue";
+import ForbiddenState from "@/components/ui/ForbiddenState.vue";
 import { useLoad } from "@/manage/useLoad";
 
 const { t } = useI18n();
@@ -24,6 +25,7 @@ const {
   loading,
   error,
   forbidden,
+  forbiddenDetail,
   load,
 } = useLoad<BindingView[]>(
   () =>
@@ -119,7 +121,7 @@ onMounted(async () => {
 <template>
   <section>
     <h1 class="mb-4">{{ t("manage.access") }}</h1>
-    <p v-if="forbidden" role="alert" data-test="forbidden">{{ t("manage.forbidden") }}</p>
+    <ForbiddenState v-if="forbidden" :detail="forbiddenDetail" />
     <AsyncState v-else :loading="loading" :error="error" :empty="false" empty-message="" :title="t('manage.failed')" @retry="load">
       <p v-if="refusal" role="alert" class="mb-2 border border-accent p-2">{{ refusal }}</p>
       <table class="w-full text-left">
@@ -157,7 +159,12 @@ onMounted(async () => {
               </select>
               <span v-else>{{ b.role }}</span>
             </td>
-            <td>{{ b.paths ? b.paths.join(", ") : t("reader.whole") }}</td>
+            <!-- RFC 0005 §4.3: the warnings, as text, not colour. -->
+            <td v-if="b.paths">
+              <span v-for="(f, i) in b.paths" :key="f">{{ i ? ", " : "" }}{{ f }}<span v-if="b.emptyFolders?.includes(f)" class="text-ink-dim" data-test="no-notes"> ({{ t("access.noNotes") }})</span></span>
+              <strong v-if="b.widened" class="block" data-test="widened" :title="t('access.widenedWhy')">{{ t("access.widened") }}</strong>
+            </td>
+            <td v-else>{{ t("reader.whole") }}</td>
             <td>{{ b.managedBy === "api" ? "API" : t("access.configuration") }}</td>
             <td>
               <button v-if="b.managedBy === 'api'" type="button" class="border border-accent px-2" @click="remove(b)">
