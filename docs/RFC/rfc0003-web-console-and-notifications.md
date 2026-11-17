@@ -12,7 +12,7 @@
 | Touches | `ui/` (new), `crates/kura-server` (`app/mod.rs`, `app/me.rs`, `app/vaults.rs`, `app/devices.rs`, `app/notifications.rs`, `notifier.rs`, `net.rs`, `config.rs`, `limits.rs`, `maintenance.rs`, `lib.rs`, migrations `0022`, `0023`), `Containerfile`, `Containerfile.hardened`, `deploy/helm/kura`, `.tasks/`, `tests/heavy/console.sh`, `docs/` |
 | Risk | high |
 
-> **Reference material**, about 11,100 words. For the decision, read §1, §3,
+> **Reference material**, about 11,800 words. For the decision, read §1, §3,
 > §7.1 and §15; the rest is the design to build and review against.
 
 ---
@@ -219,7 +219,8 @@ X-Kura-Signature: v1=<hex HMAC-SHA256(secret, timestamp + "." + body)>
   installed application opens signed in. The box is off by default in a
   browser tab and on by default in the installed application.
 - Signing out clears the browser's storage, signs the web device out at
-  Kura and revokes the refresh token at Authentik. It does not end the
+  Kura and asks Authentik to revoke the refresh token, without learning
+  whether it did (decision 25). It does not end the
   Authentik session: other applications stay signed in, and signing in
   again works at once.
 - Signing out is not revoking. "Revoke", in My devices, is the hard cut of
@@ -328,11 +329,23 @@ wireframes; the HTML mocks are built with its tokens in phase 1, under
  │  [ Sign in with Authentik ]                 │
  │  [ ] Stay signed in on this device          │
  └─────────────────────────────────────────────┘
+
+ after a session that ended without a sign-out (`invalid_grant`):
+ ┌─────────────────────────────────────────────┐
+ │  Kura                                       │
+ │  (i) Your session ended. If you did not     │
+ │      sign out yourself, sign in and revoke  │
+ │      this browser in "My devices".          │
+ │  [ Sign in with Authentik ]                 │
+ │  [ ] Stay signed in on this device          │
+ └─────────────────────────────────────────────┘
 ```
 
 Decides one action and no form: Kura never sees a password. The box is
 unticked in a browser tab and ticked in the installed application; its
-help text says "Leave unticked on a shared computer".
+help text says "Leave unticked on a shared computer". The second state
+decides that the only sign of a stolen token the user ever sees comes with
+what to do about it (decision 26).
 
 **Shell — member, then manager**
 
@@ -643,7 +656,9 @@ creation and now points inside is refused at send time.**
 - The browser is a public client using the authorization code flow with
   PKCE, written on Web Crypto after `weebo-notify-v2`'s `web/src/auth/pkce.ts`
   and its spec file [R30], with no OIDC library (decision 6). It asks for
-  `openid profile offline_access`.
+  `openid profile offline_access`. The challenge is always `S256`:
+  Authentik issues and exchanges a code asked without one [R33], so PKCE
+  protects only the flows this module starts (decision 27).
 - After the exchange the page replaces the URL (`history.replaceState`) so
   the code does not stay in history; the post-login target is an in-app path
   only.
@@ -655,9 +670,17 @@ creation and now points inside is refused at send time.**
 - Refresh follows RFC 0001 §6.2's rule for clients: one in flight, across
   tabs, under a Web Lock (`navigator.locks`), the new token stored before it
   is used, sign-out only on `invalid_grant`. Without the lock, rotation would
-  sign out the tab that lost the race.
+  sign out the tab that lost the race. An answer with no `refresh_token`
+  keeps the stored one: Authentik sends none while the provider's
+  `refresh_token_threshold` is not reached [R34] (decision 28). An
+  `invalid_grant` the user did not ask for lands on the sign-in page with
+  the hint of §4.5: it is what a token rotated by someone else looks like
+  (decision 26).
 - Sign-out: clear both storages, `POST /v1/devices/{d}/sign-out`, then
-  Authentik's revocation endpoint for the refresh token. The route accepts
+  Authentik's revocation endpoint for the refresh token: a form `POST`
+  with `client_id` and `token`, sent with `mode: "no-cors"` and
+  `keepalive`, its answer never read, because that endpoint sends no CORS
+  header [R33] (decision 25). The route accepts
   the caller's own `web` device only and marks it signed out: it stops
   counting as live and its id is refused as `device_unknown`, but the
   session is not banned, so the same Authentik session can register a web
@@ -747,7 +770,9 @@ Clients: Chromium driven by `@playwright/test` at the version `ui/` pins
 Authentik, `curl`, and a webhook receiver: an `https` listener on
 `127.0.0.1:8443` with the dev certificate that logs each request. The test
 `server.yaml` has `allowedCidrs: [127.0.0.1/32]` and `caFile` set to the dev
-CA, since the receiver's certificate is not publicly trusted.
+CA, since the receiver's certificate is not publicly trusted. The suite
+opens with the Authentik facts of decision 13, with `curl` alone; that part
+exists and passes [R33].
 
 1. Alice signs in through Authentik in Chromium and lands on "My vaults".
    The recorded requests to `/v1` all carry `Authorization: Bearer` and
@@ -828,11 +853,11 @@ flowchart LR
 | T6 | Denial of service: events or deliveries slow the commit path, flood a receiver, or grow without bound | B2, B7 | Nothing recorded without a subscribed rule; `vault.changed` at most one a minute; 4 in flight; 6 attempts; self-disable after 20 failures; 7-day purge; 20 rules per tenant | A slow receiver holds one of four slots for 5 s per attempt; `token.denied` is one an hour per token |
 | T7 | Elevation: the console lets a caller do what the API would refuse | B1 | The console holds no privilege: every action is a `/v1` call checked by `require_role`, `check_binding`, `manage` | None: a tampered console is a `curl` |
 | T8 | Elevation: script injected into the console (stored names, a compromised dependency) reads the token or acts as the user | B1 | Framework text binding only, no raw HTML outside RFC 0005's renderer; CSP `script-src 'self'`, no inline; `pnpm audit`, lockfile | A malicious package version that passes audit runs as the user; accepted, as for any bundled client |
-| T9 | Spoofing / elevation: sign-in flaws (code interception, forged callback, open redirect, token in storage) | B1 | PKCE, `state` checked, in-app redirect targets only, URL replaced after exchange, access token in memory | The refresh token is T14 |
+| T9 | Spoofing / elevation: sign-in flaws (code interception, forged callback, open redirect, token in storage) | B1 | PKCE with `S256` on every flow the application starts, `state` checked, in-app redirect targets only, URL replaced after exchange, access token in memory | Authentik does not require PKCE of the client [R33], so the protection is the application's own (decision 27). The refresh token is T14 |
 | T10 | Tampering: clickjacking or cross-site requests against the console | B1 | `frame-ancestors 'none'`; no cookie, so no ambient credential | None known |
 | T11 | Information disclosure: `GET /me`, the bindings list or the tenant routes reveal other tenants or subjects to the wrong caller | B1 | `me` returns the caller's own memberships; bindings need `manager`; an unknown or foreign tenant is `404` | Managers see the subjects bound to their vault, which is the purpose |
 | T12 | Denial of service: browsers exhaust a user's 20 devices | B1 | One web device per `sid`, 30-day purge (§6.2) | A user with 20 live sessions must revoke one; the message says so [R9] |
-| T14 | Information disclosure / elevation: the refresh token in web storage is read by injected script, or left behind on a shared computer | B1 | Notes render in a sandboxed frame with an opaque origin (RFC 0005 decision 9); CSP without inline script; text binding only; rotation; "Stay signed in" off by default in a tab; sign-out revokes the refresh token at Authentik; "Revoke" refuses the whole session at Kura [R12] | A script that does run in the application's origin takes a refresh token valid until Authentik expires or revokes it, or until someone revokes the device. Accepted by the owner on 2026-11-15, who chose web storage over a cookie session so an installed application stays signed in; Kura is the trial of this model before `weebo-notify-v2` |
+| T14 | Information disclosure / elevation: the refresh token in web storage is read by injected script, or left behind on a shared computer | B1 | Notes render in a sandboxed frame with an opaque origin (RFC 0005 decision 9); CSP without inline script; text binding only; rotation; "Stay signed in" off by default in a tab; sign-out asks Authentik to revoke the refresh token; "Revoke" refuses the whole session at Kura [R12]; an unexpected `invalid_grant` shows the hint to revoke (§4.5) | A script that does run in the application's origin takes a refresh token valid until Authentik expires or revokes it, or until someone revokes the device. Once the thief has refreshed, the user's sign-out revokes only the user's own token: Authentik refuses a rotated token but keeps the newer one of the same chain [R33], so "Revoke" is the only stop (decision 26). Accepted by the owner on 2026-11-15, who chose web storage over a cookie session so an installed application stays signed in; Kura is the trial of this model before `weebo-notify-v2` |
 | T13 | Repudiation: rule changes or deliveries leave no trace | B1 | Audit events `notification_rule_created`, `_changed`, `_deleted`, `_disabled`; deliveries kept 7 days | Deliveries older than 7 days are gone |
 
 ### 7.2 Authentication and authorisation
@@ -1044,8 +1069,13 @@ condition. Versions are the latest published on 2026-11-15 [R20].
 - **Operator prerequisites**: in Authentik, a public OAuth provider
   `kura-web` with redirect URI `https://<host>/app/callback` and the
   `profile` and `offline_access` scopes; its client id in `oidc.audiences`
-  and `ui.oidc.clientId`. A refresh token validity of 14 days is advised for
-  that provider and not required (decision 23).
+  and `ui.oidc.clientId`. The redirect URI is in strict mode: Authentik
+  takes the origin its token endpoint allows from it, read as a literal URL
+  [R34]. A refresh token validity of 14 days is advised for
+  that provider and not required (decision 23); each rotation starts a new
+  validity, so an active browser stays signed in [R34]. The sign-in was
+  verified against Authentik 2026.8.3 [R33]; no version is required, and
+  `tests/heavy/console.sh` replays the facts against another one.
   For notifications: egress from the pod to the receivers; a receiver
   certificate the default roots accept (Let's Encrypt does) or its CA in
   `caFile` (the owner's local instance uses a private CA; no existing client
@@ -1090,7 +1120,8 @@ condition. Versions are the latest published on 2026-11-15 [R20].
   `manager_cannot_read_other_vault_rule` (T5); `no_rule_no_event_row`,
   `vault_changed_is_one_per_minute` (T6); §6.P observation 3 (T7);
   `console_has_no_inline_script` (CSP header and a build check) (T8);
-  `callback_rejects_wrong_state`, `post_login_target_is_in_app` (T9);
+  `callback_rejects_wrong_state`, `post_login_target_is_in_app`,
+  `authorize_always_sends_s256` (T9);
   `app_sets_frame_ancestors_none`, `kura_sets_no_cookie` (T10);
   `me_shows_only_own_tenants`, `bindings_need_manager`,
   `foreign_tenant_is_404` (T11); `web_device_is_reused_per_sid` (T12);
@@ -1098,6 +1129,8 @@ condition. Versions are the latest published on 2026-11-15 [R20].
   `sign_out_clears_storage_and_closes_the_device`,
   `sign_in_works_after_sign_out_in_the_same_session`,
   `refresh_is_single_flight_across_tabs`,
+  `refresh_without_new_token_keeps_the_old_one`,
+  `unexpected_invalid_grant_shows_the_revoke_hint`,
   `service_worker_stores_no_api_response` (T14, with RFC 0005's frame
   test); `authorization_is_sealed_and_never_returned`,
   `authorization_rejects_control_characters` (T4);
@@ -1114,7 +1147,8 @@ condition. Versions are the latest published on 2026-11-15 [R20].
 ### Resolved
 
 Questions 4 to 16 were open in the first draft (as 1 to 13) and keep their
-order; 17 to 23 came out of the owner's review of 2026-11-15.
+order; 17 to 24 came out of the owner's review of 2026-11-15; 13 was closed
+and 25 to 28 opened by the checks of 2026-11-17.
 
 | # | Question | Decision |
 | --- | --- | --- |
@@ -1139,21 +1173,17 @@ order; 17 to 23 came out of the owner's review of 2026-11-15.
 | 20 | Which payload format? | **Kura's own JSON, with `title` and `message` added, transformed on the receiver's side; no Gotify or ntfy format now.** |
 | 21 | Who serves the application? | **`kura-server` itself, same origin, as `proxy-cache` does; no separate nginx container.** One image, no CORS setting. |
 | 22 | What does "Sign out" do? | **Clears the storage, revokes the refresh token, leaves the Authentik session.** The owner also approved "revokes the web device"; that part was reopened as question 24 and settled there. |
-| 24 | Does signing out revoke the web device, or only sign it out? | **Only signs it out: a `sign-out` state that bans nothing; "Revoke" stays the hard cut.** Chosen by the owner on 2026-11-15, reversing the revocation approved earlier that day: a revoked device bans its Authentik session [R9][R12], so signing in again, and the plugin or CLI of that session, would be refused. Cost accepted: after a sign-out a stolen refresh token is stopped by Authentik's revocation, not by Kura. |
+| 24 | Does signing out revoke the web device, or only sign it out? | **Only signs it out: a `sign-out` state that bans nothing; "Revoke" stays the hard cut.** Chosen by the owner on 2026-11-15, reversing the revocation approved earlier that day: a revoked device bans its Authentik session [R9][R12], so signing in again, and the plugin or CLI of that session, would be refused. Cost accepted: after a sign-out a stolen refresh token is stopped by Authentik's revocation, not by Kura (corrected by decision 26: only while the thief has not refreshed). |
 | 23 | How long may a browser session last? | **Whatever Authentik sets; 14 days is advised in the operator guide and never enforced.** The owner's Authentik may set anything from a day to thirty. |
+| 13 | Do the Authentik facts the sign-in stands on hold? | **Yes, all six, observed on the local Authentik 2026.8.3 on 2026-11-17 [R33].** The token endpoint allows the origin of the redirect URI and no other; access tokens carry `sid` and `auth_time` on a sign-in and after a refresh, and `auth_time` alone once the Authentik session has ended; refresh tokens rotate and a rotated one is `400 invalid_grant`; a public client revokes with `client_id` and `token`; the validity is per provider; a second sign-in in one Authentik session carries the same `sid` and `auth_time`, so decision 24 stands. Settled before acceptance, not in phase 1, at the owner's request; the checks stay in `tests/heavy/console.sh`. What they turned up is decisions 25 to 28. |
+| 25 | The revocation endpoint sends no CORS header [R33]: how does sign-out revoke? | **The browser sends the revocation and never reads the answer; sign-out succeeds whatever Authentik did.** A relay through Kura was refused: the server would see a refresh token, which it never does today. |
+| 26 | Authentik refuses a rotated refresh token but keeps the newer one of the chain [R33]: what stops a stolen token? | **Only "Revoke", which refuses the session by `sid` or `auth_time` [R12]; the sign-in page says so after an `invalid_grant` the user did not ask for.** Corrects decision 24's cost: the user's sign-out revokes the user's token, not the one a thief already rotated. |
+| 27 | Authentik exchanges a code asked without a challenge [R33]: is PKCE still a mitigation? | **Yes, for the flows the application starts: always `S256`, proved by a test; the rest is T9's residual.** Whether Authentik can require PKCE per provider was not looked up. |
+| 28 | A provider with a `refresh_token_threshold` answers a refresh without a new refresh token [R34]: require the threshold at 0? | **No: the client keeps the token it has.** As decision 23, Kura imposes nothing on the provider's settings. Read in Authentik's source, not observed: the dev provider keeps the default 0. |
 
 ### Still open
 
-13. **Authentik facts to confirm on the local instance, first step of
-    phase 1.** Not the owner's decisions, but each can change the design:
-    that a public client's code flow and token refresh are allowed from the
-    application's origin (CORS on the token endpoint); that its access
-    tokens carry `sid` or `auth_time`, which `require_session` needs [R12];
-    that refresh tokens rotate and a reused one is refused; that the
-    revocation endpoint accepts a public client; that the refresh validity
-    is set per provider; and whether a second sign-in in one Authentik
-    session carries the same `sid` and `auth_time`, the assumption behind
-    decision 24.
+None.
 
 ---
 
@@ -1208,3 +1238,5 @@ and the device binding land in phase 1 with the first page.
 | R30 | `weebo-notify-v2`: `web/package.json:21-50` (versions), `web/src/auth/pkce.ts` and `pkce.spec.ts`, `web/src/auth/session.ts:1-6` (access token in memory, refresh token in `sessionStorage`, ADR-0020) | `weebo-notify-v2` at `d29d330`, read 2026-11-15 | §6.1, §6.2, §8, §12 |
 | R31 | `proxy-cache`: `ui/src/design/tokens.css`, `ui/src/router/index.ts:160-180` (page gated on its declared verb, refused when missing), `ui/src/components/ui/` (`async-state` and siblings) | `proxy-cache` at `e5fc1376`, read 2026-11-15 | §6.1 |
 | R32 | `weebo-notify-v2`: `crates/notify-adapters/http-actix/src/routes/compat.rs:36` (key as `Bearer`, `Basic`, `X-Gotify-Key` or `?token=`), `:465-486` (`POST /compat/json/{transform}/{channel}`); `grep -rni hmac` over its routes finds no signature check | `weebo-notify-v2` at `d29d330`, read 2026-11-15 | T3, §11, §13, decision 19 |
+| R33 | `tests/heavy/console.sh` against the dev Authentik (`ghcr.io/goauthentik/server:2026.8.3`, provider `kura-web` of `dev/authentik/blueprints/kura.yaml`): every check `ok`; notes: no family revocation, no CORS header on the revocation answer, a code exchanged without PKCE, no `sid` once the Authentik session has ended | run 2026-11-17, working tree on `a4d3ddd` | §4.2, §6.2, §6.P, T9, T14, §13, decisions 13 and 25 to 27 |
+| R34 | `goauthentik/authentik`, `authentik/providers/oauth2/`: `utils.py:39-79` (`cors_allow`: scheme, host and port of each redirect URI), `views/token.py:57-63` and `:216-245` (rotation under `refresh_token_threshold`, a new `expires` at each rotation), `models.py:288-296` | tag `version/2026.8.3` (`e5a0d2f7572c`), read 2026-11-17 | §6.2, §13, decision 28 |

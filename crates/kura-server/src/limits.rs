@@ -12,6 +12,10 @@ pub const LIMITS: &[(&str, &str, u32)] = &[
     ("POST", "/v1/devices", 10),
     ("GET", "/v1/devices", 60),
     ("DELETE", "/v1/devices/{d}", 10),
+    // RFC 0003: per subject, before the console has a device.
+    ("POST", "/v1/devices/{d}/sign-out", 10),
+    ("GET", "/v1/me", 60),
+    ("GET", "/v1/vaults/{v}/bindings", 60),
     ("GET", "/v1/vaults", 60),
     ("POST", "/v1/vaults", 10),
     ("DELETE", "/v1/vaults/{v}", 10),

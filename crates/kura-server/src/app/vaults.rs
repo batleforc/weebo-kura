@@ -39,6 +39,10 @@ pub struct Vault {
     pub head_seq: u64,
     /// The Obsidian configuration categories that sync (§6.8); empty: none.
     pub config_sync: Vec<String>,
+    /// For a scoped token: its own folder rules (RFC 0004), so its client
+    /// refuses a change outside them before sending it. Absent for a device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<super::tokens::ScopeRule>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
@@ -70,6 +74,7 @@ impl From<&VaultAccess> for Vault {
                 .filter_map(|v| v.as_str().map(str::to_owned))
                 .collect(),
             head_seq: u64::try_from(a.head_seq).unwrap_or_default(),
+            scopes: None,
         }
     }
 }
@@ -127,8 +132,16 @@ pub async fn list_vaults(
         super::reader::Reader::Device(d) => d,
         // A scoped token sees its one vault.
         super::reader::Reader::Key(k) => {
-            let a = authz::key_access(&state.db, &snap, k.tenant, k.vault).await?;
-            return Ok(Json(a.iter().map(Vault::from).collect()));
+            let a =
+                authz::key_access(&state.db, &snap, k.tenant, k.vault, VaultRole::Viewer).await?;
+            return Ok(Json(
+                a.iter()
+                    .map(|a| Vault {
+                        scopes: Some(k.rules.clone()),
+                        ..Vault::from(a)
+                    })
+                    .collect(),
+            ));
         }
     };
     let p = &caller.caller.principal;
@@ -263,6 +276,54 @@ fn subject(b: &str) -> Result<BindingSubject, ApiError> {
     BindingSubject::parse(b).ok_or(ApiError::with_detail(
         ProblemType::InvalidRequest,
         "binding is claim:<value> or user:<sub>",
+    ))
+}
+
+/// The vault's bindings, from files and from the API (RFC 0003 §4.4): vault
+/// manager or tenant admin.
+#[utoipa::path(
+    get,
+    path = "/vaults/{v}/bindings",
+    tag = "vaults",
+    params(("v" = Uuid, Path, description = "Vault id"), ("X-Kura-Device" = Uuid, Header, description = "This device")),
+    responses(
+        (status = 200, description = "Every binding, by subject", body = Vec<BindingView>),
+        (status = 403, description = "Below manager", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "No such vault", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("bearer_token" = [])),
+)]
+pub async fn list_bindings(
+    State(state): State<SharedState>,
+    caller: DeviceCaller,
+    Path(v): Path<Uuid>,
+) -> Result<Json<Vec<BindingView>>, ApiError> {
+    let (_, access) = manageable(&state, &caller, v).await?;
+    let can_manage = access.role == VaultRole::Manager
+        || access.tenant_role.is_some_and(|r| r >= TenantRole::Admin);
+    if !can_manage {
+        return Err(ApiError::with_detail(
+            ProblemType::InsufficientRole,
+            "manager required",
+        ));
+    }
+    let mut tx = db::begin_tenant(&state.db, access.tenant, None).await?;
+    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT subject_kind, subject, role, managed_by FROM role_binding
+         WHERE vault_id = $1 ORDER BY subject_kind, subject LIMIT 1000",
+    )
+    .bind(v)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|(kind, subject, role, managed_by)| BindingView {
+                subject: format!("{kind}:{subject}"),
+                role,
+                managed_by,
+            })
+            .collect(),
     ))
 }
 

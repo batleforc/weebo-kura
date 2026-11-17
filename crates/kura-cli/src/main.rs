@@ -15,6 +15,12 @@ use kura_cli::commands::{self, Ctx, DeviceAction, Fail, TokenAction};
     about = "Sync Obsidian vaults with a kura server"
 )]
 struct Cli {
+    /// A file holding a scoped token (`kura_…`), for `attach` and `sync`
+    /// without `kura login`; preferred to the `KURA_TOKEN` variable, which
+    /// other processes of the user can read. The server comes from
+    /// `KURA_SERVER`.
+    #[arg(long, global = true)]
+    token_file: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -73,7 +79,7 @@ enum Command {
     },
     /// Search a vault's notes and file names.
     Search { vault: String, query: String },
-    /// Scoped read-only tokens for agents and scripts.
+    /// Scoped tokens for agents and scripts: folders they read or write.
     Token {
         #[command(subcommand)]
         action: TokenAction,
@@ -90,9 +96,21 @@ async fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    // A scoped token (RFC 0004 §6.6): the file, else `KURA_TOKEN`. It is
+    // never written to the configuration or printed.
+    let scoped = match &cli.token_file {
+        Some(p) => match std::fs::read_to_string(p) {
+            Ok(t) => Some(t.trim().to_owned()),
+            Err(e) => {
+                eprintln!("error: {}: {e}", p.display());
+                return ExitCode::from(1);
+            }
+        },
+        None => std::env::var("KURA_TOKEN").ok(),
+    };
     let ctx = &Ctx {
         home,
-        access_token: std::env::var("KURA_ACCESS_TOKEN").ok(),
+        access_token: scoped.or_else(|| std::env::var("KURA_ACCESS_TOKEN").ok()),
     };
     let result = match cli.command {
         Command::Login {

@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use super::SharedState;
 use super::body::{Body, Raw};
-use super::device::DeviceCaller;
-use crate::authz::{self, VaultAccess};
+use super::reader::{KeyCaller, NOT_UPLOADED, Writer};
+use crate::authz::VaultAccess;
 use crate::db;
 use crate::problem::{ApiError, Problem, ProblemType};
 use crate::store::{Storage, crypto};
@@ -73,18 +73,6 @@ fn parse_hash(s: &str) -> Result<ChunkHash, ApiError> {
     })
 }
 
-async fn access(
-    state: &SharedState,
-    caller: &DeviceCaller,
-    v: Uuid,
-    min: VaultRole,
-) -> Result<VaultAccess, ApiError> {
-    let snap = state
-        .snapshot()
-        .ok_or(ApiError::of(ProblemType::Unavailable))?;
-    authz::require_role(&state.db, &snap, &caller.caller.principal, v, min).await
-}
-
 /// Which of these chunks the vault lacks; present ones are kept from garbage collection.
 #[utoipa::path(
     post,
@@ -100,11 +88,11 @@ async fn access(
 )]
 pub async fn missing_chunks(
     State(state): State<SharedState>,
-    caller: DeviceCaller,
+    caller: Writer,
     Path(v): Path<Uuid>,
     Body(body): Body<MissingRequest>,
 ) -> Result<Json<MissingResponse>, ApiError> {
-    let a = access(&state, &caller, v, VaultRole::Editor).await?;
+    let a = caller.access(&state, v).await?;
     if body.hashes.len() > MAX_HASHES {
         return Err(ApiError::with_detail(
             ProblemType::InvalidRequest,
@@ -116,7 +104,20 @@ pub async fn missing_chunks(
         .iter()
         .map(|h| parse_hash(h))
         .collect::<Result<Vec<_>, _>>()?;
-    let raw: Vec<Vec<u8>> = hashes.iter().map(|h| h.as_bytes().to_vec()).collect();
+    // A token is told about what it may name only: everything else is
+    // "missing", stored or not, and is not kept from collection (RFC 0004 T3).
+    let asked = match caller.key() {
+        Some(k) => {
+            let known = k.knows(&state, &a, &hashes, true).await?;
+            hashes
+                .iter()
+                .filter(|h| known.contains(h))
+                .copied()
+                .collect()
+        }
+        None => hashes.clone(),
+    };
+    let raw: Vec<Vec<u8>> = asked.iter().map(|h| h.as_bytes().to_vec()).collect();
     let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
     // "Present" refreshes last_touched, so GC cannot take it before the commit (§6.4).
     let present: Vec<Vec<u8>> =
@@ -154,11 +155,11 @@ pub async fn missing_chunks(
 )]
 pub async fn put_chunk(
     State(state): State<SharedState>,
-    caller: DeviceCaller,
+    caller: Writer,
     Path((v, hash)): Path<(Uuid, String)>,
     Raw(body): Raw,
 ) -> Result<StatusCode, ApiError> {
-    let a = access(&state, &caller, v, VaultRole::Editor).await?;
+    let a = caller.access(&state, v).await?;
     storage(&state)?;
     let hash = parse_hash(&hash)?;
     // T6: the bytes are their address, checked before anything is stored.
@@ -170,6 +171,10 @@ pub async fn put_chunk(
         return Err(ApiError::of(ProblemType::HashMismatch));
     }
     store_chunk(&state, &a, v, hash, body).await?;
+    // Sending the bytes is the proof, stored already or not (RFC 0004 §6.4).
+    if let Some(k) = caller.key() {
+        k.uploaded(&state, &a, &hash, true).await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -451,11 +456,11 @@ pub(super) async fn read_blob(
 )]
 pub async fn put_blob(
     State(state): State<SharedState>,
-    caller: DeviceCaller,
+    caller: Writer,
     Path((v, hash)): Path<(Uuid, String)>,
     Body(body): Body<BlobManifest>,
 ) -> Result<StatusCode, ApiError> {
-    let a = access(&state, &caller, v, VaultRole::Editor).await?;
+    let a = caller.access(&state, v).await?;
     let hash = parse_hash(&hash)?;
     let chunks = body
         .chunks
@@ -476,7 +481,22 @@ pub async fn put_blob(
     if max_file.is_some_and(|m| body.size > m.bytes()) {
         return Err(ApiError::of(ProblemType::PayloadTooLarge));
     }
+    // A token's manifest names only chunks it reads or uploaded: otherwise
+    // it could name a hash seen elsewhere and read the content back (T2).
+    if let Some(k) = caller.key() {
+        let known = k.knows(&state, &a, &chunks, true).await?;
+        if !chunks.iter().all(|c| known.contains(c)) {
+            return Err(KeyCaller::refuse(
+                &state,
+                ProblemType::HashMismatch,
+                NOT_UPLOADED,
+            ));
+        }
+    }
     store_blob(&state, &a, v, hash, body.size, &chunks).await?;
+    if let Some(k) = caller.key() {
+        k.uploaded(&state, &a, &hash, false).await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

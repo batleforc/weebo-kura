@@ -361,6 +361,7 @@ async fn run(seed: u64) -> (usize, u64) {
         dry_run: false,
         allow_deletions: false,
         prefer_remote: false,
+        writable: None,
     };
     let mut devices = Vec::new();
     for i in 0..4u64 {

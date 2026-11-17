@@ -150,6 +150,10 @@ pub enum SyncError {
     /// the user agreed (§6.3).
     #[error("a full resync would move {deletions} of {files} local files to the trash")]
     TooManyDeletions { deletions: usize, files: usize },
+    /// Local changes outside what [`Options::writable`] allows; nothing was
+    /// uploaded (RFC 0004 §6.6).
+    #[error("{} local changes are outside the folders this caller may write", paths.len())]
+    NotWritable { paths: Vec<String> },
 }
 
 /// The local side: files, the persisted state, time and randomness.
@@ -243,6 +247,9 @@ pub struct Report {
     pub resynced: Option<String>,
 }
 
+/// Whether a vault path may be written by this caller.
+pub type Writable = Box<dyn Fn(&str) -> bool + Send + Sync>;
+
 pub struct Options {
     pub params: ChunkParams,
     /// Larger files are listed as unsyncable (§6.8).
@@ -256,6 +263,10 @@ pub struct Options {
     /// `.trash`), so a new device never overwrites the user's settings with
     /// its defaults (phase 8 review H1).
     pub prefer_remote: bool,
+    /// Where this caller may write, when it is not everywhere (a scoped
+    /// token, RFC 0004 §6.6): a change elsewhere stops the push before any
+    /// upload, with [`SyncError::NotWritable`].
+    pub writable: Option<Writable>,
 }
 
 /// A full resync asks first above this share of the local files, or this
@@ -602,6 +613,32 @@ async fn push<H: Host, R: Remote>(
         .iter()
         .filter_map(|(_, p)| p.as_ref().map(|p| p.size))
         .fold(0u64, u64::saturating_add);
+    if let Some(writable) = &opts.writable {
+        // A put is checked where it lands and where the entry lies (a rename
+        // writes both ends); a deletion, where the entry lies.
+        let mut paths: Vec<String> = ops
+            .iter()
+            .flat_map(|(op, _)| {
+                let (entry, to) = match op {
+                    Operation::Put { entry, path, .. } => (entry, Some(path)),
+                    Operation::Delete { entry, .. } => (entry, None),
+                };
+                state
+                    .entries
+                    .get(entry)
+                    .map(|k| &k.path)
+                    .into_iter()
+                    .chain(to)
+            })
+            .map(|p| p.as_str().to_owned())
+            .filter(|p| !writable(p))
+            .collect();
+        paths.sort();
+        paths.dedup();
+        if !paths.is_empty() {
+            return Err(SyncError::NotWritable { paths });
+        }
+    }
     if opts.dry_run || ops.is_empty() {
         return Ok(());
     }

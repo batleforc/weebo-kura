@@ -1,0 +1,5 @@
+node_modules/
+dist/
+coverage/
+# Generated from docs/api/openapi.json by every script that needs it.
+src/api/generated/

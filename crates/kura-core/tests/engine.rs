@@ -311,6 +311,7 @@ fn opts(dry_run: bool) -> Options {
         dry_run,
         allow_deletions: false,
         prefer_remote: false,
+        writable: None,
     }
 }
 

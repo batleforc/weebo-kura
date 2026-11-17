@@ -33,11 +33,12 @@ use crate::reconcile::snapshot::Snapshot;
         (name = "probes", description = "Process health, no data"),
         (name = "admin", description = "Platform administration"),
         (name = "devices", description = "Device registration and revocation"),
+        (name = "me", description = "The signed-in caller"),
         (name = "vaults", description = "Vaults and their role bindings"),
         (name = "chunks", description = "Encrypted chunks and file manifests"),
         (name = "sync", description = "Commits and changes"),
         (name = "history", description = "Revisions and restore"),
-        (name = "tokens", description = "Scoped read-only tokens for non-interactive readers"),
+        (name = "tokens", description = "Scoped tokens for non-interactive readers and writers"),
         (name = "search", description = "Opt-in full-text search"),
     ),
     components(schemas(Problem)),
@@ -93,6 +94,8 @@ pub struct AppState {
     pub hub: crate::notify::Hub,
     /// `chunks/batch` answers this replica builds at once (RFC 0002 §7.5).
     pub batches: tokio::sync::Semaphore,
+    /// The web console, when `ui.enabled` (RFC 0003 §6.1).
+    pub ui: Option<ui::UiSettings>,
     snapshot: RwLock<Option<Arc<Snapshot>>>,
     /// This replica's last rejected configuration, for `GET /v1/admin/status`.
     rejection: Mutex<Option<Vec<kura_api::ConfigError>>>,
@@ -109,6 +112,7 @@ impl AppState {
             limits: crate::limits::RateLimiter::default(),
             http: HttpSettings::default(),
             storage: None,
+            ui: None,
             hub,
             batches: tokio::sync::Semaphore::new(chunks::BATCHES_IN_FLIGHT),
             snapshot: RwLock::new(None),
@@ -177,6 +181,11 @@ impl Default for HttpSettings {
 }
 
 impl AppState {
+    pub fn with_ui(mut self, ui: ui::UiSettings) -> Self {
+        self.ui = Some(ui);
+        self
+    }
+
     pub fn with_http(mut self, http: HttpSettings) -> Self {
         self.http = http;
         self
@@ -227,8 +236,11 @@ fn v1_router() -> OpenApiRouter<SharedState> {
         .routes(routes!(admin::admin_status))
         .routes(routes!(devices::register_device, devices::list_devices))
         .routes(routes!(devices::revoke_device))
+        .routes(routes!(devices::sign_out_device))
+        .routes(routes!(me::me))
         .routes(routes!(vaults::list_vaults, vaults::create_vault))
         .routes(routes!(vaults::delete_vault))
+        .routes(routes!(vaults::list_bindings))
         .routes(routes!(vaults::put_binding, vaults::delete_binding))
         .routes(routes!(changes::get_changes))
         .routes(routes!(changes::get_entries))
@@ -306,6 +318,7 @@ pub fn app(state: SharedState) -> axum::Router {
         .layer(middleware::from_fn(docs_csp));
     router
         .merge(docs)
+        .merge(ui::router(&state))
         .layer(middleware::from_fn_with_state(state.clone(), audit_denials))
         .layer(cors(&state.http))
         .layer(
@@ -469,10 +482,12 @@ pub mod commits;
 pub mod device;
 pub mod devices;
 pub mod events;
+pub mod me;
 pub mod reader;
 pub mod search;
 pub mod space;
 pub mod tokens;
+pub mod ui;
 pub mod vaults;
 
 #[cfg(test)]

@@ -2,11 +2,12 @@ version: "3"
 
 tasks:
   audit:
-    desc: "Check dependencies and the image for CVEs: cargo audit, cargo deny, pnpm audit (plugin), Trivy (image only with IMAGE=<ref>)"
+    desc: "Check dependencies and the image for CVEs: cargo audit, cargo deny, pnpm audit (plugin, console), Trivy (image only with IMAGE=<ref>)"
     cmds:
       - task: audit:rust
       - task: deny
       - task: plugin:audit
+      - task: ui:audit
       - task: audit:fs
       - task: audit:image
 

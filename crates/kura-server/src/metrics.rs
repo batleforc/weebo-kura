@@ -26,6 +26,9 @@ pub struct Metrics {
     pub chunk_corrupt_total: IntCounter,
     /// Commits that wrote at least one revision (§10.1, §6.P observation 1).
     pub commits_total: IntCounter,
+    /// Writes asked by scoped tokens, by `outcome`: `applied`, `refused`
+    /// (folder or possession), `disabled` (tenant switch) (RFC 0004 §10.1).
+    pub token_writes_total: IntCounterVec,
     /// Three-way merges attempted, by `outcome`: `merged` or `conflict` (§10.1).
     pub merge_total: IntCounterVec,
     /// Items of the batch routes (RFC 0002), by `route` (`blobs`, `chunks`)
@@ -101,6 +104,11 @@ impl Metrics {
         registry.register(Box::new(chunk_corrupt_total.clone()))?;
         let commits_total = IntCounter::new("commits_total", "Commits that wrote revisions")?;
         registry.register(Box::new(commits_total.clone()))?;
+        let token_writes_total = IntCounterVec::new(
+            Opts::new("token_writes_total", "Writes asked by scoped tokens"),
+            &["outcome"],
+        )?;
+        registry.register(Box::new(token_writes_total.clone()))?;
         let merge_total = IntCounterVec::new(
             Opts::new("merge_total", "Three-way merges attempted"),
             &["outcome"],
@@ -232,6 +240,7 @@ impl Metrics {
             authz_denied_total,
             chunk_corrupt_total,
             commits_total,
+            token_writes_total,
             merge_total,
             batch_items_total,
             batch_response_bytes,

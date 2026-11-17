@@ -1,4 +1,4 @@
-# From the weebo-containerfile template (batlehub@20879e5), one server image, no UI.
+# From the weebo-containerfile template (batlehub@20879e5), one server image, with the web console (RFC 0003).
 # Twin of Containerfile on Red Hat Hardened Images, not built in CI; keep the two in step.
 # ── Build stage ───────────────────────────────────────────────────────────────
 # Pin every base by tag AND digest; updatecli moves both. The hardened builder tracks its own latest Rust.
@@ -30,12 +30,26 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 RUN cargo build --locked --release -p kura-server
 
+# ── UI: the web console (RFC 0003 §6.1), built from the committed spec ────────
+FROM registry.access.redhat.com/hi/nodejs:24-builder@sha256:0d0b51223986aafa26289d4f7c02aeb13558f104c9fac4813a74e00a92eb12c8 AS ui-builder
+# The hardened builder runs as a non-root user; the global pnpm install needs root.
+USER root
+WORKDIR /src/ui
+RUN npm install -g --ignore-scripts pnpm@12.21.0
+COPY ui/package.json ui/pnpm-lock.yaml ui/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY docs/api/openapi.json /src/docs/api/openapi.json
+COPY ui/ ./
+RUN pnpm run build
+
 # ── Runtime image ─────────────────────────────────────────────────────────────
 # The process writes nothing to disk, so the chart runs it with a read-only root
 # filesystem and no writable directory is pre-created.
 FROM registry.access.redhat.com/hi/core-runtime:latest@sha256:81280d7fd6afa7a3d2a6da2e90e545cf8e5d187c80a69b2a1c875fdcd731aaed AS runtime
 
 COPY --from=builder /build/target/release/kura-server /usr/local/bin/kura-server
+# The console, served under /app when `ui.enabled` (its default `ui.dir`).
+COPY --from=ui-builder /src/ui/dist /usr/share/kura/ui
 
 # API, then metrics (never exposed by the ingress, RFC 0001 §4.4).
 EXPOSE 8080 9090

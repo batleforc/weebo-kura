@@ -1,0 +1,64 @@
+{
+  "app": { "name": "Kura", "tagline": "Your vaults, from a browser." },
+  "nav": {
+    "vaults": "My vaults",
+    "devices": "My devices",
+    "signOut": "Sign out",
+    "main": "Main"
+  },
+  "signIn": {
+    "action": "Sign in with Authentik",
+    "stay": "Stay signed in on this device",
+    "stayHelp": "Leave unticked on a shared computer.",
+    "ended": "Your session ended. If you did not sign out yourself, sign in and revoke this browser in \"My devices\".",
+    "failed": "The sign-in could not start: {message}"
+  },
+  "callback": {
+    "working": "Signing in…",
+    "failed": "The sign-in did not complete: {message}",
+    "again": "Try again"
+  },
+  "noTenant": {
+    "text": "You are signed in as {name}, but you are not a member of any Kura tenant.",
+    "hint": "Ask an administrator to add your account to a group, then sign in again."
+  },
+  "vaults": {
+    "title": "My vaults",
+    "empty": "No vault is open to you yet.",
+    "failed": "Your vaults could not be loaded.",
+    "name": "Name",
+    "tenant": "Tenant",
+    "role": "Your role",
+    "source": "Declared in"
+  },
+  "devices": {
+    "title": "My devices",
+    "empty": "No device yet.",
+    "failed": "Your devices could not be loaded.",
+    "name": "Name",
+    "kind": "Kind",
+    "lastSeen": "Last seen",
+    "state": "State",
+    "owner": "Owner",
+    "thisBrowser": "this browser",
+    "active": "active",
+    "revoked": "revoked",
+    "signOutHere": "Sign out here",
+    "revoke": "Revoke",
+    "confirmRevoke": "Revoke {name}? Every device signed in with the same Authentik session is refused until it signs in again.",
+    "confirm": "Revoke",
+    "cancel": "Cancel"
+  },
+  "state": { "loading": "Loading…", "retry": "Retry" },
+  "problem": {
+    "network": "The server could not be reached.",
+    "insufficient_role": "Your role does not allow this.",
+    "not_found": "Not found, or not visible to you.",
+    "quota_exceeded": "At most 20 live devices: revoke one first.",
+    "device_revoked": "This browser's session was revoked: sign in again.",
+    "rate_limited": "Too many requests: wait a moment.",
+    "unavailable": "The server is unavailable for now.",
+    "status": "The server answered {status}.",
+    "unexpected": "Something unexpected happened."
+  }
+}

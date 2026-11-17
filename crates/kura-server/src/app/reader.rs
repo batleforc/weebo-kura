@@ -1,5 +1,5 @@
-//! Who may read (RFC 0001 §4.4 "OIDC or key"): a signed-in device, or a
-//! scoped token (§6.2, T5). A token is checked in `verify_key`: its hash in
+//! Who may read (RFC 0001 §4.4 "OIDC or key"), and who may write content
+//! (RFC 0004 §5.2): a signed-in device, or a scoped token (§6.2, T5). A token is checked in `verify_key`: its hash in
 //! constant time, its expiry and revocation, the grant it was issued under,
 //! the client address against its CIDR list; each use is audited and
 //! touches `last_used_at` at most once a minute.
@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use super::SharedState;
 use super::device::{DeviceCaller, rate_limit};
-use crate::authz::{self, VaultAccess};
+use crate::authz::{self, PathScope, VaultAccess};
 use crate::problem::{ApiError, ProblemType};
 
 /// A verified scoped token.
@@ -25,8 +25,12 @@ pub struct KeyCaller {
     pub id: Uuid,
     pub tenant: Uuid,
     pub vault: Uuid,
-    /// The token's path prefix, folded (§6.3); empty for the whole vault.
-    pub prefix_key: String,
+    /// The folders it reads and writes (RFC 0004 §5.1).
+    pub scope: PathScope,
+    /// The same, as issued: what the token is shown of itself.
+    pub rules: Vec<super::tokens::ScopeRule>,
+    /// Shown in lists and conflict file names.
+    pub name: String,
 }
 
 pub enum Reader {
@@ -37,8 +41,8 @@ pub enum Reader {
 /// Where a read may look: a vault, and for a token, under its prefix only.
 pub struct ReadAccess {
     pub access: VaultAccess,
-    /// Folded; empty when the whole vault is visible.
-    pub prefix_key: String,
+    /// The whole vault for a device.
+    pub scope: PathScope,
     /// The signed-in user, whose own configuration is visible (§6.8); none
     /// for a scoped token.
     pub subject: Option<String>,
@@ -46,7 +50,7 @@ pub struct ReadAccess {
 
 impl ReadAccess {
     pub fn sees(&self, path: &str) -> bool {
-        authz::visible_under_prefix(path, &self.prefix_key)
+        self.scope.sees(path)
     }
 
     /// T16: a token under a prefix gets a blob (`chunk` false) or a chunk
@@ -127,7 +131,8 @@ fn bearer(parts: &Parts) -> Option<&str> {
         .map(str::trim)
 }
 
-/// A scoped token on a route that writes: read only (§6.2).
+/// A scoped token on a route that does not name [`Reader`] or [`Writer`]:
+/// refused, so a route added later refuses tokens by default (RFC 0004 T4).
 pub fn refuse_key_on_write(parts: &Parts) -> Result<(), ApiError> {
     if bearer(parts).is_some_and(|t| t.starts_with(kura_core::token::PREFIX)) {
         return Err(ApiError::with_detail(
@@ -154,6 +159,173 @@ impl FromRequestParts<SharedState> for Reader {
                 DeviceCaller::from_request_parts(parts, state).await?,
             )),
         }
+    }
+}
+
+/// Who may write content: a device, or a token under its `write` folders
+/// (RFC 0004 §6.3). Only the four routes of its §4.4 name this extractor.
+pub enum Writer {
+    Device(DeviceCaller),
+    Key(KeyCaller),
+}
+
+impl FromRequestParts<SharedState> for Writer {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &SharedState,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(match Reader::from_request_parts(parts, state).await? {
+            Reader::Device(d) => Self::Device(d),
+            Reader::Key(k) => Self::Key(k),
+        })
+    }
+}
+
+/// The detail of every possession refusal, whether the content exists
+/// elsewhere in the vault or not (RFC 0004 T3).
+pub const NOT_UPLOADED: &str = "content not uploaded by this token";
+
+impl Writer {
+    /// The vault, writable. A device needs `editor`. A token needs this
+    /// vault to be its own (else `404`, T4 of RFC 0001), a `write` rule and
+    /// the tenant's switch; it is given `editor` here and nowhere else.
+    pub async fn access(&self, state: &SharedState, v: Uuid) -> Result<VaultAccess, ApiError> {
+        let snap = state
+            .snapshot()
+            .ok_or(ApiError::of(ProblemType::Unavailable))?;
+        match self {
+            Self::Device(d) => {
+                authz::require_role(&state.db, &snap, &d.caller.principal, v, VaultRole::Editor)
+                    .await
+            }
+            Self::Key(k) => {
+                if k.vault != v {
+                    return Err(ApiError::of(ProblemType::NotFound));
+                }
+                if !k.scope.can_write() {
+                    state
+                        .metrics
+                        .token_writes_total
+                        .with_label_values(&["refused"])
+                        .inc();
+                    return Err(ApiError::with_detail(
+                        ProblemType::InsufficientRole,
+                        "this token has no write folder",
+                    ));
+                }
+                if !authz::token_write_allowed(&snap, k.tenant) {
+                    state
+                        .metrics
+                        .token_writes_total
+                        .with_label_values(&["disabled"])
+                        .inc();
+                    return Err(ApiError::with_detail(
+                        ProblemType::InsufficientRole,
+                        "this tenant does not allow tokens to write (scopedTokens.write)",
+                    ));
+                }
+                authz::key_access(&state.db, &snap, k.tenant, v, VaultRole::Editor)
+                    .await?
+                    .ok_or(ApiError::of(ProblemType::NotFound))
+            }
+        }
+    }
+
+    pub fn key(&self) -> Option<&KeyCaller> {
+        match self {
+            Self::Device(_) => None,
+            Self::Key(k) => Some(k),
+        }
+    }
+
+    /// The user, or `key:<id>`: who a revision is attributed to (T9).
+    pub fn subject(&self) -> String {
+        match self {
+            Self::Device(d) => d.caller.principal.sub.clone(),
+            Self::Key(k) => format!("key:{}", k.id),
+        }
+    }
+
+    /// The device, or the token's id standing in for one: `revision` and
+    /// `commit_record` take any uuid there (RFC 0004 §6.3).
+    pub fn device_id(&self) -> Uuid {
+        match self {
+            Self::Device(d) => d.device,
+            Self::Key(k) => k.id,
+        }
+    }
+}
+
+impl KeyCaller {
+    /// §6.4: the chunks (`chunk` true) or blobs among `hashes` this token
+    /// may name: those it can already read, and those it uploaded itself.
+    pub async fn knows(
+        &self,
+        state: &SharedState,
+        a: &VaultAccess,
+        hashes: &[kura_core::ChunkHash],
+        chunk: bool,
+    ) -> Result<std::collections::HashSet<kura_core::ChunkHash>, ApiError> {
+        let ra = ReadAccess {
+            access: a.clone(),
+            scope: self.scope.clone(),
+            subject: None,
+        };
+        let mut known = ra.sees_contents(state, hashes, chunk).await?;
+        let raw: Vec<Vec<u8>> = hashes.iter().map(|h| h.as_bytes().to_vec()).collect();
+        let mut tx = crate::db::begin_tenant(&state.db, a.tenant, None).await?;
+        let mine: Vec<Vec<u8>> = sqlx::query_scalar(
+            "SELECT hash FROM token_upload WHERE token_id = $1 AND kind = $2 AND hash = ANY($3)",
+        )
+        .bind(self.id)
+        .bind(if chunk { "chunk" } else { "blob" })
+        .bind(&raw)
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        known.extend(
+            mine.iter()
+                .filter_map(|h| <[u8; 32]>::try_from(h.as_slice()).ok())
+                .map(kura_core::ChunkHash::from_bytes),
+        );
+        Ok(known)
+    }
+
+    /// Records that this token uploaded a chunk or a blob; again refreshes
+    /// the 24 hours it is remembered.
+    pub async fn uploaded(
+        &self,
+        state: &SharedState,
+        a: &VaultAccess,
+        hash: &kura_core::ChunkHash,
+        chunk: bool,
+    ) -> Result<(), ApiError> {
+        let mut tx = crate::db::begin_tenant(&state.db, a.tenant, None).await?;
+        sqlx::query(
+            "INSERT INTO token_upload (token_id, vault_id, tenant_id, kind, hash) VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (token_id, kind, hash) DO UPDATE SET created_at = now()",
+        )
+        .bind(self.id)
+        .bind(a.vault)
+        .bind(a.tenant)
+        .bind(if chunk { "chunk" } else { "blob" })
+        .bind(hash.as_bytes().as_slice())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// A possession or folder refusal, counted (§10.1).
+    pub fn refuse(state: &SharedState, kind: ProblemType, detail: impl Into<String>) -> ApiError {
+        state
+            .metrics
+            .token_writes_total
+            .with_label_values(&["refused"])
+            .inc();
+        ApiError::with_detail(kind, detail)
     }
 }
 
@@ -219,12 +391,20 @@ async fn verify_key(parts: &Parts, state: &SharedState, text: &str) -> Result<Ke
         .get::<axum::extract::MatchedPath>()
         .map_or("unmatched", axum::extract::MatchedPath::as_str);
     tracing::info!(target: "audit", event = "scoped_token_used", token = %token.id, %route, client = ?from);
-    let prefix: String = row.try_get("path_prefix")?;
+    // T7: rules that do not decode refuse the token, never widen it.
+    let rules: Vec<super::tokens::ScopeRule> =
+        serde_json::from_value(row.try_get("scopes")?).unwrap_or_default();
+    let Some(scope) = super::tokens::scope_of(&rules) else {
+        tracing::error!(token = %token.id, "stored scopes refused");
+        return Err(invalid());
+    };
     Ok(KeyCaller {
         id: token.id,
         tenant,
         vault: row.try_get("vault_id")?,
-        prefix_key: authz::fold(&prefix),
+        scope,
+        rules,
+        name: row.try_get("name")?,
     })
 }
 
@@ -243,14 +423,14 @@ impl Reader {
         match self {
             Self::Device(d) => Ok(ReadAccess {
                 access: authz::require_role(&state.db, &snap, &d.caller.principal, v, min).await?,
-                prefix_key: String::new(),
+                scope: PathScope::whole(),
                 subject: Some(d.caller.principal.sub.clone()),
             }),
             Self::Key(k) => {
                 if k.vault != v {
                     return Err(ApiError::of(ProblemType::NotFound));
                 }
-                let access = authz::key_access(&state.db, &snap, k.tenant, v)
+                let access = authz::key_access(&state.db, &snap, k.tenant, v, VaultRole::Viewer)
                     .await?
                     .ok_or(ApiError::of(ProblemType::NotFound))?;
                 if min > VaultRole::Viewer {
@@ -261,7 +441,7 @@ impl Reader {
                 }
                 Ok(ReadAccess {
                     access,
-                    prefix_key: k.prefix_key.clone(),
+                    scope: k.scope.clone(),
                     subject: None,
                 })
             }

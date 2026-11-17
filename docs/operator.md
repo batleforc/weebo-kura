@@ -71,6 +71,10 @@ vault:            # accepted now, read from phase 2 on
   secrets: { database: mv/data/kura/database, bucket: mv/data/kura/bucket }
 maintenance:
   window: "01:00-05:00"   # UTC, the default; equal ends mean all day (§12)
+ui:               # the web console (RFC 0003); absent or enabled: false: /app is 404
+  enabled: true
+  dir: /usr/share/kura/ui        # the default, where the image puts it
+  oidc: { clientId: kura-web }   # must also be in oidc.audiences
 ```
 
 Unknown fields are refused, so a typo stops the server instead of being
@@ -95,6 +99,7 @@ spec:
   retention: { maxRevisionAge: 180d, maxRevisionsPerEntry: 200, deletedEntryTtl: 90d }
   quota: { storage: 20Gi, maxFileSize: 500Mi }
   search: { enabled: true }
+  scopedTokens: { write: true }  # tokens of this tenant may carry write rules (RFC 0004)
   deletionPolicy: Orphan         # or Delete
 ---
 apiVersion: kura.weebo.io/v1alpha1
@@ -111,7 +116,7 @@ spec:
 
 Defaults are closed: no `claimMappings`, no members; no `bindings`, only the
 tenant's `owner` and `admin` (who open every vault as `manager`); search off;
-`.obsidian` not synced; `Orphan`.
+scoped tokens read only; `.obsidian` not synced; `Orphan`.
 
 Refused changes (§4.3): an unknown kind, field or role; duplicate names; a
 vault outside its tenant's `vaultNamespaces` or naming an unknown tenant;
@@ -135,16 +140,64 @@ claim values or known members.
 
 ### Scoped tokens
 
-For agents and scripts that read a vault without signing in (§6.2): issued by
-a vault manager or tenant admin, `Authorization: Bearer kura_…`, read only,
-one vault, an optional folder prefix, at most 90 days, from listed address
-ranges only (never `0.0.0.0/0` or `::/0`). The client address is read
+For agents and scripts that use a vault without signing in (§6.2, RFC 0004):
+issued by a vault manager or tenant admin, `Authorization: Bearer kura_…`,
+one vault, 1 to 16 folder rules each `read` or `write`, at most 90 days, from
+listed address ranges only (never `0.0.0.0/0` or `::/0`). The client address is read
 through `trustedProxies`: behind a proxy, a request that does not name its
 client in a well-formed `X-Forwarded-For` is refused. A token dies with the
 grant that let its creator issue it (the binding, or the claim value mapped
 to `owner`/`admin`), when revoked, or at expiry; rows are purged 30 days
 after expiry. Each use is an audit event `scoped_token_used`; a refused
 address is an `authz_denied` event with `address_not_allowed`.
+
+A rule covers a folder and everything under it, compared without case.
+`write` also reads that folder, and nothing else; no rule at all is the whole
+vault, read only; a token never writes the whole vault. With no `write`
+rule a token behaves as before RFC 0004.
+
+**Writing is off until the tenant sets `scopedTokens: { write: true }`.**
+Roll the release out everywhere first: an older binary refuses the unknown
+field. Set back to `false`, every token write stops at the next request
+(`403`), reads go on, and nothing is deleted: this is the kill switch.
+`GET /v1/admin/status` then shows `TokenWriteDisabled` on the tenant while
+write tokens exist.
+
+A write token reaches four routes (`chunks/missing`, `PUT chunks`,
+`PUT blobs`, `commits`) and no other write: it never restores, manages
+tokens or bindings, opens the event socket or touches `.obsidian`. Under its
+`write` folders it creates, edits, renames and deletes; a commit with one
+operation outside is refused whole (`403 insufficient_role`,
+`operations[i]: outside the token's write folders`). It may only name
+content it can read or uploaded itself in the last 24 hours, so knowing the
+hash of a note elsewhere in the vault gives nothing (`422`,
+`content not uploaded by this token`, the same answer whether that content
+exists or not). What it writes is ordinary history, attributed to
+`key:<token id>`; an `editor` restores over it. `kura_token_writes_total`
+counts its writes by `outcome`: `applied`, `refused`, `disabled`.
+
+A rollback to a binary from before RFC 0004 keeps single-folder read tokens
+working; a token with several rules or a `write` rule sees nothing and
+writes nothing until the roll-forward.
+
+#### A bot that writes into one folder
+
+```bash
+# A manager, once: the secret is shown once.
+kura token create campaign --name discord-recap \
+    --read Sessions/ --read PNJ/ --write Resumes/ --expires 30d --cidr 10.42.0.0/16
+
+# The bot: no `kura login`, the token from a mounted secret.
+export KURA_SERVER=https://kura.example.org KURA_CLI_HOME=/var/lib/bot/kura
+kura --token-file /run/secrets/kura-token attach campaign /var/lib/bot/campaign --yes
+kura --token-file /run/secrets/kura-token sync
+```
+
+`--token-file` is preferred to the `KURA_TOKEN` variable, which other
+processes of the same user can read; the token is never written to the
+CLI's files. The bot downloads its readable folders only. A change outside
+its `write` folders is refused by the CLI before anything is sent (exit 3,
+naming the file and the folders that would work).
 
 ### Obsidian configuration
 
@@ -224,6 +277,15 @@ Per §13 and §6.2:
 - The provider's *access code validity* of at least 10 minutes: Authentik
   gives a device code that same lifetime, 1 minute by default, too short to
   type the code on another device.
+- For the web console (RFC 0003), a third public provider `kura-web`, code
+  flow and refresh token only, with the redirect URI
+  `https://<host>/app/callback` in **strict** mode (Authentik takes the
+  origin its token endpoint allows from it), the `profile` and
+  `offline_access` scope mappings, and its client id in `oidc.audiences`
+  and `ui.oidc.clientId`. A refresh token validity of 14 days is advised,
+  never checked: each refresh starts a new validity, so an active browser
+  stays signed in. Verified against Authentik 2026.8.3;
+  `tests/heavy/console.sh` replays those facts against another version.
 
 The server reads discovery, the JWKS and userinfo from the issuer (5 s
 timeout, no redirects). Keys are cached and stored in PostgreSQL, so a replica
@@ -243,6 +305,25 @@ owner's `auth_time`, the time that session signed in. End the session in
 Authentik to invalidate the refresh token itself. A token with neither claim
 is refused. Two sessions of one user signing in in the same second share a
 revocation. Devices idle 180 days are purged daily; revoked ones are kept.
+
+The web console registers one device with profile `web` per Authentik
+session: signing in again in the same session gets the same device back. Its
+"Sign out" (`POST /v1/devices/{d}/sign-out`) signs that device out without
+banning anything: its id is refused as unknown, and the same Authentik
+session may sign in again; it also asks Authentik to revoke the refresh
+token, whose answer the browser cannot read. "Revoke" stays the hard cut
+above, the one to use for a lost or stolen device. A refresh token stolen
+from the browser and already refreshed by the thief survives the user's
+sign-out; only "Revoke" stops it, and the console says so when a session
+ends unexpectedly. Web devices idle 30 days are purged. A web device never
+reads or writes an Obsidian configuration.
+
+The console keeps its access token in memory and its refresh token in the
+tab's `sessionStorage`, or in `localStorage` when the user ticks "Stay signed
+in on this device" (ticked by default in the installed application). Kura
+sets no cookie. `/app` is served with a Content-Security-Policy that allows
+scripts from Kura's origin only and connections to Kura and the identity
+provider, and with `frame-ancestors 'none'`.
 
 ## 8. Signals
 
@@ -297,8 +378,9 @@ kura devices [revoke <name>]
 kura watch [notes]             # stays in sync: pulls on every notification, pushes edits once quiet
 kura sync notes --yes          # a full resync may move many files to .trash without asking
 kura search notes "budget 2026" # notes and file names, best first (tenant search on)
-kura token create notes --prefix agents/ --expires 30d --cidr 10.42.0.0/16
-kura token list notes          # never shows a secret
+kura token create notes --read agents/ --expires 30d --cidr 10.42.0.0/16
+kura token create notes --name bot --read in/ --write out/ --expires 30d --cidr 10.42.0.0/16
+kura token list notes          # name, r:/w: folders, last use; never a secret
 kura token revoke notes <id>
 kura history notes a.md        # the file's revisions, newest first
 kura restore notes a.md <rev>  # that revision's content becomes a new revision, then syncs

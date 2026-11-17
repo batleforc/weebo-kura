@@ -32,6 +32,10 @@ pub enum DbError {
         "the database schema is at migration {database}, this binary needs {binary}: run `kura-server migrate` first"
     )]
     SchemaTooOld { database: i64, binary: i64 },
+    #[error(
+        "the database schema needs a binary at migration {floor} or newer, this one stops at {binary}: roll forward"
+    )]
+    BinaryTooOld { floor: i64, binary: i64 },
 }
 
 impl From<DbError> for crate::problem::ApiError {
@@ -118,7 +122,8 @@ pub async fn migrate(pool: &PgPool) -> Result<(), DbError> {
 }
 
 /// Refuses to serve against a schema older than this binary; a newer one is
-/// fine (expand and contract, §13).
+/// fine (expand and contract, §13), unless a migration that is not safe to
+/// roll back raised the schema floor above this binary (RFC 0004 decision 11).
 pub async fn check_schema(pool: &PgPool) -> Result<(), DbError> {
     let binary = MIGRATOR
         .migrations
@@ -133,6 +138,12 @@ pub async fn check_schema(pool: &PgPool) -> Result<(), DbError> {
     let database = database.unwrap_or(0);
     if database < binary {
         return Err(DbError::SchemaTooOld { database, binary });
+    }
+    let floor: i64 = sqlx::query_scalar("SELECT min_binary_migration FROM schema_floor")
+        .fetch_one(pool)
+        .await?;
+    if binary < floor {
+        return Err(DbError::BinaryTooOld { floor, binary });
     }
     Ok(())
 }

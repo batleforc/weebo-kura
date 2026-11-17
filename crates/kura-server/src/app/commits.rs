@@ -21,6 +21,7 @@ use super::SharedState;
 use super::body::{Body, Raw};
 use super::chunks::{read_blob, store_content};
 use super::device::DeviceCaller;
+use super::reader::{KeyCaller, NOT_UPLOADED, Writer};
 use crate::authz::{self, VaultAccess};
 use crate::db;
 use crate::problem::{ApiError, Problem, ProblemType};
@@ -130,6 +131,16 @@ fn refused(i: usize, detail: impl std::fmt::Display) -> ApiError {
     ApiError::with_detail(
         ProblemType::InvalidRequest,
         format!("operations[{i}]: {detail}"),
+    )
+}
+
+/// A token's operation outside its write folders: the whole commit is
+/// refused, whether the path or the entry is the one outside (RFC 0004 T1).
+fn outside(state: &SharedState, i: usize) -> ApiError {
+    KeyCaller::refuse(
+        state,
+        ProblemType::InsufficientRole,
+        format!("operations[{i}]: outside the token's write folders"),
     )
 }
 
@@ -332,22 +343,12 @@ impl Commit<'_> {
 )]
 pub async fn post_commit(
     State(state): State<SharedState>,
-    caller: DeviceCaller,
+    caller: Writer,
     Path(v): Path<Uuid>,
     Raw(body): Raw,
 ) -> Result<Json<CommitResponse>, ApiError> {
-    let snap = state
-        .snapshot()
-        .ok_or(ApiError::of(ProblemType::Unavailable))?;
     // T3: the role is checked on the vault before the body is even parsed.
-    let a = authz::require_role(
-        &state.db,
-        &snap,
-        &caller.caller.principal,
-        v,
-        VaultRole::Editor,
-    )
-    .await?;
+    let a = caller.access(&state, v).await?;
     let req: CommitRequest = serde_json::from_slice(&body).map_err(|e| {
         let msg = e.to_string();
         let kind = if msg.starts_with(kura_core::path::INVALID_PATH) {
@@ -362,7 +363,11 @@ pub async fn post_commit(
         &state,
         req.space.as_deref(),
         &a,
-        Some((&caller.caller.principal.sub, caller.device)),
+        // A token has no device, so never the configuration space (§6.8).
+        match &caller {
+            Writer::Device(d) => Some((d.caller.principal.sub.as_str(), d.device)),
+            Writer::Key(_) => None,
+        },
     )
     .await?;
     for (i, op) in req.operations.iter().enumerate() {
@@ -375,21 +380,36 @@ pub async fn post_commit(
             ));
         }
     }
+    // A token: the paths it names and the content it names, before any merge
+    // work. The heads are checked again under the vault lock (RFC 0004 §6.5).
+    if let Some(k) = caller.key() {
+        let mut blobs = Vec::new();
+        for (i, op) in req.operations.iter().enumerate() {
+            if let Operation::Put { path, blob, .. } = op {
+                if !k.scope.writes(path.as_str()) {
+                    return Err(outside(&state, i));
+                }
+                blobs.push(*blob);
+            }
+        }
+        let known = k.knows(&state, &a, &blobs, false).await?;
+        if !blobs.iter().all(|b| known.contains(b)) {
+            return Err(KeyCaller::refuse(
+                &state,
+                ProblemType::HashMismatch,
+                NOT_UPLOADED,
+            ));
+        }
+    }
     // The idempotency hash covers the parsed request, not its whitespace.
     let canonical = serde_json::to_vec(&req).map_err(|e| ApiError::Unavailable(e.to_string()))?;
     let request_hash = ChunkHash::of(&canonical);
-    let sub = &caller.caller.principal.sub;
+    let sub = &caller.subject();
+    let device = caller.device_id();
 
     // A retry finds its stored result before any merge is redone.
-    if let Some(stored) = stored_result(
-        &state,
-        &a,
-        v,
-        caller.device,
-        &req.idempotency_key,
-        request_hash,
-    )
-    .await?
+    if let Some(stored) =
+        stored_result(&state, &a, v, device, &req.idempotency_key, request_hash).await?
     {
         return Ok(Json(stored));
     }
@@ -397,7 +417,8 @@ pub async fn post_commit(
         state: &state,
         a: &a,
         v,
-        device: caller.device,
+        device,
+        key: caller.key(),
         sub,
         req: &req,
         request_hash,
@@ -428,7 +449,10 @@ struct Cx<'a> {
     state: &'a SharedState,
     a: &'a VaultAccess,
     v: Uuid,
+    /// The device, or the token's id in its place.
     device: Uuid,
+    /// The scoped token writing, when it is not a device.
+    key: Option<&'a KeyCaller>,
     sub: &'a str,
     req: &'a CommitRequest,
     request_hash: ChunkHash,
@@ -509,10 +533,16 @@ async fn decide(
         return Err(ApiError::of(ProblemType::HistoryRewound));
     }
 
-    let device_name: String = sqlx::query_scalar("SELECT name FROM device WHERE id = $1")
-        .bind(cx.device)
-        .fetch_one(&mut *tx)
-        .await?;
+    // What suffixes a conflict file: the device's name, or the token's.
+    let device_name: String = match cx.key {
+        Some(k) => k.name.clone(),
+        None => {
+            sqlx::query_scalar("SELECT name FROM device WHERE id = $1")
+                .bind(cx.device)
+                .fetch_one(&mut *tx)
+                .await?
+        }
+    };
     let today = time::OffsetDateTime::now_utc().date();
     let ids: Vec<Uuid> = req
         .operations
@@ -548,6 +578,26 @@ async fn decide(
     .map(|r| head_from_row(r).map(|h| (h.id, h)))
     .collect::<Result<HashMap<_, _>, _>>()?;
     let bases = load_bases(&mut tx, v, req).await?;
+    // A token writes an entry only where it lies now, under this lock: an id
+    // outside its write folders is not moved in, overwritten or deleted, and
+    // the base it merges from is one it can read (RFC 0004 §6.5, T1).
+    if let Some(k) = cx.key {
+        for (i, op) in req.operations.iter().enumerate() {
+            let head_ok = heads
+                .get(op.entry().as_uuid())
+                .is_none_or(|h| k.scope.writes(h.path.as_str()));
+            let base = match op {
+                Operation::Put { base, .. } => *base,
+                Operation::Delete { base, .. } => Some(*base),
+            };
+            let base_ok = base
+                .and_then(|b| bases.get(&b))
+                .is_none_or(|b| k.scope.sees(&b.path));
+            if !head_ok || !base_ok {
+                return Err(outside(state, i));
+            }
+        }
+    }
     check_blobs(&mut tx, v, req).await?;
     let keys: Vec<String> = req
         .operations
@@ -634,6 +684,13 @@ async fn decide(
     tx.commit().await?;
     if !writes.is_empty() {
         state.metrics.commits_total.inc();
+        if cx.key.is_some() {
+            state
+                .metrics
+                .token_writes_total
+                .with_label_values(&["applied"])
+                .inc();
+        }
     }
     Ok(Decided::Done(response))
 }
@@ -1466,6 +1523,8 @@ pub async fn restore_revision(
         a: &a,
         v,
         device: caller.device,
+        // Restore stays a device's: a token never rewrites history.
+        key: None,
         sub: &p.sub,
         req: &req,
         request_hash: ChunkHash::of(&canonical),

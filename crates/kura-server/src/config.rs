@@ -39,6 +39,32 @@ pub struct ServerConfig {
     pub listen: ListenConfig,
     #[serde(default)]
     pub maintenance: MaintenanceConfig,
+    /// The web console (RFC 0003 §4.1); absent: `/app` answers 404.
+    #[serde(default)]
+    pub ui: Option<UiConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiConfig {
+    /// Off by default: an HTML surface on the API origin is opt-in.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Where the built application is (the image's default).
+    #[serde(default = "default_ui_dir")]
+    pub dir: std::path::PathBuf,
+    pub oidc: UiOidc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiOidc {
+    /// The console's public client; also one of `oidc.audiences`.
+    pub client_id: String,
+}
+
+fn default_ui_dir() -> std::path::PathBuf {
+    "/usr/share/kura/ui".into()
 }
 
 /// Retention, garbage collection and the `Delete` purge (§6.9).
@@ -214,6 +240,15 @@ impl ServerConfig {
         if config.oidc.algorithms.is_empty() {
             return Err(invalid("oidc.algorithms", "at least one algorithm".into()));
         }
+        // The console's tokens are verified like any client's (RFC 0003 §4.1).
+        if let Some(ui) = config.ui.as_ref().filter(|u| u.enabled)
+            && !config.oidc.audiences.contains(&ui.oidc.client_id)
+        {
+            return Err(invalid(
+                "ui.oidc.clientId",
+                format!("{} must also be in oidc.audiences", ui.oidc.client_id),
+            ));
+        }
         Ok(config)
     }
 }
@@ -280,6 +315,26 @@ vault:
         assert!(
             err(&EXAMPLE.replace("https://auth.example.org/application/o/kura/", "not a url"))
                 .contains("oidc.issuer")
+        );
+    }
+
+    #[test]
+    fn the_console_client_is_an_audience() {
+        let ui =
+            |id: &str| format!("{EXAMPLE}ui:\n  enabled: true\n  oidc: {{ clientId: {id} }}\n");
+        assert!(err(&ui("kura-web")).contains("ui.oidc.clientId"));
+        let ok = ServerConfig::parse("server.yaml", &ui("kura-cli")).unwrap();
+        let console = ok.ui.unwrap();
+        assert_eq!(console.dir, std::path::PathBuf::from("/usr/share/kura/ui"));
+        assert!(console.enabled);
+        // Off, nothing is checked: the block may sit there unused.
+        let off = format!("{EXAMPLE}ui:\n  oidc: {{ clientId: kura-web }}\n");
+        assert!(
+            !ServerConfig::parse("server.yaml", &off)
+                .unwrap()
+                .ui
+                .unwrap()
+                .enabled
         );
     }
 

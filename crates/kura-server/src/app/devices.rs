@@ -25,6 +25,9 @@ pub const MAX_DEVICES: i64 = 20;
 pub enum Profile {
     Desktop,
     Mobile,
+    /// The web console (RFC 0003 §6.2): one per Authentik session, never the
+    /// configuration space, purged after 30 days idle.
+    Web,
 }
 
 impl Profile {
@@ -32,6 +35,7 @@ impl Profile {
         match self {
             Self::Desktop => "desktop",
             Self::Mobile => "mobile",
+            Self::Web => "web",
         }
     }
 }
@@ -92,6 +96,7 @@ fn members(state: &SharedState, caller: &Caller) -> Result<Vec<Membership>, ApiE
     tag = "devices",
     request_body = RegisterDevice,
     responses(
+        (status = 200, description = "A web device this Authentik session already has", body = Device),
         (status = 201, description = "Registered; send its id in X-Kura-Device", body = Device),
         (status = 401, description = "Invalid token, or a session whose device was revoked", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = "Not a member of any tenant", body = Problem, content_type = "application/problem+json"),
@@ -147,9 +152,30 @@ pub async fn register_device(
         tracing::warn!(target: "audit", event = "device_registration_refused", sub = %sub, "registration from a revoked session");
         return Err(ApiError::of(ProblemType::DeviceRevoked));
     }
-    let live: i64 = sqlx::query_scalar("SELECT count(*) FROM device WHERE revoked_at IS NULL")
-        .fetch_one(&mut *tx)
+    // One web device per Authentik session: a browser signing in again in
+    // the same session gets the device it already has (RFC 0003 T12).
+    if body.profile == Profile::Web
+        && let Some(sid) = sid
+    {
+        let same = sqlx::query(
+            "SELECT id, name, profile, created_at, last_seen, revoked_at FROM device
+             WHERE profile = 'web' AND session_sid = $1 AND revoked_at IS NULL AND signed_out_at IS NULL
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(sid)
+        .fetch_optional(&mut *tx)
         .await?;
+        if let Some(row) = same {
+            let found = device(&row, None)?;
+            tx.commit().await?;
+            return Ok((StatusCode::OK, Json(found)));
+        }
+    }
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM device WHERE revoked_at IS NULL AND signed_out_at IS NULL",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
     if live >= MAX_DEVICES {
         return Err(ApiError::with_detail(
             ProblemType::QuotaExceeded,
@@ -281,7 +307,50 @@ pub async fn revoke_device(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Purges devices idle 180 days and commit records older than 7 days, daily, until `shutdown` (§6.1).
+/// Sign this browser out (RFC 0003 §6.2): the caller's own `web` device
+/// stops counting as live and its id is refused as unknown. Unlike a
+/// revocation it bans nothing: the same Authentik session may sign in again,
+/// and the plugin or CLI it approved keep working (decision 24).
+#[utoipa::path(
+    post,
+    path = "/devices/{d}/sign-out",
+    tag = "devices",
+    params(("d" = Uuid, Path, description = "Your web device")),
+    responses(
+        (status = 204, description = "Signed out, or already"),
+        (status = 401, description = "Invalid token", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Not one of your web devices", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("bearer_token" = [])),
+)]
+pub async fn sign_out_device(
+    State(state): State<SharedState>,
+    caller: Caller,
+    Path(d): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let sub = &caller.principal.sub;
+    state
+        .limits
+        .check(sub, "POST", "/v1/devices/{d}/sign-out")
+        .map_err(ApiError::RateLimited)?;
+    let mut tx = db::begin_subject(&state.db, sub).await?;
+    let done = sqlx::query(
+        "UPDATE device SET signed_out_at = coalesce(signed_out_at, now())
+         WHERE id = $1 AND profile = 'web' AND revoked_at IS NULL",
+    )
+    .bind(d)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    tx.commit().await?;
+    if done == 0 {
+        return Err(ApiError::of(ProblemType::NotFound));
+    }
+    tracing::info!(target: "audit", event = "device_signed_out", sub = %sub, device = %d);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Purges devices idle 180 days (web: 30) and commit records older than 7 days, daily, until `shutdown` (§6.1).
 pub async fn purge_loop(pool: sqlx::PgPool, shutdown: tokio_util::sync::CancellationToken) {
     loop {
         match sqlx::query_scalar::<_, i64>("SELECT kura_device_purge()")
@@ -299,6 +368,15 @@ pub async fn purge_loop(pool: sqlx::PgPool, shutdown: tokio_util::sync::Cancella
             Ok(n) if n > 0 => tracing::info!(purged = n, "expired scoped tokens purged"),
             Ok(_) => {}
             Err(e) => tracing::warn!(error = %e, "scoped token purge failed, retried tomorrow"),
+        }
+        // What tokens uploaded is remembered 24 hours (RFC 0004 T6).
+        match sqlx::query_scalar::<_, i64>("SELECT kura_token_upload_purge()")
+            .fetch_one(&pool)
+            .await
+        {
+            Ok(n) if n > 0 => tracing::info!(purged = n, "old token uploads purged"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "token upload purge failed, retried tomorrow"),
         }
         // Idempotency records live 7 days (§6.1).
         match sqlx::query_scalar::<_, i64>("SELECT kura_commit_purge()")

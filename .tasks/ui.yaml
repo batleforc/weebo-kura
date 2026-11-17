@@ -1,0 +1,40 @@
+# The web console (RFC 0003): a Vue application under ui/, served by
+# kura-server under /app. Its API client is generated from docs/api/openapi.json.
+version: "3"
+
+tasks:
+  ui:install:
+    desc: Install the console's pinned JavaScript dependencies (pnpm, frozen lockfile)
+    dir: ui
+    cmds:
+      - pnpm install --frozen-lockfile
+
+  ui:client:
+    desc: Regenerate the console's HeyApi client from docs/api/openapi.json (gitignored, also done by every ui script)
+    dir: ui
+    cmds:
+      - pnpm run generate:client
+
+  ui:lint:
+    desc: "Type-check (strict, noUncheckedIndexedAccess) and lint the console with Biome: no any, no non-null assertion"
+    dir: ui
+    cmds:
+      - pnpm run lint
+
+  ui:test:
+    desc: Run the console's tests with coverage (80% line gate)
+    dir: ui
+    cmds:
+      - pnpm run test
+
+  ui:build:
+    desc: "Build the console into ui/dist; serve it with `ui: { enabled: true, dir: ui/dist }` (dev/server.yaml does)"
+    dir: ui
+    cmds:
+      - pnpm run build
+
+  ui:audit:
+    desc: Check the console's JavaScript dependencies for known vulnerabilities
+    dir: ui
+    cmds:
+      - pnpm audit

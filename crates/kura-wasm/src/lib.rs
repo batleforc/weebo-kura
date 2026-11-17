@@ -424,6 +424,7 @@ pub async fn sync(
         dry_run: o.dry_run,
         allow_deletions: o.allow_deletions,
         prefer_remote: o.prefer_remote,
+        writable: None,
     };
     let r = kura_core::sync::sync(&HostAdapter(host), &RemoteAdapter(remote), &mut st, &opts).await;
     match r {

@@ -16,7 +16,6 @@ use uuid::Uuid;
 use super::SharedState;
 use super::commits::{head_from_row, head_select};
 use super::reader::Reader;
-use crate::authz;
 use crate::db;
 use crate::problem::{ApiError, Problem, ProblemType};
 
@@ -58,8 +57,8 @@ struct Head {
     horizon_seq: i64,
 }
 
-/// The transaction, the vault's head, and the `LIKE` pattern of a token's
-/// prefix (`%` for the whole vault, T16).
+/// The transaction, the vault's head, and the `LIKE` patterns of the
+/// caller's scope (`%` for the whole vault, T16).
 async fn open(
     state: &SharedState,
     reader: &Reader,
@@ -69,7 +68,7 @@ async fn open(
     (
         sqlx::Transaction<'static, sqlx::Postgres>,
         Head,
-        String,
+        Vec<String>,
         String,
     ),
     ApiError,
@@ -87,12 +86,7 @@ async fn open(
         head_seq: row.try_get("head_seq")?,
         horizon_seq: row.try_get("horizon_seq")?,
     };
-    Ok((
-        tx,
-        head,
-        authz::like_prefix(&ra.prefix_key),
-        space.namespace,
-    ))
+    Ok((tx, head, ra.scope.like_patterns(), space.namespace))
 }
 
 fn response(
@@ -159,7 +153,7 @@ pub async fn get_changes(
     }
     let rows = sqlx::query(concat!(
         head_select!(),
-        " WHERE e.vault_id = $1 AND e.last_seq > $2 AND e.path_key LIKE $4 ESCAPE '\\' AND e.namespace = $5 ORDER BY e.last_seq LIMIT $3"
+        " WHERE e.vault_id = $1 AND e.last_seq > $2 AND e.path_key LIKE ANY($4) AND e.namespace = $5 ORDER BY e.last_seq LIMIT $3"
     ))
     .bind(v)
     .bind(since)
@@ -194,7 +188,7 @@ pub async fn get_entries(
     let (mut tx, head, under, ns) = open(&state, &reader, v, q.space.as_deref()).await?;
     let rows = sqlx::query(concat!(
         head_select!(),
-        " WHERE e.vault_id = $1 AND NOT e.deleted AND ($2::uuid IS NULL OR e.id > $2) AND e.path_key LIKE $4 ESCAPE '\\' AND e.namespace = $5 ORDER BY e.id LIMIT $3"
+        " WHERE e.vault_id = $1 AND NOT e.deleted AND ($2::uuid IS NULL OR e.id > $2) AND e.path_key LIKE ANY($4) AND e.namespace = $5 ORDER BY e.id LIMIT $3"
     ))
     .bind(v)
     .bind(q.after)

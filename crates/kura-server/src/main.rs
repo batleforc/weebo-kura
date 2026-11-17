@@ -126,6 +126,18 @@ async fn connect(
         trusted_proxies: config.trusted_proxies.clone(),
     };
     let mut state = app::AppState::new(metrics, pool, verifier).with_http(http);
+    if let Some(ui) = config.ui.as_ref().filter(|u| u.enabled) {
+        let settings = app::ui::UiSettings::new(
+            ui.dir.clone(),
+            ui.oidc.client_id.clone(),
+            config.oidc.issuer.clone(),
+            config.oidc.discovery.clone(),
+        )
+        .ok_or_else(|| {
+            anyhow::anyhow!("oidc.discovery: not usable in a Content-Security-Policy")
+        })?;
+        state = state.with_ui(settings);
+    }
     if let Some(v) = &vault {
         // Object storage and data keys need Vault: the bucket secret and Transit (§6.6).
         let objects = kura_server::store::s3(&v.bucket().await?)?;

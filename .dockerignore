@@ -6,3 +6,7 @@ coverage/
 .git/
 .task/
 *.md
+ui/node_modules/
+ui/dist/
+ui/coverage/
+ui/src/api/generated/

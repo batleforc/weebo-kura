@@ -75,10 +75,35 @@ impl From<RemoteError> for Fail {
     }
 }
 
+/// The id of the scoped token this run uses instead of a signed-in device
+/// (`KURA_TOKEN` or `--token-file`, RFC 0004 §6.6), if it does.
+fn scoped(ctx: &Ctx) -> Option<Uuid> {
+    let t = ctx.access_token.as_deref()?;
+    kura_core::token::ScopedToken::parse(t).ok().map(|t| t.id)
+}
+
+/// Full Unicode case folding then NFC, as the server compares folders.
+fn fold(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization as _;
+    caseless::default_case_fold_str(s).nfc().collect()
+}
+
 fn config(ctx: &Ctx) -> Result<Config, Fail> {
-    Config::load(&ctx.home)
-        .map_err(Fail::local)?
-        .ok_or_else(|| Fail(2, "not signed in: run `kura login`".into()))
+    if let Some(cfg) = Config::load(&ctx.home).map_err(Fail::local)? {
+        return Ok(cfg);
+    }
+    // A scoped token never signs in: it only needs to know the server.
+    match (scoped(ctx), std::env::var("KURA_SERVER")) {
+        (Some(_), Ok(server)) => Ok(Config {
+            server,
+            ..Config::default()
+        }),
+        (Some(_), Err(_)) => Err(Fail(
+            2,
+            "no server: set KURA_SERVER to the server's address".into(),
+        )),
+        (None, _) => Err(Fail(2, "not signed in: run `kura login`".into())),
+    }
 }
 
 /// An access token: `KURA_ACCESS_TOKEN` (scripts, tests), else a refresh.
@@ -313,8 +338,9 @@ pub async fn attach(ctx: &Ctx, vault: &str, folder: PathBuf, yes: bool) -> Resul
     let folder = folder.canonicalize().map_err(Fail::local)?;
     let host = FsHost::new(folder.clone());
     let remote = remote_entries(&api, v.id).await?;
-    let device = cfg
-        .device
+    // A scoped token stands in for the device it does not have (§6.3).
+    let device = scoped(ctx)
+        .or(cfg.device)
         .ok_or_else(|| Fail(2, "no device: run `kura login`".into()))?;
     let mut state = LocalState::adopt(host.load_state(), device, v.id);
     let d = diff(&host, &remote, p).await?;
@@ -443,17 +469,34 @@ async fn sync_one(
         .into_iter()
         .find(|x| x.id == a.id)
         .ok_or_else(|| Fail(3, format!("{name}: no longer visible to you")))?;
-    let device = cfg
-        .device
+    let device = scoped(ctx)
+        .or(cfg.device)
         .ok_or_else(|| Fail(2, "no device: run `kura login`".into()))?;
     let host = FsHost::new(a.path.clone());
     let mut state = LocalState::adopt(host.load_state(), device, a.id);
+    // A token's write folders, folded: a change elsewhere is refused here,
+    // before anything is uploaded (RFC 0004 §6.6).
+    let write_folders: Option<Vec<String>> = v.scopes.as_ref().map(|rules| {
+        rules
+            .iter()
+            .filter(|r| r.mode == "write")
+            .map(|r| r.path.clone())
+            .collect()
+    });
+    let writable = write_folders.clone().map(|folders| {
+        let keys: Vec<String> = folders.iter().map(|f| fold(f)).collect();
+        Box::new(move |path: &str| {
+            let key = fold(path);
+            keys.iter().any(|k| key.starts_with(k))
+        }) as kura_core::sync::Writable
+    });
     let mut opts = Options {
         params: params(v.chunking)?,
         max_file_size: MAX_FILE,
         dry_run,
         allow_deletions: yes,
         prefer_remote: false,
+        writable,
     };
     let r = loop {
         match sync(&host, &api.vault(a.id), &mut state, &opts).await {
@@ -477,6 +520,21 @@ async fn sync_one(
                     3,
                     format!(
                         "Nothing removed. Run `kura sync {name}` again to decide, or with --yes."
+                    ),
+                ));
+            }
+            Err(kura_core::sync::SyncError::NotWritable { paths }) => {
+                let folders = write_folders.unwrap_or_default();
+                let allowed = if folders.is_empty() {
+                    "it has none".to_owned()
+                } else {
+                    folders.join(", ")
+                };
+                return Err(Fail(
+                    3,
+                    format!(
+                        "{} is outside this token's write folders ({allowed}).\nNothing was pushed. Move the file back, or ask a manager for another token.",
+                        paths.join(", ")
                     ),
                 ));
             }
@@ -588,6 +646,7 @@ async fn sync_config(
         dry_run: false,
         allow_deletions: yes,
         prefer_remote: true,
+        writable: None,
     };
     match sync(&host, &api.vault_config(a.id), &mut state, &opts).await {
         Ok(r) => {
@@ -632,6 +691,7 @@ pub async fn status(ctx: &Ctx) -> Result<u8, Fail> {
             dry_run: true,
             allow_deletions: false,
             prefer_remote: false,
+            writable: None,
         };
         let r = sync(&host, &api.vault(a.id), &mut state, &opts)
             .await
@@ -1007,9 +1067,20 @@ pub enum TokenAction {
     /// Issue a token; its secret is shown once.
     Create {
         vault: String,
-        /// A folder the token sees, ending with `/`; the whole vault by default.
-        #[arg(long, default_value = "")]
-        prefix: String,
+        /// Shown in lists and conflict file names.
+        #[arg(long)]
+        name: Option<String>,
+        /// A folder the token reads, ending with `/`; repeat for more. With
+        /// no --read, --write or --prefix: the whole vault, read only.
+        #[arg(long)]
+        read: Vec<String>,
+        /// A folder the token reads and writes, ending with `/`; repeat for
+        /// more. The tenant must allow it (`scopedTokens.write`).
+        #[arg(long)]
+        write: Vec<String>,
+        /// One --read, as before folder rules existed.
+        #[arg(long)]
+        prefix: Option<String>,
         /// Days, at most 90: `30d` or `30`.
         #[arg(long)]
         expires: String,
@@ -1021,6 +1092,38 @@ pub enum TokenAction {
     List { vault: String },
     /// Revoke a token by id.
     Revoke { vault: String, id: Uuid },
+}
+
+/// The folder rules `kura token create` asks for (RFC 0004 §4.2): --prefix
+/// is one --read; nothing at all is the whole vault, read only.
+fn token_scopes(
+    read: Vec<String>,
+    write: Vec<String>,
+    prefix: Option<String>,
+) -> Result<Vec<api::ScopeRule>, Fail> {
+    if write.iter().any(|w| matches!(w.as_str(), "" | "/")) {
+        return Err(Fail(
+            3,
+            "--write needs a folder; a token never writes the whole vault.".into(),
+        ));
+    }
+    let rule = |mode: &str| {
+        let mode = mode.to_owned();
+        move |path: String| api::ScopeRule {
+            path,
+            mode: mode.clone(),
+        }
+    };
+    let mut scopes: Vec<api::ScopeRule> = read
+        .into_iter()
+        .chain(prefix)
+        .map(rule("read"))
+        .chain(write.into_iter().map(rule("write")))
+        .collect();
+    if scopes.is_empty() {
+        scopes.push(rule("read")(String::new()));
+    }
+    Ok(scopes)
 }
 
 async fn vault_named(api: &Api, name: &str) -> Result<Uuid, Fail> {
@@ -1047,6 +1150,9 @@ pub async fn token(ctx: &Ctx, action: TokenAction) -> Result<u8, Fail> {
     match action {
         TokenAction::Create {
             vault,
+            name,
+            read,
+            write,
             prefix,
             expires,
             cidr,
@@ -1055,39 +1161,83 @@ pub async fn token(ctx: &Ctx, action: TokenAction) -> Result<u8, Fail> {
                 .trim_end_matches('d')
                 .parse()
                 .map_err(|_| Fail(3, format!("--expires {expires}: days, e.g. 30d")))?;
+            let scopes = token_scopes(read, write, prefix)?;
             let v = vault_named(&api, &vault).await?;
-            let t = api.create_token(v, &prefix, days, &cidr).await?;
+            let t = match api
+                .create_token(v, name.as_deref(), &scopes, days, &cidr)
+                .await
+            {
+                Err(e) if e.kind() == "token_write_disabled" => {
+                    return Err(Fail(
+                        3,
+                        "this tenant does not allow tokens to write (scopedTokens.write).".into(),
+                    ));
+                }
+                other => other?,
+            };
             let secret = t.token.unwrap_or_default();
             let shown: String = secret.chars().take(13).collect();
             println!(
-                "Token {shown}..._****  read  {vault}/{prefix}  expires {}  from {}",
+                "Token {}  {shown}..._****  expires {}  from {}",
+                t.name,
                 t.expires_at.get(..10).unwrap_or_default(),
                 cidr.join(", ")
             );
+            for r in &t.scopes {
+                println!("  {:<5}  {vault}/{}", r.mode, r.path);
+            }
+            // A broader rule of the same token covers this one: both hold.
+            for r in &scopes {
+                if scopes
+                    .iter()
+                    .any(|o| o.path != r.path && fold(&r.path).starts_with(&fold(&o.path)))
+                {
+                    println!("note: {} is also covered by a broader rule.", r.path);
+                }
+            }
             println!("\n    {secret}\n");
             println!("This secret is shown once. Store it now.");
             Ok(0)
         }
         TokenAction::List { vault } => {
             let v = vault_named(&api, &vault).await?;
+            let tokens = api.tokens(v).await?;
+            if tokens.is_empty() {
+                println!("No token for {vault}.");
+                return Ok(0);
+            }
             println!(
-                "{:<36} {:<16} {:<11} {:<8} FROM",
-                "ID", "PREFIX", "EXPIRES", "STATE"
+                "{:<16} {:<36} {:<36} {:<11} {:<11} {:<8} FROM",
+                "NAME", "ID", "SCOPES", "EXPIRES", "LAST USED", "STATE"
             );
-            for t in api.tokens(v).await? {
+            for t in tokens {
                 let state = if t.revoked { "revoked" } else { "active" };
-                let cidrs = t.cidrs.join(", ");
+                // `r:` and `w:`: a write token is told apart by a letter,
+                // not by a colour (§11).
+                let scopes: Vec<String> = t
+                    .scopes
+                    .iter()
+                    .map(|r| {
+                        let mode = if r.mode == "write" { "w" } else { "r" };
+                        if r.path.is_empty() {
+                            format!("{mode}:(whole vault)")
+                        } else {
+                            format!("{mode}:{}", r.path)
+                        }
+                    })
+                    .collect();
                 println!(
-                    "{:<36} {:<16} {:<11} {:<8} {}",
+                    "{:<16} {:<36} {:<36} {:<11} {:<11} {:<8} {}",
+                    t.name,
                     t.id,
-                    if t.prefix.is_empty() {
-                        "(all)"
-                    } else {
-                        t.prefix.as_str()
-                    },
+                    scopes.join(" "),
                     t.expires_at.get(..10).unwrap_or_default(),
+                    t.last_used_at
+                        .as_deref()
+                        .and_then(|l| l.get(..10))
+                        .unwrap_or("never"),
                     state,
-                    cidrs
+                    t.cidrs.join(", ")
                 );
             }
             Ok(0)

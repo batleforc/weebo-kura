@@ -90,6 +90,13 @@ pub async fn resolve(
                 .await?
                 .ok_or(ApiError::of(ProblemType::DeviceUnknown))?;
             tx.commit().await?;
+            // The console never holds an Obsidian configuration (RFC 0003 §6.2).
+            if profile == "web" {
+                return Err(ApiError::with_detail(
+                    ProblemType::InsufficientRole,
+                    "configuration is served to Obsidian devices only",
+                ));
+            }
             Ok(Space {
                 namespace: format!("config:{profile}"),
                 owner: Some(sub.to_owned()),

@@ -103,12 +103,25 @@ async fn exchange(r: reqwest::RequestBuilder) -> Result<reqwest::Response, Remot
 #[serde(rename_all = "camelCase")]
 pub struct TokenView {
     pub id: Uuid,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub scopes: Vec<ScopeRule>,
+    #[serde(default)]
+    pub last_used_at: Option<String>,
     pub prefix: String,
     pub cidrs: Vec<String>,
     pub expires_at: String,
     pub revoked: bool,
     #[serde(default)]
     pub token: Option<String>,
+}
+
+/// One folder rule of a scoped token (RFC 0004): `mode` is `read` or `write`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, Deserialize)]
+pub struct ScopeRule {
+    pub path: String,
+    pub mode: String,
 }
 
 /// One search result.
@@ -173,6 +186,9 @@ pub struct VaultView {
     /// The `.obsidian` categories that sync (§6.8); empty: none.
     #[serde(default)]
     pub config_sync: Vec<String>,
+    /// Present when the caller is a scoped token: its own folder rules.
+    #[serde(default)]
+    pub scopes: Option<Vec<ScopeRule>>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -349,13 +365,18 @@ impl Api {
     pub async fn create_token(
         &self,
         vault: Uuid,
-        prefix: &str,
+        name: Option<&str>,
+        scopes: &[ScopeRule],
         days: u32,
         cidrs: &[String],
     ) -> Result<TokenView, RemoteError> {
+        let mut body = json!({ "scopes": scopes, "expiresInDays": days, "cidrs": cidrs });
+        if let (Some(name), Some(o)) = (name, body.as_object_mut()) {
+            o.insert("name".into(), json!(name));
+        }
         let r = self
             .req(reqwest::Method::POST, &format!("/vaults/{vault}/tokens"))
-            .json(&json!({ "prefix": prefix, "expiresInDays": days, "cidrs": cidrs }));
+            .json(&body);
         self.json(r).await
     }
 

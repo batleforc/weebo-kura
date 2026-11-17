@@ -540,3 +540,726 @@ async fn prefix_token_cannot_fetch_outside_chunk_or_read_renamed_history() {
     .await;
     assert_eq!(st, StatusCode::OK);
 }
+
+// ---- RFC 0004: several folders, and write access ----
+
+impl S {
+    /// Sets `scopedTokens.write` on the tenant, as a reconciled document.
+    async fn tenant_write(&self, on: bool) {
+        let config = common::app::CONFIG.replacen(
+            "  vaultNamespaces: [maxime]",
+            &format!("  vaultNamespaces: [maxime]\n  scopedTokens: {{ write: {on} }}"),
+            1,
+        );
+        let dir = std::env::temp_dir().join(format!("kura-http-{}", self.e.t.name));
+        std::fs::write(dir.join("config.yaml"), config).unwrap();
+        let files = kura_server::reconcile::files::read_dir(&dir).unwrap();
+        kura_server::reconcile::reconcile(&self.e.t.app, &files, true)
+            .await
+            .unwrap();
+        self.e.state.set_snapshot(
+            kura_server::reconcile::snapshot::load_if_changed(&self.e.t.app, None)
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+    }
+
+    /// A token with these rules: its secret and its id.
+    async fn scoped(&self, name: &str, scopes: Value) -> (String, Uuid) {
+        let (st, b) = self
+            .issue(json!({ "name": name, "scopes": scopes, "expiresInDays": 30, "cidrs": ["10.42.0.0/16"] }))
+            .await;
+        assert_eq!(st, StatusCode::CREATED, "{b}");
+        (
+            b["token"].as_str().unwrap().to_owned(),
+            Uuid::parse_str(b["id"].as_str().unwrap()).unwrap(),
+        )
+    }
+
+    async fn as_key(
+        &self,
+        key: &str,
+        method: &str,
+        path: &str,
+        body: Option<Body>,
+    ) -> (StatusCode, Value) {
+        let uri = format!("/v1/vaults/{}{path}", self.v);
+        let (st, b) = send(&self.e, method, &uri, key, None, body, INSIDE).await;
+        (st, json_of(&b))
+    }
+
+    async fn key_commit(&self, key: &str, idem: &str, op: Value) -> (StatusCode, Value) {
+        let body = json!({ "idempotencyKey": idem, "operations": [op] });
+        self.as_key(key, "POST", "/commits", Some(Body::from(body.to_string())))
+            .await
+    }
+
+    /// Uploads `data` with the token (chunk, then manifest) and commits it.
+    async fn key_put(
+        &self,
+        key: &str,
+        entry: &str,
+        path: &str,
+        data: &[u8],
+        base: Option<&str>,
+    ) -> (StatusCode, Value) {
+        let c = ChunkHash::of(data);
+        let (st, b) = self
+            .as_key(
+                key,
+                "PUT",
+                &format!("/chunks/{c}"),
+                Some(Body::from(data.to_vec())),
+            )
+            .await;
+        assert_eq!(st, StatusCode::NO_CONTENT, "{b}");
+        let size = data.len() as u64;
+        let blob = blob_hash(size, &[c]);
+        let manifest = json!({ "size": size, "chunks": [c.to_string()] });
+        let (st, b) = self
+            .as_key(
+                key,
+                "PUT",
+                &format!("/blobs/{blob}"),
+                Some(Body::from(manifest.to_string())),
+            )
+            .await;
+        assert_eq!(st, StatusCode::NO_CONTENT, "{b}");
+        let mut op = json!({ "op": "put", "entry": entry, "path": path, "blob": blob.to_string(), "size": size });
+        if let Some(base) = base {
+            op["base"] = json!(base);
+        }
+        self.key_commit(key, &Uuid::new_v4().to_string(), op).await
+    }
+
+    async fn head_seq(&self) -> i64 {
+        sqlx::query_scalar("SELECT head_seq FROM vault WHERE id = $1::uuid")
+            .bind(&self.v)
+            .fetch_one(&self.e.t.owner)
+            .await
+            .unwrap()
+    }
+
+    fn token_writes(&self, outcome: &str) -> u64 {
+        self.e
+            .state
+            .metrics
+            .token_writes_total
+            .with_label_values(&[outcome])
+            .get()
+    }
+}
+
+fn outside_folders(st: StatusCode, b: &Value) -> bool {
+    st == StatusCode::FORBIDDEN
+        && problem(b) == "/v1/problems/insufficient_role"
+        && b["detail"]
+            .as_str()
+            .is_some_and(|d| d.ends_with("outside the token's write folders"))
+}
+
+fn not_uploaded(st: StatusCode, b: &Value) -> bool {
+    st == StatusCode::UNPROCESSABLE_ENTITY && b["detail"] == "content not uploaded by this token"
+}
+
+fn paths(p: &Value) -> Vec<&str> {
+    let mut out: Vec<&str> = p["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["path"].as_str().unwrap())
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+/// RFC 0004 phase 1: a token with several read folders sees them, and only
+/// them, on every read site; the rules are validated; what an older binary
+/// would read of such a token matches no path (T8).
+#[tokio::test]
+async fn multi_folder_token_reads_its_folders_only() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    let (sess, pnj, mj) = (
+        Uuid::now_v7().to_string(),
+        Uuid::now_v7().to_string(),
+        Uuid::now_v7().to_string(),
+    );
+    s.file(&sess, "Sessions/1.md", b"session one", None).await;
+    s.file(&pnj, "PNJ/elf.md", b"an elf", None).await;
+    s.file(&mj, "MJ/secret.md", b"the villain", None).await;
+
+    // §4.3 through the API; the unit test has every row.
+    for (body, why) in [
+        (
+            json!({ "scopes": [], "expiresInDays": 30, "cidrs": ["10.0.0.0/8"] }),
+            "empty list",
+        ),
+        (
+            json!({ "scopes": [{ "path": "", "mode": "write" }], "expiresInDays": 30, "cidrs": ["10.0.0.0/8"] }),
+            "whole-vault write",
+        ),
+        (
+            json!({ "prefix": "a/", "scopes": [{ "path": "a/", "mode": "read" }], "expiresInDays": 30, "cidrs": ["10.0.0.0/8"] }),
+            "prefix and scopes",
+        ),
+        (
+            json!({ "scopes": [{ "path": "a/", "mode": "admin" }], "expiresInDays": 30, "cidrs": ["10.0.0.0/8"] }),
+            "unknown mode",
+        ),
+    ] {
+        let (st, b) = s.issue(body).await;
+        assert_eq!(
+            (st, problem(&b)),
+            (StatusCode::BAD_REQUEST, "/v1/problems/invalid_request"),
+            "{why}"
+        );
+    }
+    let (st, b) = s
+        .issue(json!({ "scopes": [{ "path": "Resumes/", "mode": "write" }], "expiresInDays": 30, "cidrs": ["10.0.0.0/8"] }))
+        .await;
+    assert_eq!(
+        (st, problem(&b)),
+        (StatusCode::CONFLICT, "/v1/problems/token_write_disabled"),
+        "the tenant did not opt in"
+    );
+
+    let (key, id) = s
+        .scoped(
+            "reader",
+            json!([{ "path": "Sessions/", "mode": "read" }, { "path": "pnj/", "mode": "read" }]),
+        )
+        .await;
+    let (_, p) = s.as_key(&key, "GET", "/changes?since=0", None).await;
+    assert_eq!(paths(&p), ["PNJ/elf.md", "Sessions/1.md"]);
+    let (_, p) = s.as_key(&key, "GET", "/entries", None).await;
+    assert_eq!(paths(&p), ["PNJ/elf.md", "Sessions/1.md"]);
+    let (st, _) = s
+        .as_key(&key, "GET", &format!("/entries/{mj}/revisions"), None)
+        .await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    let (st, _) = s
+        .as_key(&key, "GET", &format!("/entries/{pnj}/revisions"), None)
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    let mut asked = Vec::new();
+    for (data, ok) in [
+        (&b"session one"[..], true),
+        (b"an elf", true),
+        (b"the villain", false),
+    ] {
+        let c = ChunkHash::of(data);
+        let blob = blob_hash(data.len() as u64, &[c]);
+        let want = if ok {
+            StatusCode::OK
+        } else {
+            StatusCode::NOT_FOUND
+        };
+        let (st, _) = s.as_key(&key, "GET", &format!("/chunks/{c}"), None).await;
+        assert_eq!(st, want, "chunk, visible: {ok}");
+        let (st, _) = s.as_key(&key, "GET", &format!("/blobs/{blob}"), None).await;
+        assert_eq!(st, want, "blob, visible: {ok}");
+        asked.push(blob.to_string());
+    }
+    let (st, b) = s
+        .as_key(
+            &key,
+            "POST",
+            "/blobs/batch",
+            Some(Body::from(json!({ "blobs": asked }).to_string())),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK, "{b}");
+    assert_eq!(
+        b["missing"].as_array().unwrap().len(),
+        1,
+        "the batch hides the same blob: {b}"
+    );
+
+    // The list shows the name and the rules, never a secret.
+    let (_, list) =
+        s.e.call(
+            "GET",
+            &format!("/v1/vaults/{}/tokens", s.v),
+            &s.admin,
+            Some(&s.ad),
+            None,
+        )
+        .await;
+    let shown = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == id.to_string())
+        .unwrap();
+    assert_eq!(
+        (shown["name"].as_str(), shown["mode"].as_str()),
+        (Some("reader"), Some("read"))
+    );
+    assert_eq!(
+        shown["scopes"][1],
+        json!({ "path": "pnj/", "mode": "read" })
+    );
+
+    // T8, `legacy_prefix_matches_no_path`: several rules store `/`, which no
+    // path starts with; one read rule keeps its folder for an older binary.
+    assert_eq!(shown["prefix"], "/");
+    let under: i64 = sqlx::query_scalar("SELECT count(*) FROM entry WHERE path_key LIKE '/%'")
+        .fetch_one(&s.e.t.owner)
+        .await
+        .unwrap();
+    assert_eq!(under, 0);
+    let single = s.key("Sessions/").await;
+    let stored: (String, Value) =
+        sqlx::query_as("SELECT path_prefix, scopes FROM scoped_token WHERE id = $1")
+            .bind(Uuid::parse_str(&single[5..37]).unwrap())
+            .fetch_one(&s.e.t.owner)
+            .await
+            .unwrap();
+    assert_eq!(
+        stored,
+        (
+            "Sessions/".to_owned(),
+            json!([{ "path": "Sessions/", "mode": "read" }])
+        )
+    );
+    // A row inserted by a binary from before the migration gets its one rule.
+    let old: (Value, String) = sqlx::query_as(
+        "INSERT INTO scoped_token (id, tenant_id, vault_id, path_prefix, allowed_cidrs, expires_at, token_hash, created_by)
+         SELECT gen_random_uuid(), tenant_id, id, 'old/', '{10.0.0.0/8}', now() + interval '1 day', sha256('x'), 'boss' FROM vault WHERE id = $1::uuid
+         RETURNING scopes, name",
+    )
+    .bind(&s.v)
+    .fetch_one(&s.e.t.owner)
+    .await
+    .unwrap();
+    assert_eq!(old.0, json!([{ "path": "old/", "mode": "read" }]));
+    assert!(old.1.starts_with("key-"));
+
+    // T7: rules that no longer decode refuse the token; they never widen it.
+    sqlx::query("UPDATE scoped_token SET scopes = '[{\"path\": \"Sessions/\", \"mode\": \"all\"}]' WHERE id = $1")
+        .bind(id)
+        .execute(&s.e.t.owner)
+        .await
+        .unwrap();
+    let (st, b) = s.as_key(&key, "GET", "/changes?since=0", None).await;
+    assert_eq!(
+        (st, problem(&b)),
+        (StatusCode::UNAUTHORIZED, "/v1/problems/invalid_token")
+    );
+}
+
+/// RFC 0004 T1, T5, T9, T10 and the tenant switch: a token writes under its
+/// `write` folders and nowhere else, whatever names the outside entry; what
+/// it wrote is ordinary, attributed history.
+#[tokio::test]
+async fn token_cannot_write_outside() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    s.tenant_write(true).await;
+    let (sess, mj) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
+    s.file(&sess, "Sessions/1.md", b"session one", None).await;
+    let secret = s.file(&mj, "MJ/secret.md", b"the villain", None).await;
+    let (key, id) = s
+        .scoped("discord-recap", json!([{ "path": "Sessions/", "mode": "read" }, { "path": "Resumes/", "mode": "write" }]))
+        .await;
+
+    // The success: a recap, attributed to the key, with the token as device.
+    let recap = Uuid::now_v7().to_string();
+    let (st, b) = s
+        .key_put(&key, &recap, "Resumes/1.md", b"recap one", None)
+        .await;
+    assert_eq!(st, StatusCode::OK, "{b}");
+    let head = b["results"][0]["head"]["revision"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let by: (String, Uuid) =
+        sqlx::query_as("SELECT user_sub, device_id FROM revision WHERE id = $1::uuid")
+            .bind(&head)
+            .fetch_one(&s.e.t.owner)
+            .await
+            .unwrap();
+    assert_eq!(
+        by,
+        (format!("key:{id}"), id),
+        "token_revision_names_the_key"
+    );
+    assert_eq!(s.token_writes("applied"), 1);
+    // It reads back what it wrote: `write` reads its own folder.
+    let (_, p) = s.as_key(&key, "GET", "/changes?since=0", None).await;
+    assert_eq!(paths(&p), ["Resumes/1.md", "Sessions/1.md"]);
+
+    // An idempotent retry, by token id, is the stored answer.
+    let op = json!({ "op": "delete", "entry": recap, "base": head });
+    let (st, first) = s.key_commit(&key, "retry-1", op.clone()).await;
+    assert_eq!(st, StatusCode::OK, "{first}");
+    let (st, again) = s.key_commit(&key, "retry-1", op).await;
+    assert_eq!((st, &again), (StatusCode::OK, &first));
+    // T5: the deletion is a revision; the content before it is still history.
+    let (_, r) =
+        s.e.call(
+            "GET",
+            &format!("/v1/vaults/{}/entries/{recap}/revisions", s.v),
+            &s.admin,
+            Some(&s.ad),
+            None,
+        )
+        .await;
+    assert_eq!(
+        r["items"].as_array().unwrap().len(),
+        2,
+        "token_delete_is_restorable: {r}"
+    );
+
+    // T1, four ways out, and the read-only folder. Nothing moves.
+    let live = Uuid::now_v7().to_string();
+    let (st, b) = s
+        .key_put(&key, &live, "Resumes/2.md", b"recap two", None)
+        .await;
+    assert_eq!(st, StatusCode::OK, "{b}");
+    let live_head = b["results"][0]["head"]["revision"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let before = (s.head_seq().await, s.token_writes("refused"));
+    let secret_rev = secret["revision"].as_str().unwrap();
+    for (entry, path, base, why) in [
+        (
+            Uuid::now_v7().to_string(),
+            "MJ/x.md",
+            None,
+            "a new path outside",
+        ),
+        (
+            live.clone(),
+            "MJ/2.md",
+            Some(live_head.as_str()),
+            "a rename out",
+        ),
+        (
+            mj.clone(),
+            "Resumes/stolen.md",
+            Some(secret_rev),
+            "an outside entry moved in by its id",
+        ),
+        (
+            Uuid::now_v7().to_string(),
+            "Sessions/x.md",
+            None,
+            "a folder it only reads",
+        ),
+        (
+            Uuid::now_v7().to_string(),
+            "resumes2/x.md",
+            None,
+            "a sibling of its folder",
+        ),
+    ] {
+        let (st, b) = s.key_put(&key, &entry, path, b"recap two", base).await;
+        assert!(outside_folders(st, &b), "{why}: {st} {b}");
+    }
+    let (st, b) = s
+        .key_commit(
+            &key,
+            "del-mj",
+            json!({ "op": "delete", "entry": mj, "base": secret_rev }),
+        )
+        .await;
+    assert!(outside_folders(st, &b), "delete by id: {st} {b}");
+    // One operation outside refuses the commit whole.
+    let both = json!({ "idempotencyKey": "both", "operations": [
+        { "op": "delete", "entry": live, "base": live_head },
+        { "op": "delete", "entry": mj, "base": secret_rev },
+    ]});
+    let (st, b) = s
+        .as_key(&key, "POST", "/commits", Some(Body::from(both.to_string())))
+        .await;
+    assert!(outside_folders(st, &b), "{st} {b}");
+    assert_eq!(s.head_seq().await, before.0, "nothing was applied");
+    assert_eq!(s.token_writes("refused"), before.1 + 7);
+    let still: String = sqlx::query_scalar("SELECT path FROM entry WHERE id = $1::uuid")
+        .bind(&mj)
+        .fetch_one(&s.e.t.owner)
+        .await
+        .unwrap();
+    assert_eq!(still, "MJ/secret.md");
+
+    // A token never restores, and never reaches another vault.
+    let (st, _) = s
+        .as_key(
+            &key,
+            "POST",
+            &format!("/entries/{live}/restore"),
+            Some(Body::from("{}")),
+        )
+        .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    let other = vault_id(&s.e, "secrets").await;
+    let (st, _) = send(
+        &s.e,
+        "POST",
+        &format!("/v1/vaults/{other}/commits"),
+        &key,
+        None,
+        Some(Body::from("{}")),
+        INSIDE,
+    )
+    .await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+
+    // The switch off: writes stop, reads go on, nothing is deleted.
+    s.tenant_write(false).await;
+    let (st, b) = s
+        .key_commit(
+            &key,
+            "off",
+            json!({ "op": "delete", "entry": live, "base": live_head }),
+        )
+        .await;
+    assert_eq!(
+        (st, problem(&b)),
+        (StatusCode::FORBIDDEN, "/v1/problems/insufficient_role"),
+        "{b}"
+    );
+    assert_eq!(s.token_writes("disabled"), 1);
+    // §4.3: the operator sees it, on the tenant, in the admin status.
+    let root =
+        s.e.key
+            .token("root", "sr", &["maxime-owners", "kura-platform-admins"]);
+    let rd = s.e.register(&root, "console").await;
+    let (_, status) =
+        s.e.call("GET", "/v1/admin/status", &root, Some(&rd), None)
+            .await;
+    let tenant = status["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["name"] == "maxime")
+        .unwrap();
+    assert_eq!(
+        tenant["conditions"][1]["type"], "TokenWriteDisabled",
+        "{tenant}"
+    );
+    let (st, _) = s.as_key(&key, "GET", "/changes?since=0", None).await;
+    assert_eq!(st, StatusCode::OK);
+    s.tenant_write(true).await;
+
+    // T10, `revoked_grant_cuts_write_token`: issued through the admin claim
+    // value, the token dies when the tenant stops mapping it.
+    sqlx::query("UPDATE scoped_token SET granted_by_claim = 'no-longer-mapped' WHERE id = $1")
+        .bind(id)
+        .execute(&s.e.t.owner)
+        .await
+        .unwrap();
+    let (st, b) = s
+        .key_commit(
+            &key,
+            "cut",
+            json!({ "op": "delete", "entry": live, "base": live_head }),
+        )
+        .await;
+    assert_eq!(
+        (st, problem(&b)),
+        (StatusCode::UNAUTHORIZED, "/v1/problems/invalid_token")
+    );
+}
+
+/// RFC 0004 T2, T3, T6: a hash is not a capability. A write token names
+/// only content it can read or uploaded itself, and learns nothing about
+/// the rest: stored outside its folders or not, the answer is the same.
+#[tokio::test]
+async fn token_cannot_launder_content() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    s.tenant_write(true).await;
+    let mj = Uuid::now_v7().to_string();
+    s.file(&mj, "MJ/secret.md", b"the villain", None).await;
+    let (key, id) = s
+        .scoped("bot", json!([{ "path": "Resumes/", "mode": "write" }]))
+        .await;
+    let secret = ChunkHash::of(b"the villain");
+    let secret_blob = blob_hash(11, &[secret]);
+    let nowhere = ChunkHash::of(b"stored nowhere");
+    let touched = |h: ChunkHash| {
+        let owner = s.e.t.owner.clone();
+        async move {
+            sqlx::query_scalar::<_, time::OffsetDateTime>(
+                "SELECT last_touched FROM chunk WHERE hash = $1",
+            )
+            .bind(h.as_bytes().as_slice())
+            .fetch_one(&owner)
+            .await
+            .unwrap()
+        }
+    };
+    let before = touched(secret).await;
+
+    // `missing_is_blind_outside_scope` (T3): both hashes are "missing".
+    let ask = json!({ "hashes": [secret.to_string(), nowhere.to_string()] });
+    let (st, b) = s
+        .as_key(
+            &key,
+            "POST",
+            "/chunks/missing",
+            Some(Body::from(ask.to_string())),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK, "{b}");
+    assert_eq!(b["missing"].as_array().unwrap().len(), 2, "{b}");
+    assert_eq!(
+        touched(secret).await,
+        before,
+        "an unknown chunk is not kept from collection"
+    );
+
+    // `token_cannot_launder_chunk` (T2): a manifest naming the outside chunk
+    // is refused exactly as one naming a chunk stored nowhere.
+    let mut answers = Vec::new();
+    for (chunk, size) in [(secret, 11u64), (nowhere, 14)] {
+        let blob = blob_hash(size, &[chunk]);
+        let manifest = json!({ "size": size, "chunks": [chunk.to_string()] });
+        let (st, b) = s
+            .as_key(
+                &key,
+                "PUT",
+                &format!("/blobs/{blob}"),
+                Some(Body::from(manifest.to_string())),
+            )
+            .await;
+        assert!(not_uploaded(st, &b), "{st} {b}");
+        answers.push((st, b["type"].clone(), b["detail"].clone()));
+    }
+    assert_eq!(answers[0], answers[1]);
+    // `token_cannot_launder_blob` (T2): nor a commit naming the outside blob.
+    let stolen = Uuid::now_v7().to_string();
+    let op = json!({ "op": "put", "entry": stolen, "path": "Resumes/stolen.md", "blob": secret_blob.to_string(), "size": 11 });
+    let (st, b) = s.key_commit(&key, "steal", op).await;
+    assert!(not_uploaded(st, &b), "{st} {b}");
+    let (st, _) = s
+        .as_key(&key, "GET", &format!("/chunks/{secret}"), None)
+        .await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    assert_eq!(s.token_writes("refused"), 3);
+
+    // Sending the bytes is the proof: the same content, uploaded by the token.
+    let (st, b) = s
+        .key_put(&key, &stolen, "Resumes/same.md", b"the villain", None)
+        .await;
+    assert_eq!(st, StatusCode::OK, "{b}");
+    let (_, b) = s
+        .as_key(
+            &key,
+            "POST",
+            "/chunks/missing",
+            Some(Body::from(ask.to_string())),
+        )
+        .await;
+    assert_eq!(b["missing"], json!([nowhere.to_string()]));
+
+    // `token_upload_is_purged` (T6): remembered 24 hours, gone with the token.
+    let rows = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM token_upload WHERE token_id = $1")
+            .bind(id)
+            .fetch_one(&s.e.t.owner)
+            .await
+            .unwrap()
+    };
+    assert_eq!(rows().await, 2, "one chunk, one blob");
+    sqlx::query(
+        "UPDATE token_upload SET created_at = now() - interval '25 hours' WHERE kind = 'chunk'",
+    )
+    .execute(&s.e.t.owner)
+    .await
+    .unwrap();
+    let purged: i64 = sqlx::query_scalar("SELECT kura_token_upload_purge()")
+        .fetch_one(&s.e.t.app)
+        .await
+        .unwrap();
+    assert_eq!((purged, rows().await), (1, 1));
+    sqlx::query("DELETE FROM scoped_token WHERE id = $1")
+        .bind(id)
+        .execute(&s.e.t.owner)
+        .await
+        .unwrap();
+    assert_eq!(rows().await, 0);
+}
+
+/// RFC 0004 T4, T6: a write token passes authorization on the read routes
+/// and the four write routes, and on no other route of the API; its writes
+/// count against its own limit.
+#[tokio::test]
+async fn only_writer_routes_accept_tokens() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    s.tenant_write(true).await;
+    let (key, _) = s
+        .scoped("bot", json!([{ "path": "Resumes/", "mode": "write" }]))
+        .await;
+    let (id, hash) = (Uuid::now_v7().to_string(), ChunkHash::of(b"x").to_string());
+    let mut open = Vec::new();
+    for (method, route, _) in kura_server::limits::LIMITS {
+        // Opened with a ticket in the query, never a bearer; the ticket
+        // route below refuses the token.
+        if *route == "/v1/vaults/{v}/events" {
+            continue;
+        }
+        let uri = route
+            .replace("{v}", &s.v)
+            .replace("{hash}", &hash)
+            .replace("{d}", &id)
+            .replace("{b}", &id)
+            .replace("{e}", &id)
+            .replace("{t}", &id);
+        let (st, b) = send(
+            &s.e,
+            method,
+            &uri,
+            &key,
+            None,
+            Some(Body::from("{}")),
+            INSIDE,
+        )
+        .await;
+        let refused = st == StatusCode::UNAUTHORIZED
+            || (st == StatusCode::FORBIDDEN
+                && json_of(&b)["detail"] == "scoped tokens are read only");
+        if !refused {
+            open.push(format!("{method} {route}"));
+        }
+    }
+    open.sort();
+    let mut want = vec![
+        // `Reader`.
+        "GET /v1/vaults",
+        "GET /v1/vaults/{v}/blobs/{hash}",
+        "GET /v1/vaults/{v}/changes",
+        "GET /v1/vaults/{v}/chunks/{hash}",
+        "GET /v1/vaults/{v}/entries",
+        "GET /v1/vaults/{v}/entries/{e}/revisions",
+        "POST /v1/vaults/{v}/blobs/batch",
+        "POST /v1/vaults/{v}/chunks/batch",
+        "POST /v1/vaults/{v}/search",
+        // `Writer`: the four routes of RFC 0004 §4.4.
+        "POST /v1/vaults/{v}/chunks/missing",
+        "POST /v1/vaults/{v}/commits",
+        "PUT /v1/vaults/{v}/blobs/{hash}",
+        "PUT /v1/vaults/{v}/chunks/{hash}",
+    ];
+    want.sort_unstable();
+    assert_eq!(open, want);
+
+    // `token_writes_are_rate_limited`: the commit route's 120 a minute.
+    let mut last = StatusCode::OK;
+    for _ in 0..121 {
+        (last, _) = s
+            .as_key(&key, "POST", "/commits", Some(Body::from("{}")))
+            .await;
+    }
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
+}

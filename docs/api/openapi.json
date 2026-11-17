@@ -191,6 +191,16 @@
           "required": true
         },
         "responses": {
+          "200": {
+            "description": "A web device this Authentik session already has",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Device"
+                }
+              }
+            }
+          },
           "201": {
             "description": "Registered; send its id in X-Kura-Device",
             "content": {
@@ -294,6 +304,103 @@
           },
           "404": {
             "description": "No such device you may revoke",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/devices/{d}/sign-out": {
+      "post": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Sign this browser out (RFC 0003 §6.2): the caller's own `web` device\nstops counting as live and its id is refused as unknown. Unlike a\nrevocation it bans nothing: the same Authentik session may sign in again,\nand the plugin or CLI it approved keep working (decision 24).",
+        "operationId": "sign_out_device",
+        "parameters": [
+          {
+            "name": "d",
+            "in": "path",
+            "description": "Your web device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Signed out, or already"
+          },
+          "401": {
+            "description": "Invalid token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not one of your web devices",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "The signed-in caller: subject, tenant roles, platform admin flag.",
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "The caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over 60 a minute",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -472,6 +579,77 @@
           },
           "403": {
             "description": "Not a tenant admin, or declared in configuration",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/bindings": {
+      "get": {
+        "tags": [
+          "vaults"
+        ],
+        "summary": "The vault's bindings, from files and from the API (RFC 0003 §4.4): vault\nmanager or tenant admin.",
+        "operationId": "list_bindings",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every binding, by subject",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BindingView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Below manager",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1934,7 +2112,7 @@
         "tags": [
           "tokens"
         ],
-        "summary": "Issues a read-only token for this vault; the secret is in this answer only.",
+        "summary": "Issues a token for this vault; the secret is in this answer only.",
         "operationId": "create_token",
         "parameters": [
           {
@@ -1980,7 +2158,7 @@
             }
           },
           "400": {
-            "description": "No address range, a /0 range, a bad prefix or expiry",
+            "description": "No address range, a /0 range, a bad prefix, rule, name or expiry",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2001,6 +2179,16 @@
           },
           "404": {
             "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "token_write_disabled: a write rule, and the tenant does not allow tokens to write",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2369,9 +2557,29 @@
             "description": "1 to 90.",
             "minimum": 0
           },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1 to 64 bytes, shown in lists and conflict file names; absent:\n`key-` and the first 8 characters of the id."
+          },
           "prefix": {
-            "type": "string",
-            "description": "A folder the token sees, ending with `/`; absent: the whole vault."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One `read` rule, as before RFC 0004; refused together with `scopes`.\nNeither: the whole vault, read only."
+          },
+          "scopes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ScopeRule"
+            },
+            "description": "1 to 16 folder rules."
           }
         },
         "additionalProperties": false
@@ -2527,6 +2735,37 @@
             }
           }
         ]
+      },
+      "Me": {
+        "type": "object",
+        "required": [
+          "subject",
+          "tenants",
+          "platformAdmin"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`name`, else `preferred_username`, as the identity provider sent it."
+          },
+          "platformAdmin": {
+            "type": "boolean"
+          },
+          "subject": {
+            "type": "string",
+            "description": "The OIDC subject."
+          },
+          "tenants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TenantMembership"
+            },
+            "description": "The tenants the caller belongs to; a binding alone makes a member."
+          }
+        }
       },
       "MissingRequest": {
         "type": "object",
@@ -2710,7 +2949,8 @@
         "type": "string",
         "enum": [
           "desktop",
-          "mobile"
+          "mobile",
+          "web"
         ]
       },
       "PutBinding": {
@@ -2826,6 +3066,31 @@
           }
         }
       },
+      "ScopeMode": {
+        "type": "string",
+        "enum": [
+          "read",
+          "write"
+        ]
+      },
+      "ScopeRule": {
+        "type": "object",
+        "description": "One folder rule: the folder and everything under it.",
+        "required": [
+          "path",
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/ScopeMode"
+          },
+          "path": {
+            "type": "string",
+            "description": "A folder ending with `/`; `\"\"` is the whole vault, `read` only."
+          }
+        },
+        "additionalProperties": false
+      },
       "SearchHit": {
         "type": "object",
         "required": [
@@ -2890,6 +3155,23 @@
           }
         }
       },
+      "TenantMembership": {
+        "type": "object",
+        "required": [
+          "slug",
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "`member`, `admin` or `owner`: the highest role the caller's claims map to."
+          },
+          "slug": {
+            "type": "string",
+            "description": "The tenant's slug."
+          }
+        }
+      },
       "Ticket": {
         "type": "object",
         "required": [
@@ -2912,6 +3194,8 @@
         "type": "object",
         "required": [
           "id",
+          "name",
+          "scopes",
           "prefix",
           "mode",
           "cidrs",
@@ -2944,13 +3228,24 @@
             ]
           },
           "mode": {
+            "type": "string",
+            "description": "`write` when a rule is."
+          },
+          "name": {
             "type": "string"
           },
           "prefix": {
-            "type": "string"
+            "type": "string",
+            "description": "As before RFC 0004: the folder of a token with one `read` rule, `/`\n(which matches no path) for any other."
           },
           "revoked": {
             "type": "boolean"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScopeRule"
+            }
           }
         }
       },
@@ -3008,6 +3303,16 @@
             "type": "string",
             "description": "Your effective role: `viewer`, `editor` or `manager`."
           },
+          "scopes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ScopeRule"
+            },
+            "description": "For a scoped token: its own folder rules (RFC 0004), so its client\nrefuses a change outside them before sending it. Absent for a device."
+          },
           "tenant": {
             "type": "string"
           }
@@ -3043,6 +3348,10 @@
       "description": "Device registration and revocation"
     },
     {
+      "name": "me",
+      "description": "The signed-in caller"
+    },
+    {
       "name": "vaults",
       "description": "Vaults and their role bindings"
     },
@@ -3060,7 +3369,7 @@
     },
     {
       "name": "tokens",
-      "description": "Scoped read-only tokens for non-interactive readers"
+      "description": "Scoped tokens for non-interactive readers and writers"
     },
     {
       "name": "search",

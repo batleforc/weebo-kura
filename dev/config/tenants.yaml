@@ -8,6 +8,8 @@ spec:
     roles: { owner: [kura-dev-owners], admin: [], member: [kura-dev] }
   vaultNamespaces: [dev]
   quota: { storage: 1Gi, maxFileSize: 100Mi }
+  # RFC 0004: tokens may carry write rules (tests/heavy/keys.sh turns it off and on).
+  scopedTokens: { write: true }
 ---
 apiVersion: kura.weebo.io/v1alpha1
 kind: KuraVault

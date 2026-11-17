@@ -1,0 +1,64 @@
+{
+  "app": { "name": "Kura", "tagline": "Vos coffres, depuis un navigateur." },
+  "nav": {
+    "vaults": "Mes coffres",
+    "devices": "Mes appareils",
+    "signOut": "Se déconnecter",
+    "main": "Principal"
+  },
+  "signIn": {
+    "action": "Se connecter avec Authentik",
+    "stay": "Rester connecté sur cet appareil",
+    "stayHelp": "Laisser décoché sur un ordinateur partagé.",
+    "ended": "Votre session a pris fin. Si vous ne vous êtes pas déconnecté vous-même, connectez-vous et révoquez ce navigateur dans « Mes appareils ».",
+    "failed": "La connexion n'a pas pu démarrer : {message}"
+  },
+  "callback": {
+    "working": "Connexion…",
+    "failed": "La connexion n'a pas abouti : {message}",
+    "again": "Réessayer"
+  },
+  "noTenant": {
+    "text": "Vous êtes connecté en tant que {name}, mais vous n'êtes membre d'aucun tenant Kura.",
+    "hint": "Demandez à un administrateur d'ajouter votre compte à un groupe, puis reconnectez-vous."
+  },
+  "vaults": {
+    "title": "Mes coffres",
+    "empty": "Aucun coffre ne vous est encore ouvert.",
+    "failed": "Vos coffres n'ont pas pu être chargés.",
+    "name": "Nom",
+    "tenant": "Tenant",
+    "role": "Votre rôle",
+    "source": "Déclaré dans"
+  },
+  "devices": {
+    "title": "Mes appareils",
+    "empty": "Aucun appareil pour l'instant.",
+    "failed": "Vos appareils n'ont pas pu être chargés.",
+    "name": "Nom",
+    "kind": "Type",
+    "lastSeen": "Vu",
+    "state": "État",
+    "owner": "Propriétaire",
+    "thisBrowser": "ce navigateur",
+    "active": "actif",
+    "revoked": "révoqué",
+    "signOutHere": "Se déconnecter ici",
+    "revoke": "Révoquer",
+    "confirmRevoke": "Révoquer {name} ? Tous les appareils connectés avec la même session Authentik sont refusés jusqu'à leur prochaine connexion.",
+    "confirm": "Révoquer",
+    "cancel": "Annuler"
+  },
+  "state": { "loading": "Chargement…", "retry": "Réessayer" },
+  "problem": {
+    "network": "Le serveur est injoignable.",
+    "insufficient_role": "Votre rôle ne le permet pas.",
+    "not_found": "Introuvable, ou invisible pour vous.",
+    "quota_exceeded": "20 appareils actifs au plus : révoquez-en un d'abord.",
+    "device_revoked": "La session de ce navigateur a été révoquée : reconnectez-vous.",
+    "rate_limited": "Trop de requêtes : patientez un instant.",
+    "unavailable": "Le serveur est indisponible pour l'instant.",
+    "status": "Le serveur a répondu {status}.",
+    "unexpected": "Une erreur inattendue est survenue."
+  }
+}

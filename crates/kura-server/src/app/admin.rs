@@ -115,5 +115,32 @@ async fn with_quota_conditions(
             });
         }
     }
+    // RFC 0004 §4.3: write tokens of a tenant whose switch is off.
+    let writers = sqlx::query("SELECT slug, tokens FROM kura_write_token_tenants()")
+        .fetch_all(&state.db)
+        .await?;
+    for row in writers {
+        let (slug, tokens): (String, i64) = (row.try_get("slug")?, row.try_get("tokens")?);
+        let on = s
+            .config
+            .tenants
+            .get(slug.as_str())
+            .is_some_and(|t| t.doc.spec.scoped_tokens.write);
+        let tenant = objects
+            .iter_mut()
+            .find(|o| o.kind == kura_api::spec::KIND_TENANT && o.name == slug);
+        if let (false, Some(o)) = (on, tenant) {
+            o.conditions.push(weebo_kit_api::Condition {
+                type_: kura_api::ReasonCode::TokenWriteDisabled.as_str().into(),
+                status: "True".into(),
+                reason: kura_api::ReasonCode::TokenWriteDisabled.as_str().into(),
+                message: format!(
+                    "{tokens} tokens carry write rules while scopedTokens.write is off: they read, their writes are refused"
+                ),
+                last_transition_time: None,
+                observed_generation: None,
+            });
+        }
+    }
     Ok(objects)
 }

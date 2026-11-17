@@ -415,23 +415,83 @@ pub fn fold(s: &str) -> String {
     caseless::default_case_fold_str(s).nfc().collect()
 }
 
-/// `authz::visible_under_prefix` (§6.2, T16): whether a path is under a
-/// token's folded prefix; an empty prefix sees everything.
-pub fn visible_under_prefix(path: &str, prefix_key: &str) -> bool {
-    prefix_key.is_empty() || fold(path).starts_with(prefix_key)
+/// Where a caller may read and write inside a vault (RFC 0004 §5.1): folded
+/// folder prefixes. "The whole vault" is `read: None`, never an empty list,
+/// so a scope that lost its rules sees nothing (T7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathScope {
+    read: Option<Vec<String>>,
+    /// Each is also readable (decision 9).
+    write: Vec<String>,
 }
 
-/// A folded prefix as a SQL `LIKE` pattern on `path_key`, wildcards escaped.
-pub fn like_prefix(prefix_key: &str) -> String {
-    let mut out = String::with_capacity(prefix_key.len().saturating_add(1));
-    for c in prefix_key.chars() {
-        if matches!(c, '\\' | '%' | '_') {
-            out.push('\\');
+impl PathScope {
+    /// Every path, read only: a signed-in device, or a token without rules.
+    pub fn whole() -> Self {
+        Self {
+            read: None,
+            write: Vec::new(),
         }
-        out.push(c);
     }
-    out.push('%');
-    out
+
+    /// From `(path, writes)` rules, where `""` is the whole vault. `None`
+    /// for no rule at all, or a whole-vault write: neither is a scope.
+    pub fn from_rules<'a>(rules: impl IntoIterator<Item = (&'a str, bool)>) -> Option<Self> {
+        let (mut whole, mut read, mut write, mut any) = (false, Vec::new(), Vec::new(), false);
+        for (path, writes) in rules {
+            any = true;
+            match (path.is_empty(), writes) {
+                (true, true) => return None,
+                (true, false) => whole = true,
+                (false, true) => write.push(fold(path)),
+                (false, false) => read.push(fold(path)),
+            }
+        }
+        any.then_some(Self {
+            read: (!whole).then_some(read),
+            write,
+        })
+    }
+
+    /// §6.2, T16: whether a path is under a readable folder.
+    pub fn sees(&self, path: &str) -> bool {
+        let Some(read) = &self.read else { return true };
+        let key = fold(path);
+        read.iter().chain(&self.write).any(|p| key.starts_with(p))
+    }
+
+    /// Whether a path is under a `write` folder; reading grants no write.
+    pub fn writes(&self, path: &str) -> bool {
+        let key = fold(path);
+        self.write.iter().any(|p| key.starts_with(p))
+    }
+
+    pub fn can_write(&self) -> bool {
+        !self.write.is_empty()
+    }
+
+    /// The readable folders as SQL patterns for `path_key LIKE ANY($n)`
+    /// (backslash is `LIKE`'s default escape), wildcards escaped. No
+    /// pattern matches no row.
+    pub fn like_patterns(&self) -> Vec<String> {
+        let Some(read) = &self.read else {
+            return vec!["%".to_owned()];
+        };
+        read.iter()
+            .chain(&self.write)
+            .map(|prefix| {
+                let mut out = String::with_capacity(prefix.len().saturating_add(1));
+                for c in prefix.chars() {
+                    if matches!(c, '\\' | '%' | '_') {
+                        out.push('\\');
+                    }
+                    out.push(c);
+                }
+                out.push('%');
+                out
+            })
+            .collect()
+    }
 }
 
 /// A claim value of the caller that the tenant maps to `owner` or `admin`:
@@ -474,12 +534,26 @@ pub fn claim_grants_manager(snapshot: &Snapshot, tenant: Uuid, value: &str) -> b
         })
 }
 
-/// A scoped token's access to its vault: always `viewer` (read only, §6.2).
+/// Whether the tenant lets its tokens write (RFC 0004 §4.1); an unknown
+/// tenant does not.
+pub fn token_write_allowed(snapshot: &Snapshot, tenant: Uuid) -> bool {
+    snapshot
+        .tenant_ids
+        .iter()
+        .find(|(_, id)| **id == tenant)
+        .and_then(|(slug, _)| snapshot.config.tenants.get(slug.as_str()))
+        .is_some_and(|t| t.doc.spec.scoped_tokens.write)
+}
+
+/// A scoped token's access to its vault, at the role its caller settled:
+/// `Viewer` from `Reader`; `Editor` from `Writer` alone, once the token's
+/// write rules and the tenant's switch were checked (RFC 0004 §6.3).
 pub async fn key_access(
     pool: &sqlx::PgPool,
     snapshot: &Snapshot,
     tenant: Uuid,
     vault: Uuid,
+    role: VaultRole,
 ) -> Result<Option<VaultAccess>, ApiError> {
     let Some((slug, _)) = snapshot.tenant_ids.iter().find(|(_, id)| **id == tenant) else {
         return Ok(None);
@@ -502,11 +576,61 @@ pub async fn key_access(
         name: row.try_get("name")?,
         managed_by: row.try_get("managed_by")?,
         tenant_role: None,
-        role: VaultRole::Viewer,
+        role,
         chunking: serde_json::from_value(row.try_get("chunking_params")?)
             .map_err(|e| ApiError::Unavailable(format!("stored chunking refused: {e}")))?,
         epoch: row.try_get("epoch")?,
         head_seq: row.try_get("head_seq")?,
         config: config_of(&row)?,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PathScope;
+
+    #[test]
+    fn a_scope_reads_and_writes_under_its_folders_only() {
+        let s = PathScope::from_rules([("Sessions/", false), ("Résumés/", true)]).unwrap();
+        assert!(s.sees("sessions/2026/a.md"), "folded");
+        assert!(
+            s.sees("RÉSUMÉS/a.md") && s.writes("Re\u{301}sume\u{301}s/a.md"),
+            "NFC"
+        );
+        assert!(!s.writes("Sessions/a.md"), "read grants no write");
+        for outside in [
+            "MJ/secret.md",
+            "Sessions2/a.md",
+            "Sessions",
+            "a/Sessions/b.md",
+        ] {
+            assert!(!s.sees(outside) && !s.writes(outside), "{outside}");
+        }
+        // The whole vault readable, one folder writable.
+        let s = PathScope::from_rules([("", false), ("Out/", true)]).unwrap();
+        assert!(s.sees("MJ/secret.md") && !s.writes("MJ/secret.md") && s.writes("out/x.md"));
+        assert_eq!(s.like_patterns(), ["%"]);
+        assert!(PathScope::whole().sees("x.md") && !PathScope::whole().can_write());
+    }
+
+    /// RFC 0004 T7: nothing decodes to "everything" by accident.
+    #[test]
+    fn empty_scope_sees_nothing() {
+        assert_eq!(PathScope::from_rules([]), None);
+        assert_eq!(
+            PathScope::from_rules([("", true)]),
+            None,
+            "whole-vault write"
+        );
+        // Write rules only: the read list is empty, not absent.
+        let s = PathScope::from_rules([("Out/", true)]).unwrap();
+        assert!(!s.sees("x.md") && s.sees("Out/x.md"));
+        assert_eq!(s.like_patterns(), ["out/%"]);
+    }
+
+    #[test]
+    fn like_patterns_escape_wildcards() {
+        let s = PathScope::from_rules([("a_b%c\\d/", false)]).unwrap();
+        assert_eq!(s.like_patterns(), ["a\\_b\\%c\\\\d/%"]);
+    }
 }

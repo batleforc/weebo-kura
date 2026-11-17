@@ -76,6 +76,8 @@ pub struct TenantSpec {
     #[serde(default)]
     pub search: Search,
     #[serde(default)]
+    pub scoped_tokens: ScopedTokens,
+    #[serde(default)]
     pub deletion_policy: DeletionPolicy,
 }
 
@@ -126,6 +128,15 @@ pub struct Search {
     /// Absent: false. The index is plaintext, so indexing is opt-in.
     #[serde(default)]
     pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ScopedTokens {
+    /// Absent: false. Tokens of the tenant may carry `write` rules
+    /// (RFC 0004 §4.1); set back to false, their writes stop at once.
+    #[serde(default)]
+    pub write: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
