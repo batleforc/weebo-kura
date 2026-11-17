@@ -2,14 +2,14 @@
 
 | Field | Value |
 | --- | --- |
-| Status | In review (2026-11-15) |
+| Status | Implemented (2026-11-17) |
 | Short | Folder-scoped write keys |
 | Settles | How a scoped token is limited to several folders of one vault, and may write under some of them |
 | Author | Maxime (batleforc) |
 | Co-author | Claude Fable 5.2 |
 | Created | 2026-11-15 |
 | Supersedes | — (revisits RFC 0001 decision 10 and its non-goal "write access for agents") |
-| Touches | `crates/kura-server` (`authz.rs`, `app/reader.rs`, `app/tokens.rs`, `app/commits.rs`, `app/chunks.rs`, `app/changes.rs`, `app/search.rs`, `app/devices.rs`, `limits.rs`, `reconcile/`, migration `0020`), `crates/kura-api` (`spec.rs`), `crates/kura-cli`, `tests/heavy/keys.sh`, `docs/` |
+| Touches | `crates/kura-server` (`authz.rs`, `app/reader.rs`, `app/tokens.rs`, `app/commits.rs`, `app/chunks.rs`, `app/changes.rs`, `app/search.rs`, `app/device.rs`, `app/devices.rs`, `app/vaults.rs`, `app/admin.rs`, `app/space.rs`, `limits.rs`, `metrics.rs`, `problem.rs`, `db.rs`, migration `0020`, `tests/tokens.rs`, `tests/cli.rs`), `crates/kura-api` (`spec.rs`, `reason.rs`), `crates/kura-core` (`scope.rs`, `sync.rs`), `crates/kura-cli` (`main.rs`, `commands.rs`, `api.rs`), `fuzz/fuzz_targets/fuzz_scoped_token.rs`, `tests/heavy/keys.sh`, `tests/heavy/authz.sh`, `dev/config/tenants.yaml`, `docs/operator.md`, `docs/api/openapi.json` (no `reconcile/`: D1 of the plan [R23]) |
 | Risk | high |
 
 > **Reference material**, about 6,500 words. For the decision, read §1, §3,
@@ -792,3 +792,161 @@ with the routes they protect, never after.
 | R18 | `crates/kura-server/src/reconcile/status.rs:32-41` (`warnings`: objects whose `Ready` is not `True`), `crates/kura-server/src/app/admin.rs:16-27` (`AdminStatus.objects`) | `d1bad91` | §4.3 |
 | R20 | `crates/kura-server/src/db.rs:14-20` (`MIGRATOR`, `ignore_missing`), `:119-139` (`check_schema`: older schema refused, newer accepted) | `d1bad91` | §6.1, decision 11 |
 | R19 | `crates/kura-server/src/app/devices.rs:285-310` (`purge_loop`: devices, expired tokens, commit records, daily) | `d1bad91` | §6.1 |
+| R21 | Commit `b1854d5` "feat: folder-scoped write tokens (RFC 0004) and the web console, phase 1 (RFC 0003)" | `b1854d5`, 2026-11-17 | §18.1, phases 1 to 3 |
+| R22 | Commit `49e1b7d` "feat: close the remaining gaps of RFC 0003, 0004 and 0005" | `49e1b7d`, 2026-11-17 | §18.1, D6 closed |
+| R23 | `docs/RFC/rfc0004-implementation-plan.md` (Progress, divergences D1 to D8) | `fda4845`, 2026-11-17 | §18 throughout |
+| R24 | Commit `fda4845` "chore: dated audit exceptions, and a suite vault apart from obsidian" (`tests/heavy/authz.sh` on the vault `suite-config`; `deny.toml`) | `fda4845`, 2026-11-17 | §18.3, §18.5 |
+| R25 | `tests/heavy/keys.sh` (observations 1 to 6) | `fda4845` | §18.3 |
+| R26 | `crates/kura-server/tests/tokens.rs` (`multi_folder_token_reads_its_folders_only`, `token_cannot_write_outside`, `token_cannot_launder_content`, `only_writer_routes_accept_tokens`), `crates/kura-server/tests/cli.rs` (`the_cli_issues_lists_and_revokes_scoped_tokens`, `a_scoped_token_syncs_its_folders_and_refuses_the_rest`), `crates/kura-core/src/scope.rs` (unit tests), `crates/kura-server/src/app/tokens.rs` (`scopes_are_checked`, `names_are_checked`), `crates/kura-server/tests/http.rs` (`every_route_has_a_limit`) | `fda4845` | §18.4 |
+| R27 | `crates/kura-cli/src/commands.rs` (token create and list output, the sync report), `crates/kura-core/src/sync.rs` (`Options::writable`, `Report::not_writable`) | `fda4845` | §18.6 |
+| R28 | `crates/kura-server/src/app/admin.rs` (`with_quota_conditions`, the `TokenWriteDisabled` condition), `crates/kura-server/src/app/mod.rs` (`set_snapshot`, the `kura_config_warnings` gauge) | `fda4845` | §18.2 |
+| R29 | `task audit` run 2026-11-17: green, with the dated exceptions `RUSTSEC-2026-0542` and `RUSTSEC-2026-0543` in `deny.toml` | `fda4845`, 2026-11-17 | §18.5 |
+
+---
+
+## 18. Revision against the tree (2026-11-17)
+
+This RFC was `In review` and never formally `Accepted`: every question of
+§15 was settled, and the maintainer moved it straight to `Implemented` on
+2026-11-17, once every phase of the implementation plan [R23] was done.
+
+### 18.1 What shipped
+
+| Phase | Commit | Content |
+| --- | --- | --- |
+| 1 | `b1854d5` [R21] | Migration `0020` (`name`, `scopes`, legacy `'/'`, a trigger filling both for an older binary's insert, `schema_floor` read by `db::check_schema`), `PathScope`, the read sites on `LIKE ANY`, `visible_under_prefix` and `like_prefix` removed, `name` and `scopes` in the token API |
+| 2 | `b1854d5` [R21] | `scopedTokens.write`, `Writer` in `app/reader.rs`, `token_upload` and its daily purge, the possession rule, the path checks on the commit, `kura_token_writes_total{outcome}`, `token_write_disabled`, the `TokenWriteDisabled` condition |
+| 3 | `b1854d5` [R21] | `kura token create --name --read --write`, the `r:`/`w:` list, `KURA_TOKEN` and `--token-file` for `attach` and `sync`, the local refusal, `tests/heavy/keys.sh`, the operator guide and the bot recipe |
+| Gaps | `49e1b7d` [R22] | D6 closed: the token line of `kura sync`, the scope rules moved to `kura_core::scope` (feature `scope`, shared by server, CLI and fuzz build), `fuzz_scoped_token` extended |
+| Suite | `fda4845` [R24] | `tests/heavy/authz.sh` moved its configuration half from the vault `obsidian` (real notes) to `suite-config` |
+
+Phases 1 to 3 shipped together in one commit, with RFC 0003 phase 1; the
+order of §16 held inside the working tree, not in the history.
+
+### 18.2 Where it differs from the text
+
+The plan's divergence table [R23] is the record; in short:
+
+- **D1** (§6.1): no `tenant.token_write` column; `Writer` and `create_token`
+  read `scopedTokens.write` from the reconciled snapshot, the authorization
+  cache every replica already reads. `reconcile/` was therefore not touched.
+- **D2** (§6.4): possession refusals are `422 hash_mismatch` (not
+  `invalid_request`, which is a `400`), detail `content not uploaded by this
+  token`, the same for an existing and an unknown hash.
+- **D3** (§6.5): the base revision is checked under the lock, beside the
+  head, on the base the operation names.
+- **D4** (§6.6): `GET /vaults` shows a token its own `scopes`; the CLI
+  derives its local refusal from them.
+- **D5** (§6.6): the bot's server comes from `KURA_SERVER`; `--token-file` is
+  a global flag. A token holder never runs `kura login`.
+- **D6** (§4.5, §14): first left out, closed by `49e1b7d` (see §18.1).
+- **D7** (§6.P): `keys.sh` creates and deletes its own vault `keys-<pid>`
+  instead of using `campaign`, so a lost dev Transit key cannot break it.
+- **D8** (§4.3): `name` also refuses `/`, `\`, control characters and a name
+  that cannot suffix a conflict file name.
+
+The plan also records, outside the table, a code review of 2026-11-17: a
+change outside the write folders no longer stops the whole sync; it is kept
+local and reported (`Report::not_writable`) and the pull still runs.
+
+Found against the tree on landing, and not in the plan:
+
+- **§4.3 warning, where it lives.** The `TokenWriteDisabled` condition is
+  added by `GET /v1/admin/status` at request time (`with_quota_conditions`,
+  from `kura_write_token_tenants()`), not by the reconciler [R28]. So the
+  condition is on the tenant's object in that answer, as §4.3 states, but the
+  `kura_config_warnings` gauge, computed from the reconciled snapshot, does
+  not count it. Same pattern as the quota condition beside it.
+- **§14 test names.** The security tests of §14 were folded into four
+  integration functions; the names of §14 survive as labelled sections inside
+  them (§18.4), not as test functions.
+- **§14, conflict file named after the token.** The code suffixes a conflict
+  with the token's `name` (`app/commits.rs`, "the device's name, or the
+  token's"), but no test was found that asserts it.
+- **§14, multi-folder reads on each site.**
+  `multi_folder_token_reads_its_folders_only` covers changes, entries,
+  revisions, chunk, blob and blob batch; search is covered only for a
+  single-prefix token (`tests/search.rs`, RFC 0001 T16).
+
+### 18.3 What the proof observed
+
+`tests/heavy/keys.sh` [R25], on the dev stack, 2026-11-17: observations 1 to
+6 all `ok` (plan, phase 3). What the suite actually checks, against §6.P:
+
+1. The recap is pushed by `kura sync` with `KURA_TOKEN`, pulled by the game
+   master's `kura sync`, and its revision's `user_sub` is `key:<id>`. Read in
+   the database, not through `GET …/revisions`; the `1 pushed` line is not
+   asserted (output discarded).
+2. As written: `403`, `insufficient_role`, detail `operations[0]: outside
+   the token's write folders`, `head_seq` unchanged.
+3. The real manifest of `MJ/secret.md` is refused `422` with `content not
+   uploaded by this token`; `GET chunks/<hash>` is `404`; `chunks/missing`
+   reports both the outside chunk and a hash stored nowhere as missing. The
+   suite does not read the server log for an object-storage read, and does
+   not `PUT` a manifest with a random hash: equality of the two answers is
+   observed on `chunks/missing`, and on `PUT blobs` by the integration test.
+4. Ran as `kura attach` into an empty folder (before observation 1): only the
+   two readable files arrive, nothing under `MJ`.
+5. As written: exit 3, `head_seq` unchanged, and
+   `kura_token_writes_total{outcome="refused"}` did not move.
+6. The switch is flipped by editing `dev/config/tenants.yaml`; writes are
+   `403` once the reconciler has picked it up (the suite waits up to 45 s,
+   so "at the next request" means the next request after reconciliation).
+   The push exits 3, a read still answers `200`, and once the switch is back
+   the kept push lands.
+
+Existing suites: `task perf:run:commit` p95 22.8 ms, p99 30.5 ms, 0 % errors.
+`tests/heavy/authz.sh` was `ok` on 2026-11-17 once its `notes` vault was
+re-created (D7); `fda4845` then moved its configuration half to the vault
+`suite-config` [R24], and the plan records no run after that change.
+
+### 18.4 §7, the tests that prove each row
+
+All in `crates/kura-server/tests/tokens.rs` unless noted [R26]:
+
+| # | Proved by | Notes |
+| --- | --- | --- |
+| T1 | `token_cannot_write_outside` | Four ways out, a read-only folder, a sibling folder, the whole-commit refusal; also `keys.sh` observation 2 |
+| T2 | `token_cannot_launder_content` (sections `token_cannot_launder_chunk`, `token_cannot_launder_blob`) | Also `keys.sh` observation 3 |
+| T3 | `token_cannot_launder_content` (section `missing_is_blind_outside_scope`) | Timing still not equalised, as accepted |
+| T4 | `only_writer_routes_accept_tokens`, over `limits::LIMITS`; `every_route_has_a_limit` (`tests/http.rs`) | |
+| T5 | `token_cannot_write_outside` (section `token_delete_is_restorable`) | |
+| T6 | `token_cannot_launder_content` (section `token_upload_is_purged`), `only_writer_routes_accept_tokens` (section `token_writes_are_rate_limited`) | `quota_exceeded` for a token is the device path, not tested for a token |
+| T7 | `empty_scope_sees_nothing` (`crates/kura-core/src/scope.rs`); `multi_folder_token_reads_its_folders_only` (stored rules that no longer decode: `401 invalid_token`) | |
+| T8 | `multi_folder_token_reads_its_folders_only` (section `legacy_prefix_matches_no_path`) | |
+| T9 | `token_cannot_write_outside` (assertion `token_revision_names_the_key`) | |
+| T10 | `token_cannot_write_outside` (section `revoked_grant_cuts_write_token`) | |
+
+Every row held; none was replaced.
+
+### 18.5 §8, supply chain
+
+No new dependency. `caseless` 0.2.2 and `unicode-normalization` 0.1.26,
+already in `Cargo.lock`, now reach the CLI and the fuzz build through
+`kura-core`'s optional feature `scope` instead of each crate's own
+dependency. `task audit` is green on 2026-11-17 [R29]; its two dated
+exceptions (`RUSTSEC-2026-0542` humantime, `RUSTSEC-2026-0543` chrono, both
+via `object_store` only, review 2026-12-17) are unrelated to this RFC.
+
+### 18.6 §4.5, mocks against what shipped
+
+Compared with `crates/kura-cli/src/commands.rs` [R27]; the mocks stay as
+written. Across all of them, the CLI prints no colour: the `[yellow]` and
+`[red]` of the mocks are plain text, and the words (`write`, `w:`,
+`revoked`, `error:`) carry the meaning, as §11 asks.
+
+- **`kura token create`, nominal**: same layout; the expiry is a date, the
+  secret's prefix shows 13 characters. A rule covered by a broader one
+  prints `note: <path> is also covered by a broader rule.` (§4.3).
+- **`kura token create`, errors**: both texts and exit 3 as drawn.
+- **`kura token list`**: columns `NAME ID SCOPES EXPIRES LAST USED STATE
+  FROM`; the id is the full UUID, `LAST USED` a date or `never` (not
+  "2 min ago"), and a `FROM` column shows the address list. Empty: as drawn.
+- **The bot's `kura sync`, success**: the line `campaign  token
+  discord-recap  1 pushed  0 pulled` as drawn, followed by the usual summary
+  `campaign: pushed 1, pulled 0, removed 0, 0 conflicts.`
+- **The bot's `kura sync`, refusal**: the two lines and exit 3 as drawn;
+  after the code review, the pull still runs, so the token line (`0 pushed`)
+  and the summary follow.
+  `a_scoped_token_syncs_its_folders_and_refuses_the_rest` asserts the exit
+  code and an unmoved head, not the text.

@@ -2,14 +2,14 @@
 
 | Field | Value |
 | --- | --- |
-| Status | In review (2026-11-15) |
+| Status | In review (2026-11-15); every phase landed, gaps listed in §18 (2026-11-17) |
 | Short | Web console, webhooks |
 | Settles | How members and managers use Kura from a browser (their vaults and devices; access, keys and notifications), and how a tenant is notified of events on a webhook |
 | Author | Maxime (batleforc) |
 | Co-author | Claude Fable 5.2 |
 | Created | 2026-11-15 |
 | Supersedes | — (revisits RFC 0001's non-goal "a web UI") |
-| Touches | `ui/` (new), `crates/kura-server` (`app/mod.rs`, `app/me.rs`, `app/vaults.rs`, `app/devices.rs`, `app/notifications.rs`, `notifier.rs`, `net.rs`, `config.rs`, `limits.rs`, `maintenance.rs`, `lib.rs`, migrations `0022`, `0023`), `Containerfile`, `Containerfile.hardened`, `deploy/helm/kura`, `.tasks/`, `tests/heavy/console.sh`, `docs/` |
+| Touches | `ui/` (new), `crates/kura-server` (`app/mod.rs`, `app/me.rs`, `app/ui.rs`, `app/vaults.rs`, `app/devices.rs`, `app/device.rs`, `app/space.rs`, `app/notifications.rs`, `app/commits.rs`, `app/tokens.rs`, `app/reader.rs`, `notifier.rs`, `net.rs`, `config.rs`, `limits.rs`, `metrics.rs`, `problem.rs`, `db.rs`, `lib.rs`, `main.rs`, `store/crypto.rs`, `store/keys.rs`, migrations `0022`, `0023`, `0024`, `tests/console.rs`, `tests/notifications.rs`), `crates/kura-core` (`webhook.rs`, feature `webhook`), `fuzz/` (`fuzz_webhook_target`), `Containerfile`, `Containerfile.hardened`, `deploy/helm/kura` (`values.yaml`, `templates/`, `files/alerts.yaml`), `deploy/alerts/tests.yaml`, `dev/`, `.tasks/`, `tests/heavy/console.sh`, `tests/heavy/notify.sh`, `docs/` (`operator.md`, `readme.md`, `api/openapi.json`, `RFC/assets/`) |
 | Risk | high |
 
 > **Reference material**, about 11,800 words. For the decision, read §1, §3,
@@ -1240,3 +1240,228 @@ and the device binding land in phase 1 with the first page.
 | R32 | `weebo-notify-v2`: `crates/notify-adapters/http-actix/src/routes/compat.rs:36` (key as `Bearer`, `Basic`, `X-Gotify-Key` or `?token=`), `:465-486` (`POST /compat/json/{transform}/{channel}`); `grep -rni hmac` over its routes finds no signature check | `weebo-notify-v2` at `d29d330`, read 2026-11-15 | T3, §11, §13, decision 19 |
 | R33 | `tests/heavy/console.sh` against the dev Authentik (`ghcr.io/goauthentik/server:2026.8.3`, provider `kura-web` of `dev/authentik/blueprints/kura.yaml`): every check `ok`; notes: no family revocation, no CORS header on the revocation answer, a code exchanged without PKCE, no `sid` once the Authentik session has ended | run 2026-11-17, working tree on `a4d3ddd` | §4.2, §6.2, §6.P, T9, T14, §13, decisions 13 and 25 to 27 |
 | R34 | `goauthentik/authentik`, `authentik/providers/oauth2/`: `utils.py:39-79` (`cors_allow`: scheme, host and port of each redirect URI), `views/token.py:57-63` and `:216-245` (rotation under `refresh_token_threshold`, a new `expires` at each rotation), `models.py:288-296` | tag `version/2026.8.3` (`e5a0d2f7572c`), read 2026-11-17 | §6.2, §13, decision 28 |
+| R35 | `b1854d5` feat: folder-scoped write tokens (RFC 0004) and the web console, phase 1 (RFC 0003) | 2026-11-17 | §18, phase 1 |
+| R36 | `c2449ce` feat: folder-restricted viewers and the web reader (RFC 0005): carries the phase 1 review fixes (migration `0023_signed_out_devices.sql`, `app/ui.rs`, `db.rs`, `tests/console.rs`, `tests/db.rs`) | 2026-11-17 | §18, phase 1 review |
+| R37 | `6383e66` feat(ui): the back office of the web console (RFC 0003 phase 2) | 2026-11-17 | §18, phase 2 |
+| R38 | `62cdb46` feat: webhook notifications, server side (RFC 0003 phase 3) | 2026-11-17 | §18, phase 3 |
+| R39 | `a7e8e67` feat(ui): notification rules and deliveries in the console (RFC 0003 phase 4) | 2026-11-17 | §18, phase 4 |
+| R40 | `49e1b7d` feat: close the remaining gaps of RFC 0003, 0004 and 0005 | 2026-11-17 | §18, gaps |
+| R41 | `fda4845` chore: dated audit exceptions, and a suite vault apart from obsidian (`.tasks/security.yaml`) | 2026-11-17 | §18.5 |
+| R42 | [`rfc0003-implementation-plan.md`](rfc0003-implementation-plan.md): progress table and divergences D1 to D19 | working tree on `5a01ea4`, 2026-11-17 | §18 |
+| R43 | `ui/pnpm-lock.yaml`, `ui/node_modules/*/package.json` (resolved versions and licences), `Cargo.lock` (`tower-http` 0.7.1, `reqwest` 0.13.5, `url` 2.5.8, `rcgen` 0.14.10, `tokio-rustls` 0.26.6, `aws-lc-rs` 1.19.0), `Containerfile:35` (`node:24-trixie-slim` by digest) | working tree on `5a01ea4`, read 2026-11-17 | §18.5 |
+
+---
+
+## 18. Revision against the tree (2026-11-17, gaps still open)
+
+Every question of §15 is settled and every phase of the implementation plan
+is done [R42], but the RFC stays In review: landing it found behaviour the
+text promises and the tree lacks (§18.2, the divergences the plan does not
+record). It moves to Implemented once each is built or accepted as a
+divergence. The record of each
+phase, its tests and its divergences is that plan; this section summarises
+it against the text above, which stays as written.
+
+### 18.1 What shipped
+
+| Phase | Commit | What |
+| --- | --- | --- |
+| Question 13 | `b1854d5` [R35] | The Authentik facts in `tests/heavy/console.sh`, decisions 25 to 28 (§15) |
+| 1 | `b1854d5` [R35], review fixes in `c2449ce` [R36] | `GET /me`, `GET …/bindings`, `Profile::Web` (migration `0022`), one web device per `sid`, `POST /devices/{d}/sign-out`, the 30-day purge, the configuration space refused to a web device, `ui` in `server.yaml`, `/app` with its headers and `/app/config.json`; `ui/` with the session module, sign-in, shell, My vaults, My devices, manifest and service worker; the Containerfile UI stage; `task ui:*` in `lint` and `audit`. The review added migration `0023` (a signed-out web device closes its sockets and leaves the lists), a `404` for a missing hashed asset, and a schema check over every migration |
+| 2 | `6383e66` [R37] | The back office on existing routes: Manage index, Access, Keys, members' devices, a tenant's vaults, platform Status; §6.P observations 1 to 3 |
+| 3 | `62cdb46` [R38] | `notifications` in `server.yaml`, migration `0024`, `kura_core::webhook` and `fuzz_webhook_target`, `net::webhook_client`, `notifier`, the six rule routes, events at their sites, four metrics, two alerts with promtool tests |
+| 4 | `a7e8e67` [R39] | Notifications and Deliveries pages; operator guide for `notifications` and the receiver contract; §6.P observations 4, 5 and 7 in `tests/heavy/notify.sh` |
+| Gaps | `49e1b7d` [R40] | The HTML mocks of §4.5, the bundled fonts, the group list of Add access, observations 6 and 8 in the shell suite, the Helm values `server.ui`, `server.notifications` and `webhookCa` |
+
+### 18.2 Where the tree differs from the text
+
+The divergences recorded by the plan [R42], in short:
+
+- **D1** (§4.4): `/app/config.json` also carries `discovery`, and the CSP's
+  `connect-src` names its origin: in Authentik's global issuer mode a
+  browser may only read its own application's discovery document.
+- **D2** (§6.2): registering again answers `200` with the existing device,
+  `201` for a new one.
+- **D3** (§4.4): `GET /me` also returns `name`, for the shell.
+- **D4** (§6.1): the UI stage builds from the committed
+  `docs/api/openapi.json`, not from the binary; the generated client is
+  gitignored.
+- **D5** (§6.1): the route guard and `AsyncState` are written here, the
+  revoke confirmation is an inline `alertdialog`, and reka-ui is not used.
+- **D6** (§4.5): the HTML mocks, missing in phase 1, are
+  `docs/RFC/assets/0003-console.html` and `0005-reader.html` (closed).
+- **D7** (§8): `picomatch` GHSA-fc5q-39xc-vjpf, build time only, is a dated
+  exception; see §18.5 (closed).
+- **D8** (§6.1): Silkscreen and JetBrains Mono, first missing, are bundled
+  from `@fontsource` 5.3.0 (closed).
+- **D9** (§4.5): groups were free text in phase 2; `GET /v1/vaults` now
+  gives managers the tenant's mapped claim values and the form lists them
+  (closed).
+- **D10** (§4.5): a "Manage" index page instead of a drop-down, and one
+  members' devices page for every tenant the caller administers.
+- **D11** (§4.5): Keys shows NAME and RFC 0004's folder rules, not ID and
+  SCOPE.
+- **D12** (§6.4): `device.*` events are recorded per tenant just after the
+  fact, not in its transaction: a device belongs to a person, not a tenant.
+- **D13** (§6.4): `quota.high` and `token.expiring` run in the notifier's
+  loop, not in the storage refresh and the purge loop.
+- **D14** (§4.3): a name is refused when any address it resolves to now is
+  refused, or none resolves.
+- **D15** (§6.5): an `address_refused` attempt is final, not retried.
+- **D16** (§8): `url` in `kura-core` behind the `webhook` feature; `rcgen`
+  and `tokio-rustls` as test-only dependencies.
+- **D17**, **D18** (§6.P): observations 6 and 8 run in the shell suite
+  against a second and a third server on the same database (closed).
+- **D19** (§6.P): the receivers are Python's `http.server` with `ssl`, run
+  by the suite with `python3 -I`.
+
+Found in the tree on landing and not in the plan's table:
+
+- **Migration numbers** (§6.4, §13, §16): the notifications are
+  `0024_notifications.sql`; `0023` is `0023_signed_out_devices.sql`, the
+  phase 1 review fix, which shipped inside RFC 0005's commit `c2449ce`
+  [R36].
+- **§4.3, startup**: no check refuses a `ui.dir` that is missing or has no
+  `index.html`; `main.rs` and `app::ui::UiSettings::new` do not look. The
+  §10.2 row "`ui.dir` missing at startup" therefore does not hold: such a
+  server starts and `/app` answers `404`.
+- **§4.3, warnings**: no `WARN` line counts the rules at startup while
+  `notifications.enabled` is false. The Notifications page says
+  "Notifications are not enabled on this server" from the `409`, and lists
+  no rule then.
+- **§4.5 and §10.1, coarse results**: besides the six listed, a delivery
+  can end as `redirect` (a `3xx`), `410`, `unavailable` (the sealed values
+  could not be opened; retried, as §10.2 says), `disabled` or
+  `rule_disabled`; the metric's `outcome` adds `delivered` and `gone`. All
+  remain fixed words, never a body or header.
+- **§4.5, Forbidden**: the page shows the console's own "Your role does not
+  allow this page.", not the server's `insufficient_role` detail.
+- **§4.5, Notifications**: no Edit action, and no way to rotate the signing
+  secret from the console; `PUT` with `rotateSecret: true` exists in the API
+  only. The row offers Test, Switch off or Re-enable, Deliveries and
+  delete.
+- **§9**: a `device.*` payload carries the device's kind (`web`,
+  `desktop`, `mobile`) beside its id.
+- **§10.3, §11, §13**: the plan records no measurement of the 300 kB
+  bundle budget (no task measures it), no `task perf:run:commit` with a
+  `vault.changed` rule, no `accessibilite-check` review, and no rollback
+  run of the previous release against a migrated database. Not checked on
+  landing.
+
+### 18.3 What the proof observed
+
+All on the dev stack, 2026-11-17, every check `ok` [R42]:
+
+- The Authentik facts of decision 13: `tests/heavy/console.sh`, `curl`
+  alone [R33].
+- Observations 1 and 2: `tests/heavy/console.sh` driving
+  `ui/e2e/console.spec.ts` ("1 and 2: alice signs in, gets no cookie, and
+  a key's secret is shown once"), Playwright 1.64.1 in Chromium: alice
+  signs in through Authentik's own pages and lands on My vaults, every `/v1`
+  call carries the token, only `GET /me` and the registration go without a
+  device, Kura sets no cookie, and after a reload the key's secret is in no
+  page or `/v1` answer.
+- Observation 3: the same suite ("3: bob, a viewer, is refused the keys of
+  a vault, and is shown no key"): the forbidden text and a `403` with no
+  key in it.
+- Observations 4, 5 and 7: `tests/heavy/notify.sh` with
+  `ui/e2e/notify.spec.ts`: the receiver logs `ping` with `Bearer test-key`
+  and `openssl` recomputes the signature; the list shows none of the
+  secrets; a revoked device arrives as `device.revoked` within 10 s with no
+  `sub`, `path` or device name; a `500` leaves the delivery pending after
+  one attempt, next in about 60 s.
+- Observation 6: in `notify.sh`, a rule to 127.0.0.2 is `400` with the one
+  message and that listener logs nothing. The second half differs from the
+  text (D17): a rule saved while 127.0.0.1 was allowed, tested on a second
+  server started with `allowedCidrs: []`, answers `address_refused` and the
+  receiver logs nothing. The row written past the API is in
+  `tests/notifications.rs`.
+- Observation 8: in `notify.sh`, the second server runs with
+  `ui.enabled: false` (`/app/` is `404`) and a third with
+  `notifications.enabled: false` (`409 notifications_disabled`).
+- The browser tests sign out at the end, so a run leaves no live web
+  device. Console unit tests: 77, 92% of lines. `fuzz_webhook_target`: 2.0 M
+  runs in 61 s, no finding.
+
+### 18.4 §7 threats and the tests that prove them
+
+Most test names of §14 were not kept: the checks are grouped in fewer
+tests, several naming the §14 check in a comment. The tests below exist in
+the tree.
+
+| # | Proved by | Not proved |
+| --- | --- | --- |
+| T1 | `crates/kura-core/src/webhook.rs`: `private_and_special_addresses_are_refused`, `a_target_is_https_without_credentials`; `crates/kura-server/src/net.rs`: `webhooks_reach_public_addresses_and_allowed_ranges_only` (mapped IPv6 included); `crates/kura-server/tests/notifications.rs`: `no_webhook_reaches_an_address_the_operator_did_not_allow` (literal, `localhost`, metadata, mapped IPv6, unresolvable name, and a row written past the API refused at send with no connection); fuzz `fuzz_webhook_target`; observation 6 | No test has a resolver that changes its answer (`webhook_rebinding_is_refused_at_send`) or a receiver that redirects (`webhook_redirect_is_failure`); both rest on `net::webhook_client` (the guarded resolver, `Policy::none()`) and the `3xx` → `redirect` mapping in `notifier.rs` |
+| T2 | `notifier.rs`: `the_lists_are_closed_and_consistent`; `tests/notifications.rs`: `events_reach_their_rules_with_ids_only_and_retries_back_off` (`status_5xx`); `ui/src/pages/notifications-pages.spec.ts`: "lists coarse results" | That the body is never read is by construction (`notifier.rs`, no read of the response); no test |
+| T3 | `notifier.rs`: `the_signature_is_hmac_sha256_of_timestamp_dot_body` (known vector, timestamp bound); `tests/notifications.rs`: `a_rule_signs_its_deliveries_and_never_shows_its_secrets`; observation 4 (`openssl`) | No test alters the body (`signature_rejects_altered_body`) |
+| T4 | `tests/notifications.rs`: `a_rule_signs_its_deliveries_and_never_shows_its_secrets` (list, database and deliveries hold no URL path, secret or key); `store/crypto.rs`: `values_open_only_under_their_context`; observation 4 | No test reads the logs (`logs_have_no_webhook_url`) or sends a control character in `authorization` (`check_authorization` in `app/notifications.rs` is untested) |
+| T5 | `tests/notifications.rs`: `events_reach_their_rules_with_ids_only_and_retries_back_off` (no subject, path or device name), `a_manager_sees_their_vaults_only_and_off_means_409`; observation 5 | — |
+| T6 | `tests/notifications.rs`: `events_reach_their_rules_with_ids_only_and_retries_back_off` (nothing recorded without a rule, one `vault.changed` a window, backoff, the 20th failure, `410`) | — |
+| T7 | Observation 3 (`ui/e2e/console.spec.ts`); `ui/src/pages/manage-pages.spec.ts`: "is forbidden below manager, and shows a refused creation" | — |
+| T8 | `crates/kura-server/tests/console.rs`: `the_console_is_served_with_its_headers` (`script-src 'self'`); `app/ui.rs`: `the_policy_names_the_identity_provider_only` | No build check for inline script (`console_has_no_inline_script`); the CSP header is the control |
+| T9 | `ui/src/auth/session.spec.ts`: "always asks for an S256 challenge…" (`authorize_always_sends_s256`), "refuses a callback whose state is not the one it started…" (`callback_rejects_wrong_state`); `ui/src/auth/pkce.spec.ts`: the `post_login_target_is_in_app` table; `ui/src/pages/pages.spec.ts`: "lands on the in-app target, or says why it could not" | — |
+| T10 | `tests/console.rs`: `the_console_is_served_with_its_headers` (`frame-ancestors 'none'`, no `Set-Cookie`); observation 1 | — |
+| T11 | `tests/console.rs`: `me_shows_only_own_tenants`, `bindings_need_manager` (with the foreign tenant's `404`) | — |
+| T12 | `tests/console.rs`: `web_device_is_reused_per_sid` | — |
+| T13 | — | No test: the audit lines `notification_rule_created`, `_changed`, `_deleted` (`app/notifications.rs`) and `_disabled` (`notifier.rs`) exist; `rule_changes_are_audited` does not |
+| T14 | `ui/src/auth/session.spec.ts`: `refresh_token_storage_follows_the_box`, `refresh_is_single_flight_across_tabs`, `refresh_without_new_token_keeps_the_old_one`, `unexpected_invalid_grant_shows_the_revoke_hint`, `sign_out_clears_storage_and_closes_the_device` (each named in a comment over its `it`); `ui/src/sw.spec.ts`: "keeps the shell only…"; `tests/console.rs`: `web_device_is_reused_per_sid` (sign-in after sign-out in the same session); RFC 0005's `ui/e2e/reader.spec.ts` ("a hostile note runs nothing") | — |
+
+No row turned out not to hold; T1, T2, T3, T4, T8 and T13 are held partly by
+construction where the table says so.
+
+### 18.5 Supply chain as shipped
+
+| Dependency / image / tool | Shipped | Licence |
+| --- | --- | --- |
+| `vue`, `vue-router`, `pinia`, `vue-i18n` | 3.5.45, 5.5.1, 4.1.0, 11.4.20 | MIT |
+| `vite`, `typescript`, `tailwindcss` | 8.3.8, 6.0.3, 4.3.5 | MIT, Apache-2.0, MIT |
+| `reka-ui` | not used (D5) | — |
+| `vitest`, `@playwright/test`, `@biomejs/biome` (dev) | 5.1.0, 1.64.1 (exact pin), 2.6.8 | MIT, Apache-2.0, MIT OR Apache-2.0 |
+| `@hey-api/openapi-ts`, `axios` | 0.99.0, 1.21.1 | MIT, MIT |
+| `@fontsource/silkscreen`, `@fontsource/jetbrains-mono` | 5.3.0, 5.3.0 | OFL-1.1 (D8) |
+| `tower-http` feature `fs` | 0.7.1 | MIT |
+| `url` in `kura-core` (feature `webhook`) | 2.5.8, already in the tree (D16) | MIT OR Apache-2.0 |
+| `rcgen`, `tokio-rustls` (test only) | 0.14.10, 0.26.6 (D16) | — |
+| Node build stage | `node:24-trixie-slim`, pinned by digest | — |
+
+`dompurify` and `markdown-it` in `ui/package.json` are RFC 0005's. Versions
+are from the lockfiles [R43]. As of 2026-11-17 `task audit` is green [R41]:
+`pnpm audit` in `ui` passes with one dated exception, `picomatch`
+GHSA-fc5q-39xc-vjpf, build time only and absent from the bundle (D7);
+`js-yaml`, `minimatch` and `glob` (dev only) are overridden to fixed
+versions in `ui/pnpm-workspace.yaml`. The Rust exceptions in `deny.toml`
+(RUSTSEC-2026-0542 `humantime`, RUSTSEC-2026-0543 `chrono`, both through
+`object_store`, reviewed 2026-12-17) are not this RFC's.
+
+### 18.6 The mocks of §4.5 against the console as built
+
+Compared with the pages' source and `ui/src/locales/en.json`, and with the
+pages the browser suites drove; no screenshot was taken on landing.
+
+- **Signed out, and signing in**: as drawn, the hint after an unexpected
+  `invalid_grant` word for word, and the help text "Leave unticked on a
+  shared computer."
+- **Shell**: a "Manage" link to an index grouped by vault, tenant and
+  platform, shown by role, instead of "Manage: jdr ▾" (D10).
+- **No tenant**: as drawn.
+- **Access**: as drawn, with the folders of a viewer (RFC 0005) and the
+  tenant's groups as a list (D9).
+- **Keys**: NAME and FOLDERS for ID and SCOPE (D11); the empty text and the
+  created dialog as drawn.
+- **Notifications**: the columns as drawn; the banner reads "`name` was
+  switched off (`reason`). Fix the receiver, then re-enable it.", the
+  reason being `failures: status_5xx` or `gone`; no Edit action (§18.2).
+- **New rule, error**: the server's one message, "this address cannot be
+  used: a webhook must be an https address that is public, or one the
+  platform operator allowed", shown as it comes.
+- **Deliveries**: as drawn; results may also be the words of §18.2.
+- **Forbidden**: a generic text, not the server's detail (§18.2).
+- **My devices, members' devices**: My devices as drawn; one members'
+  devices page for every tenant administered (D10).
+- **Add access, New key**: as drawn; a key's folders carry RFC 0004's read
+  or read-and-write mode.
+- **New rule and its secret**: scope, events by role, webhook, optional
+  authorization hidden once saved; the secret dialog says the same in one
+  sentence fewer.
+- **Platform status**: as drawn, rejection first.
+- The HTML mocks are `docs/RFC/assets/0003-console.html` (D6).

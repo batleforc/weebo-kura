@@ -2,14 +2,14 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted (2026-11-15) |
+| Status | Implemented (2026-11-17) |
 | Short | Batched transfers |
 | Settles | How a device downloads (and, in phase 3, uploads) thousands of small files without one request per chunk and per manifest |
 | Author | Maxime (batleforc) |
 | Co-author | Claude Opus 5.5 |
 | Created | 2026-11-15 |
 | Supersedes | — |
-| Touches | `crates/kura-server` (`app/chunks.rs`, `limits.rs`, `app/reader.rs`), `crates/kura-core` (`sync.rs`, `wire.rs`), `crates/kura-cli` (`api.rs`), `crates/kura-wasm`, `plugin/src/remote.ts`, `perf/attach.sh`, `docs/` |
+| Touches | `crates/kura-server` (`app/chunks.rs`, `app/mod.rs`, `app/reader.rs`, `limits.rs`, `metrics.rs`; `tests/chunks.rs`, `config.rs`, `sim.rs`, `tokens.rs`), `crates/kura-core` (`sync.rs`, `wire.rs`, `tests/engine.rs`), `crates/kura-cli` (`api.rs`, `Cargo.toml`), `crates/kura-wasm` (`lib.rs`), `fuzz/` (`fuzz_chunk_records`), `plugin/` (`src/remote.ts`, `test/`), `perf/attach.sh`, `tests/heavy/authz.sh`, `dev/` (`android.sh`, `config/tenants.yaml`), `.tasks/obsidian.yaml`, `docs/` (`api/openapi.json`, `operator.md`, `readme.md`, `RFC/`) |
 | Risk | medium |
 
 > **Reference material**, about 5,100 words. For the decision, read §1,
@@ -563,3 +563,160 @@ None.
 | R19 | `crates/kura-cli/src/api.rs:78-87`; `plugin/src/remote.ts:44-51` | `85e4fe9` | both clients wait out `429`/`503` per `Retry-After` |
 | R20 | Probe: `curl -X POST http://127.0.0.1:58080/v1/vaults/<uuid>/{chunks/batch,blobs/batch,chunks/upload,blobs}` against `task dev:run` | 2026-11-15, server at `85e4fe9` | `405` on the first three, `404` on `blobs`: the fallback status, and why the phase 3 manifest route is `blobs/upload` |
 | R21 | `crates/kura-server/src/app/mod.rs:302` (`TraceLayer::new_for_http`) | `85e4fe9` | the request trace §6.P reads |
+| R22 | Commit `1647256` "feat: batched chunk and manifest downloads (RFC 0002 phases 1 and 2)" | 2026-11-15, `main` | §18.1 phases 1 and 2 |
+| R23 | Commit `2583a18` "test(heavy): RFC 0002 observation 3, and an Android emulator for the plugin" | 2026-11-15, `main` | §18.3 observation 3 |
+| R24 | Commit `34fc574` "feat: batched uploads (RFC 0002 phase 3)" | 2026-11-17, `feat/rfc-0004-and-0003-console` | §18.1 phase 3, observation 5 |
+| R25 | Commit `fda4845` "chore: dated audit exceptions, and a suite vault apart from obsidian" | 2026-11-17, `feat/rfc-0004-and-0003-console` | D10 closed: `authz.sh` on the `suite-config` vault; `deny.toml` exceptions |
+| R26 | [Implementation plan](rfc0002-implementation-plan.md), progress rows and divergences D1–D10 | tree `fda4845`, 2026-11-17 | §18 throughout |
+| R27 | `perf/attach.sh 10000`, `tests/heavy/sync.sh`, `tests/heavy/authz.sh` on the dev stack, `RELEASE=1`; `task audit` | runs of 2026-11-15 and 2026-11-17, tree `34fc574` / `fda4845` | §18.3 observations; §18.5 audit result |
+| R28 | `crates/kura-server/src/app/reader.rs:172` (`Writer` extractor), `crates/kura-server/src/app/body.rs:30` (`Raw`), `crates/kura-server/src/app/chunks.rs:1021` (`upload_chunks`) | `fda4845` | §18.4 T7: role checked after the bounded body is read |
+| R29 | `crates/kura-core/src/sync.rs:242` (`UPLOAD_MANIFEST_HASHES`), `crates/kura-server/src/app/mod.rs:279` (`blobs/upload` under the 1 MiB commit limit), `crates/kura-server/src/app/chunks.rs:1072` (the `upload`/`stored` label) | `fda4845` | §18.2 differences not in the plan |
+
+## 18. Revision against the tree (2026-11-17)
+
+Every phase of §16 shipped: phases 1 and 2 on 2026-11-15 [R22], [R23],
+phase 3 on 2026-11-17 [R24], and the heavy suites ran green the same day once
+the dev vault fault was cleared [R25]. The implementation plan [R26] is the
+record of the work; this section is the delta against the text above, which
+stays as it was accepted.
+
+### 18.1 What shipped
+
+| Phase | Commit | What |
+| --- | --- | --- |
+| 1 | `1647256` | `ReadAccess::sees_contents` (one query per batch, `sees_content` its one-hash case), `batch_blobs` and `batch_chunks` with the 4 MiB budget from `chunk.size`, 8 fetches at a time, the data key once per batch, 60/min each, a 128 KiB body limit, 8 answers in flight per replica (`AppState::batches`), `kura_batch_items_total` and `kura_batch_response_bytes` |
+| 2 | `1647256`, `2583a18` | `wire::parse_records` (the one parser) and `fuzz_chunk_records`, `Remote::get_blobs` and `get_chunk_records`, the `Prefetch` window in `pull()` (16 MiB of stated size, received bytes capped at 16 MiB plus one chunk), CLI, WASM bridge and plugin with the `405` fallback; observation 3 in `authz.sh` |
+| 3 | `34fc574` | `POST /vaults/{v}/chunks/upload` and `POST /vaults/{v}/blobs/upload` at 60/min each, `store_chunks` (one presence check, one quota check for the sum, one insert, also behind `PUT /chunks/{hash}` and server-side merges), `wire::write_record`, `Remote::put_chunks` and `put_blobs` with the `405` fallback, `upload_batch` in 4 MiB calls, CLI, WASM bridge and plugin |
+
+The suite fix that let §14's heavy suites run again, `authz.sh` writing its
+configuration-space observation to a `suite-config` vault instead of the dev
+`obsidian` vault, is `fda4845` [R25].
+
+### 18.2 Where the tree differs from the text
+
+The plan's divergence table carries each of these in full [R26]; one or two
+lines each here.
+
+- **D1** (§6.1, §10.2): a full replica answers `429 rate_limited` with
+  `Retry-After: 1`, not `503`. A 503 would count in `kura_unavailable_total`
+  and page `KuraDependencyFailing`; a busy replica is not a failing
+  dependency.
+- **D2** (§7.1 T5): a forged record is dropped and the chunk read again by the
+  single route, whose answer `download()` checks; it does not fail the file.
+  The file is still never written from unchecked bytes.
+- **D3** (§14 test names): T1–T5 are assertions inside existing tests that
+  carry the RFC's names as labels, not tests of their own (§18.4).
+- **D4** (§7.5, "200 rows per hash at most"): `sees_contents` keeps 200 rows
+  per hash with `row_number()` after one set-based join, so the database
+  reads every revision naming the asked contents first. The per-hash
+  `LATERAL … LIMIT 200` form went past the 5 s statement timeout on a vault
+  with stale statistics, the first attach's case.
+- **D5** (§3): the batch path tops out at 240 MiB a minute per device, below
+  600 single reads a minute for files of 1–16 MiB. Known and unmeasured;
+  small notes are the case decision 42 measured.
+- **D6** (§4.4, §7.2, "device-only"): the write routes take `Writer`, as the
+  single write routes do since RFC 0004, so a write token may use them under
+  the same possession rule.
+- **D7** (§6.1, `{"stored": […]}`): `chunks/upload` answers `204` with no
+  body, since every record is stored, already present, or the call fails.
+- **D8** (§6.1, body limit): also at most 1,000 records, and the body limit
+  is 4 MiB plus 1,000 headers of 37 bytes instead of 4 MiB plus 64 KiB.
+- **D9** (§6.1, "as `put_chunk` does"): `store_chunks` stores the batch in one
+  pass, and `PUT /chunks/{hash}` and merges now call it. Record by record took
+  188 s for 10,000 notes; batched, 8 s.
+- **D10** (§14, heavy suites): not run at phase 3 because of a dev OpenBao
+  fault, then closed on 2026-11-17 by `fda4845`; both suites passed.
+
+Found while landing, and not in the plan's table:
+
+- **T7's order** (§7.1, "editor role checked before the body is read"): the
+  `Writer` extractor authenticates the bearer before the body is read, but
+  the vault role is checked by `Writer::access` inside `upload_chunks`, after
+  `Raw` has buffered the body [R28]. That is the order `PUT /chunks/{hash}`
+  already had. An authenticated caller without the role can make the server
+  buffer one body of at most 4 MiB plus 37 KB, under the route's 60/min, and
+  nothing is hashed or stored before the refusal.
+- **Manifest calls** (§6.2, "1,000-manifest calls"): the client also closes a
+  `blobs/upload` call at 12,000 chunk hashes across its manifests, because
+  `blobs/upload` sits under the 1 MiB body limit of `POST /commits` [R29].
+  §6.1 named no body limit for that route.
+- **Metric labels** (§10.1, "two routes, two outcomes"): phase 3 adds
+  `{route="upload", outcome="stored"}`, counting the chunks `chunks/upload`
+  stored; `blobs/upload` is not counted [R29]. The labels stay bounded, at
+  three routes and three outcomes, and `docs/operator.md` lists them.
+- **§8, "no new dependency"**: `kura-cli` gained `http = "1"` as a
+  dev-dependency for its fallback test. The crate was already in
+  `Cargo.lock`; only the edge was added.
+
+### 18.3 What the proof observed
+
+Runs on the dev stack with `RELEASE=1` and the `kura` binary from the same
+tree [R27].
+
+1. `perf/attach.sh 10000` (phase 2): device B's first attach of 10,000 notes
+   (25.9 MB) took **33 s**, against 974 s before and the 60 s target. 10,000
+   manifests and 10,000 chunks went through the batch routes, none missing.
+   The script now ends with `kura verify` on device B, which printed `Equal.`
+   on a 1,000-note rerun. The absence of single reads was shown by the
+   `kura_batch_items_total` counters (as many chunks found as notes), not by
+   counting requests in the `tower_http` trace as the text planned; the plan
+   records this in its phase 2 row, not as a divergence.
+2. `tests/heavy/authz.sh`: a token under `agents/` sent `chunks/batch` with a
+   chunk inside and one outside its prefix; one `found` record, one `missing`
+   record, and `kura_batch_items_total{route="chunks",outcome="found"}` moved
+   by exactly 1, so the refused chunk was never fetched.
+3. `tests/heavy/authz.sh` [R23]: bob's batch for a chunk of alice's
+   `.obsidian` got, byte for byte, the record of a random hash, and alice got
+   the chunk. Since `fda4845` the observation runs on the `suite-config`
+   vault, never on `obsidian`, which holds real notes [R25].
+4. Obsidian on the Android phone: the maintainer ran phase 2 in Obsidian,
+   which met decision 3's condition, but no attach time or request count was
+   recorded, so motivation 3's round-trip estimate stays an estimate. An
+   emulator script for the plugin (`dev/android.sh`) shipped with `2583a18`.
+5. `perf/attach.sh 10000` (phase 3): the first device's push took **8 s**
+   (980 s before RFC 0002, 188 s with the routes but chunks stored one by
+   one, D9); the attach took 41 s; the whole run made 113 requests, so no
+   `PUT …/chunks/{hash}` per note; `kura_batch_items_total{route="upload",
+   outcome="stored"}` read 10,000.
+
+`tests/heavy/sync.sh` and `tests/heavy/authz.sh` both passed on 2026-11-17
+(D10 closed). Coverage at phase 2: `kura-core` 92.1%, `kura-server` 92.4%,
+`kura-cli` 84.3%, plugin 99.3% of lines. `fuzz_chunk_records` ran 12.4 M
+inputs in 60 s with no finding.
+
+### 18.4 §7 threats against the tests
+
+| Row | Test that proves it | Note |
+| --- | --- | --- |
+| T1 | `crates/kura-server/tests/tokens.rs`, `prefix_token_cannot_fetch_outside_chunk_or_read_renamed_history` (assertion labelled `batch_respects_token_prefix`); observation 2 | D3: folded into the scoped-token test |
+| T2 | `crates/kura-server/tests/config.rs`, `config_namespace_hidden_from_other_member` (assertion labelled `batch_hides_other_members_config`); observation 3 | D3 |
+| T3 | `crates/kura-server/tests/chunks.rs`, `batches_answer_in_order_within_their_budget` (unknown and uncommitted chunks answered alike) | D3; no test named `batch_missing_is_indistinguishable` exists |
+| T4 | `crates/kura-server/tests/chunks.rs`, `batches_answer_in_order_within_their_budget` (the 4 MiB cut, 429 at the 61st call, 429 when the replica's 8 slots are taken, no 503 counted) | D1 replaced the `503`; no test named `batch_is_limited_and_bounded` exists |
+| T5 | `crates/kura-core/tests/engine.rs`, `a_batched_pull_makes_no_single_reads_and_drops_forged_records` | D2: the row held in a changed form, a forged record is dropped and read again, not a failed file; no test named `a_wrong_record_fails_the_file` exists |
+| T6 | `fuzz/fuzz_targets/fuzz_chunk_records.rs` (`fuzz_chunk_records`), plus `crates/kura-core/src/wire.rs`, `records_round_trip_and_refuse_bad_lengths` and `the_writer_writes_what_the_parser_reads` | as written |
+| T7 | `crates/kura-server/tests/chunks.rs`, `upload_batch_rejects_a_wrong_hash` (nothing stored, malformed bodies, all-or-nothing manifests, a stranger gets 404); `crates/kura-server/tests/tokens.rs`, `token_cannot_launder_content` and `only_writer_routes_accept_tokens` (D6) | the role is checked after the bounded body is read (§18.2) |
+
+The gate `every_route_has_a_limit` (`crates/kura-server/tests/http.rs`) holds
+the four routes; the `405` fallback is proved by
+`a_405_is_an_older_server_and_a_404_is_not` (`crates/kura-cli/src/api.rs`),
+the plugin's "reads in batches, and falls back on an older server's 405" and
+"reads one by one from an older server without the batch routes", and the
+simulation `devices_converge_and_lose_nothing` with half its devices
+batching.
+
+### 18.5 Supply chain as shipped
+
+No new runtime dependency, as §8 said. The server uses `futures-util` 0.3.34
+and `bytes` 1.12.1 from `Cargo.lock`; the plugin parses nothing and passes
+bytes to the WASM core. The one addition is `kura-cli`'s dev-dependency on
+`http` (§18.2). `task audit` is green on 2026-11-17 [R27]; its two dated
+exceptions in `deny.toml` (RUSTSEC-2026-0542 and RUSTSEC-2026-0543, both via
+`object_store`, review 2026-12-17) do not come from this RFC.
+
+### 18.6 Mocks against what shipped
+
+§4.5 drew no screen, and none changed: the CLI and plugin diffs touch the
+transport only (`api.rs`, `remote.ts`, the WASM bridge) and add no printed
+string, notice or status text. `kura attach`, `kura sync` and the plugin's
+`syncing` / `in sync` status read as before and finish sooner. A missing chunk
+still ends as a failed file named in `report.failed`.
