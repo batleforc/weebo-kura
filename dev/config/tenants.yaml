@@ -20,11 +20,22 @@ spec:
     - { role: editor, claimValue: kura-dev }
 ---
 # For Obsidian by hand (task obsidian:deploy): notes and each user's own
-# .obsidian (RFC 0001 §6.8, observation 12). Apart from `notes`, which the
-# heavy suites write as alice, so nothing they push reaches a real Obsidian.
+# .obsidian (RFC 0001 §6.8, observation 12). It holds real notes: no suite
+# writes here, they use `notes` and `suite-config` below.
 apiVersion: kura.weebo.io/v1alpha1
 kind: KuraVault
 metadata: { name: obsidian, namespace: dev }
+spec:
+  tenantRef: { name: dev }
+  configSync: { categories: [plugins, snippets, themes, hotkeys] }
+  bindings:
+    - { role: editor, claimValue: kura-dev }
+---
+# The heavy suites' configuration space (tests/heavy/authz.sh), shaped as
+# `obsidian` so that no test ever writes to a real Obsidian's vault.
+apiVersion: kura.weebo.io/v1alpha1
+kind: KuraVault
+metadata: { name: suite-config, namespace: dev }
 spec:
   tenantRef: { name: dev }
   configSync: { categories: [plugins, snippets, themes, hotkeys] }

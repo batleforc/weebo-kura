@@ -10,7 +10,15 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
 # No suppressions. An entry here carries the advisory id, why it does not
 # apply, who checked, the date and the upstream issue that retires it.
-ignore = []
+ignore = [
+    # Unmaintained, no vulnerability; both reach us only through object_store
+    # 0.14.2 (the latest), as mandatory dependencies with no replacement.
+    # Checked by the maintainer with Claude on 2026-11-17; review on
+    # 2026-12-17. Retired when object_store ships without them:
+    # apache/arrow-rs-object-store#908 (humantime to jiff), #909 (chrono).
+    { id = "RUSTSEC-2026-0542", reason = "humantime unmaintained, via object_store only; retired by apache/arrow-rs-object-store#908; review 2026-12-17" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained, via object_store only; retired by apache/arrow-rs-object-store#909; review 2026-12-17" },
+]
 
 [bans]
 # Every duplicate is accounted for in `skip`, naming the crate that holds the

@@ -14,7 +14,10 @@ tasks:
   audit:rust:
     desc: RUSTSEC advisories in Cargo.lock (cargo audit)
     cmds:
-      - cargo audit --deny warnings
+      # The same two dated exceptions as deny.toml (unmaintained crates of
+      # object_store 0.14.2, no vulnerability): drop them with deny.toml's,
+      # at the latest on review 2026-12-17.
+      - cargo audit --deny warnings --ignore RUSTSEC-2026-0542 --ignore RUSTSEC-2026-0543
 
   deny:
     desc: Advisories, licences, bans and sources of the dependency graph (cargo deny, deny.toml)
