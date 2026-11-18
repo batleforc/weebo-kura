@@ -804,9 +804,9 @@
     "semantic_hash": ""
   },
   "plugin/src/main.ts": {
-    "mtime": 1795037612.7924008,
-    "seen": 1795038020.0343103,
-    "ast_hash": "a0dcad8e0bc1d77a6973fe96270a58ef",
+    "mtime": 1795043511.3379786,
+    "seen": 1795043531.0092373,
+    "ast_hash": "cd4055b6eece98754169c49eda8506ef",
     "semantic_hash": ""
   },
   "plugin/src/notifier.ts": {
@@ -864,9 +864,9 @@
     "semantic_hash": ""
   },
   "plugin/test/fakes.ts": {
-    "mtime": 1795037599.934876,
-    "seen": 1795038020.034625,
-    "ast_hash": "df94654a00c84a00478daf2056f122c7",
+    "mtime": 1795043518.9552703,
+    "seen": 1795043531.0095713,
+    "ast_hash": "676e0d562849caff3b82a1fb7b486966",
     "semantic_hash": ""
   },
   "plugin/test/host.test.ts": {
@@ -1086,15 +1086,15 @@
     "semantic_hash": ""
   },
   "plugin/src/plugins.ts": {
-    "mtime": 1794689019.8501012,
-    "seen": 1794689827.181121,
-    "ast_hash": "f271a985b82ca20b02b0e4579a101f4a",
+    "mtime": 1795043494.5532002,
+    "seen": 1795043531.0092988,
+    "ast_hash": "25be9ca503278386a39f46114ed7e2df",
     "semantic_hash": ""
   },
   "plugin/test/plugins.test.ts": {
-    "mtime": 1794689019.8502104,
-    "seen": 1794689827.1814113,
-    "ast_hash": "042ae2cc41aa430ba30b56c32281e1ab",
+    "mtime": 1795043511.5095086,
+    "seen": 1795043531.0096326,
+    "ast_hash": "0ef49ba38b1c9944aeb543596db63b4c",
     "semantic_hash": ""
   },
   ".tasks/obsidian.yaml": {

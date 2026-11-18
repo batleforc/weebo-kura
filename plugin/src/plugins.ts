@@ -6,12 +6,109 @@
 // agreement.
 import { isRecord } from "./types";
 
-/** Obsidian's plugin switchboard, as far as the guard needs it. */
+/** Obsidian's plugin switchboard, as far as the guard needs it. The guard
+ * names a plugin by its folder under `plugins/` (lower case); Obsidian
+ * enables it by the `id` of its manifest, which may differ. */
 export interface PluginRegistry {
-  /** Loaded, or listed in `community-plugins.json` to load at the next start. */
-  isEnabled(id: string): Promise<boolean>;
-  enable(id: string): Promise<void>;
-  disable(id: string): Promise<void>;
+  /** Loaded, or listed in `community-plugins.json` to load at the next start,
+   * under the folder's name or any id its manifest declares. */
+  isEnabled(folder: string): Promise<boolean>;
+  enable(folder: string): Promise<void>;
+  disable(folder: string): Promise<void>;
+  /** The folder's plugin is known under an id other than the folder's name. */
+  aliased(folder: string): Promise<boolean>;
+}
+
+/** What the registry reads of `.obsidian`. */
+export interface RegistryAdapter {
+  read(path: string): Promise<string>;
+  write(path: string, data: string): Promise<void>;
+  list(path: string): Promise<{ files: string[]; folders: string[] }>;
+}
+
+/** Obsidian's switchboard (`app.plugins`, not in the public API), read
+ * defensively: if its shape changes, configuration sync enables nothing. A
+ * folder is resolved to every id it may run under: its name, the id of a
+ * loaded plugin whose `dir` is that folder, and the `id` its own
+ * `manifest.json` declares, so code landing in a folder named unlike its
+ * id still turns that plugin off first. */
+export function obsidianRegistry(plugins: unknown, adapter: RegistryAdapter, configDir: string): PluginRegistry | null {
+  if (!isRecord(plugins)) return null;
+  const enabled = plugins.enabledPlugins;
+  const on = plugins.enablePluginAndSave;
+  const off = plugins.disablePluginAndSave;
+  if (!(enabled instanceof Set) || typeof on !== "function" || typeof off !== "function") return null;
+  // What Obsidian loads at its next start, besides what runs now: a plugin
+  // listed there but not loaded is enabled too (phase 8 review M2).
+  const listFile = `${configDir}/community-plugins.json`;
+  const listed = async (): Promise<string[]> => {
+    try {
+      const v: unknown = JSON.parse(await adapter.read(listFile));
+      return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+    } catch {
+      return [];
+    }
+  };
+  const lower = (x: unknown): string | null => (typeof x === "string" ? x.toLowerCase() : null);
+  /** The folder as it is on disk (`plugins/DataView`), found without regard to case. */
+  const onDisk = async (folder: string): Promise<string | null> => {
+    try {
+      const { folders } = await adapter.list(`${configDir}/plugins`);
+      return folders.find((f) => f.split("/").pop()?.toLowerCase() === folder) ?? null;
+    } catch {
+      return null;
+    }
+  };
+  /** Every id (lower case) the folder's plugin may be enabled under; the
+   * manifest's own id first, the one Obsidian enables. */
+  const idsOf = async (folder: string): Promise<string[]> => {
+    const ids: string[] = [];
+    const dir = await onDisk(folder);
+    if (dir !== null) {
+      try {
+        const m: unknown = JSON.parse(await adapter.read(`${dir}/manifest.json`));
+        const id = isRecord(m) ? lower(m.id) : null;
+        if (id) ids.push(id);
+      } catch {
+        // No readable manifest: the other names still count.
+      }
+    }
+    const manifests = plugins.manifests;
+    if (isRecord(manifests)) {
+      for (const m of Object.values(manifests)) {
+        if (!isRecord(m) || typeof m.dir !== "string") continue;
+        const id = lower(m.id);
+        if (id && m.dir.split("/").pop()?.toLowerCase() === folder) ids.push(id);
+      }
+    }
+    ids.push(folder);
+    return [...new Set(ids)];
+  };
+  // Ids compare without regard to case, as the guard folds them.
+  const same = (a: unknown, id: string): boolean => lower(a) === id;
+  const actual = (id: string, list: string[]): string =>
+    [...enabled].find((x): x is string => same(x, id)) ?? list.find((x) => same(x, id)) ?? id;
+  const isOn = (id: string, list: string[]): boolean => [...enabled].some((x) => same(x, id)) || list.some((x) => same(x, id));
+  return {
+    isEnabled: async (folder) => {
+      const list = await listed();
+      return (await idsOf(folder)).some((id) => isOn(id, list));
+    },
+    enable: async (folder) => {
+      const [id = folder] = await idsOf(folder);
+      await Promise.resolve(Reflect.apply(on, plugins, [actual(id, await listed())]));
+    },
+    disable: async (folder) => {
+      const ids = await idsOf(folder);
+      const list = await listed();
+      for (const id of ids.filter((x) => isOn(x, list))) {
+        await Promise.resolve(Reflect.apply(off, plugins, [actual(id, list)]));
+      }
+      const kept = list.filter((x) => !ids.some((id) => same(x, id)));
+      if (kept.length !== list.length) await adapter.write(listFile, JSON.stringify(kept));
+    },
+    aliased: async (folder) => (await idsOf(folder)).some((id) => id !== folder),
+  };
 }
 
 /** What this device decided, saved in the plugin's `data.json`. */
@@ -106,7 +203,21 @@ export class PluginGuard {
   async review(hashes: Map<string, string>): Promise<void> {
     for (const id of [...this.consent.pending]) {
       const hash = hashes.get(id);
-      const turnedOff = this.consent.disabled.includes(id);
+      let turnedOff = this.consent.disabled.includes(id);
+      // Code may land before the manifest that names it after an enabled
+      // plugin (`main.js` sorts first): once both are here, unagreed code in
+      // a folder running under another id is turned off before anything else.
+      if (
+        hash !== undefined &&
+        !turnedOff &&
+        this.consent.accepted[id] !== hash &&
+        (await this.reg.aliased(id)) &&
+        (await this.reg.isEnabled(id))
+      ) {
+        await this.reg.disable(id);
+        this.consent.disabled.push(id);
+        turnedOff = true;
+      }
       if (hash !== undefined && this.consent.declined[id] !== hash) {
         let enable = false;
         if (this.consent.accepted[id] === hash) {

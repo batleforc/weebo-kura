@@ -22,7 +22,7 @@ import { ago, setLanguage, t } from "./i18n";
 import { consoleUrl, entryOf } from "./links";
 import { CodeModal, ConfirmModal, PluginModal, ProblemsModal, SetupModal, SwitchModal, WelcomeModal } from "./modals";
 import type { Report } from "./types";
-import { PluginGuard, codeHashes, emptyConsent, forget, readConsent } from "./plugins";
+import { PluginGuard, codeHashes, emptyConsent, forget, obsidianRegistry, readConsent } from "./plugins";
 import type { Consent, PluginRegistry } from "./plugins";
 
 export interface Settings {
@@ -86,43 +86,9 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => window.set
 const timers = { set: (fn: () => void, ms: number) => window.setTimeout(fn, ms), clear: (id: number) => { window.clearTimeout(id); } };
 const random16 = (): Uint8Array => crypto.getRandomValues(new Uint8Array(16));
 
-/** Obsidian's plugin switchboard (`app.plugins`, not in the public API),
- * read defensively: if its shape changes, configuration sync never enables
- * anything. */
+/** Obsidian's plugin switchboard, resolved folder by folder (plugins.ts). */
 function registry(app: App): PluginRegistry | null {
-  const plugins: unknown = Reflect.get(app, "plugins");
-  if (!isRecord(plugins)) return null;
-  const enabled = plugins.enabledPlugins;
-  const on = plugins.enablePluginAndSave;
-  const off = plugins.disablePluginAndSave;
-  if (!(enabled instanceof Set) || typeof on !== "function" || typeof off !== "function") return null;
-  const adapter = app.vault.adapter;
-  // What Obsidian loads at its next start, besides what runs now: a plugin
-  // listed there but not loaded is enabled too (phase 8 review M2).
-  const listFile = `${app.vault.configDir}/community-plugins.json`;
-  const listed = async (): Promise<string[]> => {
-    try {
-      const v: unknown = JSON.parse(await adapter.read(listFile));
-      return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
-    } catch {
-      return [];
-    }
-  };
-  // Ids compare without regard to case, as the guard folds them.
-  const same = (a: unknown, id: string): boolean => typeof a === "string" && a.toLowerCase() === id;
-  const actual = (id: string, list: string[]): string =>
-    [...enabled].find((x): x is string => same(x, id)) ?? list.find((x) => same(x, id)) ?? id;
-  return {
-    isEnabled: async (id) => [...enabled].some((x) => same(x, id)) || (await listed()).some((x) => same(x, id)),
-    enable: async (id) => {
-      await Promise.resolve(Reflect.apply(on, plugins, [actual(id, await listed())]));
-    },
-    disable: async (id) => {
-      const list = await listed();
-      await Promise.resolve(Reflect.apply(off, plugins, [actual(id, list)]));
-      if (list.some((x) => same(x, id))) await adapter.write(listFile, JSON.stringify(list.filter((x) => !same(x, id))));
-    },
-  };
+  return obsidianRegistry(Reflect.get(app, "plugins"), app.vault.adapter, app.vault.configDir);
 }
 
 const CONFIG_EVERY_MS = 5 * 60 * 1000 - 15_000;

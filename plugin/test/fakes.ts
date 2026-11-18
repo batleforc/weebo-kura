@@ -30,6 +30,10 @@ export class MemAdapter implements Adapter {
     if (f !== undefined) return Promise.resolve({ type: "file", size: f.data.byteLength, mtime: f.mtime });
     return Promise.resolve(this.folders.has(path) ? { type: "folder", size: 0, mtime: 0 } : null);
   }
+  read(path: string): Promise<string> {
+    const text = this.text(path);
+    return text === undefined ? Promise.reject(new Error(`no ${path}`)) : Promise.resolve(text);
+  }
   readBinary(path: string): Promise<ArrayBuffer> {
     const f = this.files.get(path);
     if (f === undefined) return Promise.reject(new Error(`no ${path}`));
