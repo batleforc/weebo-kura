@@ -1308,15 +1308,15 @@
     "semantic_hash": ""
   },
   "ui/src/locales/en.json": {
-    "mtime": 1795037658.575545,
-    "seen": 1795038020.036421,
-    "ast_hash": "e04bd340d232029390fecb9e2ebf8964",
+    "mtime": 1795038337.8115687,
+    "seen": 1795038385.704776,
+    "ast_hash": "66cd47e1bb1d02ebc8e8be36e23a4817",
     "semantic_hash": ""
   },
   "ui/src/locales/fr.json": {
-    "mtime": 1795037658.5759304,
-    "seen": 1795038020.0364225,
-    "ast_hash": "0d326b4ebc27576892e1520015f8605d",
+    "mtime": 1795038337.8119562,
+    "seen": 1795038385.704778,
+    "ast_hash": "cd57bd625e109c2a893490269674cb57",
     "semantic_hash": ""
   },
   "ui/src/main.ts": {
@@ -1434,9 +1434,9 @@
     "semantic_hash": ""
   },
   "ui/src/pages/BrowsePage.vue": {
-    "mtime": 1795037646.6705856,
-    "seen": 1795038020.0367134,
-    "ast_hash": "04ed1e9def097b1557b3e53a462b96c7",
+    "mtime": 1795038338.0592682,
+    "seen": 1795038385.7050757,
+    "ast_hash": "2c975d6c90fac2835110951e6f7843a7",
     "semantic_hash": ""
   },
   "ui/src/pages/SearchPage.vue": {
@@ -2001,6 +2001,24 @@
     "mtime": 1795037812.9829776,
     "seen": 1795038020.0387218,
     "ast_hash": "d9a030c714e0c08cb55121034e087ee7",
+    "semantic_hash": ""
+  },
+  "ui/src/components/ui/PaneResizer.vue": {
+    "mtime": 1795038338.0412683,
+    "seen": 1795038385.704448,
+    "ast_hash": "777fe39f0efa5ad5110441a781079895",
+    "semantic_hash": ""
+  },
+  "ui/src/reader/width.spec.ts": {
+    "mtime": 1795038338.0572684,
+    "seen": 1795038385.7064655,
+    "ast_hash": "a1f569049a6688510326cc0217a06e1a",
+    "semantic_hash": ""
+  },
+  "ui/src/reader/width.ts": {
+    "mtime": 1795038337.630267,
+    "seen": 1795038385.7064672,
+    "ast_hash": "36cc6a0779aa834355e36df409bb9bb1",
     "semantic_hash": ""
   },
   "plugin/pnpm-lock.yaml": {

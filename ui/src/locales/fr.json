@@ -137,7 +137,8 @@
     "keyFind": "trouver une note",
     "keyTurn": "tourner la page",
     "keyClose": "fermer",
-    "emptyFolder": "Aucune note dans ce dossier."
+    "emptyFolder": "Aucune note dans ce dossier.",
+    "treeWidth": "Largeur des dossiers (flèches pour ajuster, double-clic pour revenir)"
   },
   "manage": {
     "title": "Gérer",

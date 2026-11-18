@@ -137,7 +137,8 @@
     "keyFind": "find a note",
     "keyTurn": "turn the page",
     "keyClose": "close",
-    "emptyFolder": "No note in this folder."
+    "emptyFolder": "No note in this folder.",
+    "treeWidth": "Width of the folders (arrows to resize, double click to reset)"
   },
   "manage": {
     "title": "Manage",

@@ -24,6 +24,7 @@ import type {
 import { retryable } from "@/api/problem";
 import AsyncState from "@/components/ui/AsyncState.vue";
 import Chevron from "@/components/ui/Chevron.vue";
+import PaneResizer from "@/components/ui/PaneResizer.vue";
 import { fileBytes } from "@/reader/content";
 import { type Watch, watchVault } from "@/reader/events";
 import FolderTree from "@/reader/FolderTree.vue";
@@ -40,6 +41,13 @@ import { useSearch } from "@/reader/search";
 import { day } from "@/reader/time";
 import { buildTree, foldersOf, noteName, notesInOrder } from "@/reader/tree";
 import { loadVault, MAX_PAGES } from "@/reader/vault";
+import {
+  loadWidth,
+  saveWidth,
+  TREE_DEFAULT,
+  TREE_MAX,
+  TREE_MIN,
+} from "@/reader/width";
 
 const { t, locale } = useI18n();
 const route = useRoute();
@@ -67,6 +75,8 @@ const shown = ref<Shown | null>(null);
 const copied = ref(false);
 const folders = ref<EntryState[]>([]);
 const tree = computed(() => buildTree(entries.value, folders.value));
+/** The tree's width, rem, set with the handle beside it (from 768px). */
+const treeWidth = ref(loadWidth());
 const order = computed(() => notesInOrder(tree.value));
 const failure = useAutoRetry(() => loadAll().then(open));
 
@@ -380,9 +390,10 @@ watch(entryId, () => void open());
       :can-retry="canRetry"
       @retry="loadAll"
     >
-      <div class="grid gap-x-10 gap-y-8 md:grid-cols-[15rem_minmax(0,1fr)]">
+      <div class="grid gap-x-10 gap-y-8 md:grid-cols-[var(--tree-w)_minmax(0,1fr)]" :style="{ '--tree-w': `${treeWidth}rem` }">
         <!-- On a phone, an open note comes first and its folders after it. -->
-        <aside class="flex flex-col gap-3 md:sticky md:top-4 md:max-h-[calc(100vh-2rem)] md:self-start" :class="{ 'order-2 md:order-none': entryId }">
+        <aside class="relative flex flex-col gap-3 md:sticky md:top-4 md:max-h-[calc(100vh-2rem)] md:self-start" :class="{ 'order-2 md:order-none': entryId }">
+          <PaneResizer v-model="treeWidth" :min="TREE_MIN" :max="TREE_MAX" :fallback="TREE_DEFAULT" :label="t('reader.treeWidth')" @done="saveWidth(treeWidth)" />
           <form role="search" class="relative" @submit.prevent="pickFirst">
             <label for="finder" class="sr-only">{{ t("reader.find") }}</label>
             <input
