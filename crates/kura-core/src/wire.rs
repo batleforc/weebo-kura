@@ -83,12 +83,23 @@ pub enum Operation {
     },
     /// Delete an entry, as of the revision the client last saw.
     Delete { entry: EntryId, base: Uuid },
+    /// Create (no `base`) or move a folder: an entry with no content
+    /// (RFC 0007). A rename is a delete and a create.
+    Folder {
+        entry: EntryId,
+        #[cfg_attr(feature = "openapi", schema(value_type = String))]
+        path: VaultPath,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base: Option<Uuid>,
+    },
 }
 
 impl Operation {
     pub const fn entry(&self) -> EntryId {
         match self {
-            Self::Put { entry, .. } | Self::Delete { entry, .. } => *entry,
+            Self::Put { entry, .. } | Self::Delete { entry, .. } | Self::Folder { entry, .. } => {
+                *entry
+            }
         }
     }
 }
@@ -141,6 +152,10 @@ pub struct EntryState {
     #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
     pub blob: Option<ChunkHash>,
     pub size: u64,
+    /// A folder (RFC 0007): no blob, size 0. Sent only to a client that
+    /// asked for folders.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub folder: bool,
 }
 
 /// The result of one operation, in request order.

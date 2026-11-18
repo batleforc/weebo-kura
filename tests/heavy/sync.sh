@@ -57,6 +57,43 @@ pass "7: conflicted, both versions on both devices"
 as alice verify notes >"$work/verify.log" || fail "§13: the server and alice's folder differ: $(cat "$work/verify.log")"
 pass "§13: kura verify finds the folder equal to the server"
 
+# RFC 0007 §6.P: folders as entries.
+d="heavy-dirs-$$"
+mkdir -p "$work/a/$d/Empty" "$work/a/$d/Kept"
+out=$(as alice sync notes)
+grep -q "folders created or removed" <<<"$out" || fail "rfc0007-1: no folder pushed: $out"
+as bob sync notes >/dev/null
+[ -d "$work/b/$d/Empty" ] && [ -d "$work/b/$d/Kept" ] || fail "rfc0007-1: bob did not get the empty folders"
+pass "rfc0007-1: an empty folder made by alice reaches bob"
+printf 'bob keeps this\n' > "$work/b/$d/Kept/mine.md"
+rmdir "$work/a/$d/Empty" "$work/a/$d/Kept"
+as alice sync notes >/dev/null
+as bob sync notes >/dev/null
+[ ! -e "$work/b/$d/Empty" ] || fail "rfc0007-2: the removed folder stayed on bob"
+[ -f "$work/b/$d/Kept/mine.md" ] || fail "rfc0007-3: bob's note went with the folder"
+as alice sync notes >/dev/null
+[ -f "$work/a/$d/Kept/mine.md" ] || fail "rfc0007-3: bob's note did not reach alice"
+pass "rfc0007-2/3: a removed folder leaves bob; one holding his new note stays, and the note syncs"
+mkdir -p "$work/a/$d/Probe"
+as alice sync notes >/dev/null
+notes_id=$(sql "SELECT id FROM vault WHERE namespace = 'dev' AND name = 'notes' AND disabled_at IS NULL")
+dev_b=$(jq -r .device "$work/bob/config.json")
+old=$(curl -sf "$server/v1/vaults/$notes_id/changes?since=0" -H "authorization: Bearer ${tokens[bob]}" -H "x-kura-device: $dev_b")
+new=$(curl -sf "$server/v1/vaults/$notes_id/changes?since=0&folders=true" -H "authorization: Bearer ${tokens[bob]}" -H "x-kura-device: $dev_b")
+[ "$(jq '[.items[] | select(.folder == true)] | length' <<<"$old")" = 0 ] || fail "rfc0007-4: an older client was sent folders"
+[ "$(jq --arg p "$d/Probe" '[.items[] | select(.folder == true and .path == $p)] | length' <<<"$new")" = 1 ] || fail "rfc0007-4: the folder is missing with folders=true"
+pass "rfc0007-4: folders only to a client that asks (an older client sees none)"
+key_out=$(as alice token create notes --name "heavy-dirs-$$" --read "$d/" --write "$d/w/" --expires 1d --cidr 127.0.0.0/8)
+key=$(awk 'NF==1 && /^ *kura_/{print $1}' <<<"$key_out")
+[ -n "$key" ] || fail "rfc0007-5: no token issued: $key_out"
+uuid7() { python3 -I -c 'import os,time; t=int(time.time()*1000); b=bytearray(t.to_bytes(6,"big")+os.urandom(10)); b[6]=(b[6]&0x0f)|0x70; b[8]=(b[8]&0x3f)|0x80; h=b.hex(); print(f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}")'; }
+commit() { curl -s -o /dev/null -w '%{http_code}' -X POST "$server/v1/vaults/$notes_id/commits" -H "authorization: Bearer $key" -H 'content-type: application/json' \
+  -d "{\"idempotencyKey\":\"$(uuid7)\",\"operations\":[{\"op\":\"folder\",\"entry\":\"$(uuid7)\",\"path\":\"$1\"}]}"; }
+[ "$(commit "$d/elsewhere")" = 403 ] || fail "rfc0007-5: a token made a folder outside its write folders"
+[ "$(commit "$d/w/inside")" = 200 ] || fail "rfc0007-5: a token could not make a folder in its write folder"
+sql "UPDATE scoped_token SET revoked_at = now() WHERE revoked_at IS NULL AND name = 'heavy-dirs-$$'" >/dev/null
+pass "rfc0007-5: a token makes folders only where it writes notes (403 elsewhere)"
+
 # 1. A change reaches a watching device within 5 s, through the socket.
 as bob watch notes >"$work/watch.log" 2>&1 &
 watcher=$!

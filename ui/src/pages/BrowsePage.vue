@@ -65,7 +65,8 @@ const cut = ref(false);
 const edited = ref<RevisionInfo | null>(null);
 const shown = ref<Shown | null>(null);
 const copied = ref(false);
-const tree = computed(() => buildTree(entries.value));
+const folders = ref<EntryState[]>([]);
+const tree = computed(() => buildTree(entries.value, folders.value));
 const order = computed(() => notesInOrder(tree.value));
 const failure = useAutoRetry(() => loadAll().then(open));
 
@@ -137,6 +138,7 @@ async function loadAll(): Promise<void> {
     const loaded = await loadVault(vaultId.value);
     vault.value = loaded.vault;
     entries.value = loaded.entries;
+    folders.value = loaded.folders;
     cut.value = loaded.cut;
   } catch (e) {
     error.value = failure(e);
@@ -153,6 +155,7 @@ async function refresh(): Promise<void> {
     const loaded = await loadVault(vaultId.value);
     vault.value = loaded.vault;
     entries.value = loaded.entries;
+    folders.value = loaded.folders;
     cut.value = loaded.cut;
     const now = entries.value.find(
       (e) => e.entry === entryId.value && !e.deleted,

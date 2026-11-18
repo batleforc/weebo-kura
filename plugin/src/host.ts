@@ -12,6 +12,8 @@ export interface Adapter {
   write(path: string, data: string): Promise<void>;
   exists(path: string): Promise<boolean>;
   mkdir(path: string): Promise<void>;
+  /** Obsidian's `rmdir`; not recursive here, so a folder with anything in it stays. */
+  rmdir(path: string, recursive: boolean): Promise<void>;
   rename(from: string, to: string): Promise<void>;
   remove(path: string): Promise<void>;
   trashLocal(path: string): Promise<void>;
@@ -92,6 +94,39 @@ export class ObsidianHost implements KuraHost {
     };
     await walk(root ?? "");
     return out;
+  }
+
+  /** RFC 0007: every folder of the notes, dot-folders not walked. The
+   * configuration space syncs files only, so it lists none. */
+  async folders(): Promise<string[]> {
+    const out: string[] = [];
+    if (this.o.root !== undefined) return out;
+    const walk = async (dir: string): Promise<void> => {
+      const { folders } = await this.o.adapter.list(dir === "" ? "/" : dir);
+      for (const d of folders) {
+        const path = d.replace(/^\/+/, "");
+        if (path.slice(path.lastIndexOf("/") + 1).startsWith(".")) continue;
+        out.push(path);
+        await walk(path);
+      }
+    };
+    await walk("");
+    return out;
+  }
+
+  async makeFolder(path: string): Promise<void> {
+    const full = this.full(path);
+    if (!(await this.o.adapter.exists(full))) await this.o.adapter.mkdir(full);
+  }
+
+  /** Only a folder that holds nothing: never a file lost (RFC 0007 §4.2). */
+  async removeFolderIfEmpty(path: string): Promise<boolean> {
+    const full = this.full(path);
+    if (!(await this.o.adapter.exists(full))) return false;
+    const { files, folders } = await this.o.adapter.list(full);
+    if (files.length > 0 || folders.length > 0) return false;
+    await this.o.adapter.rmdir(full, false);
+    return true;
   }
 
   async read(path: string): Promise<Uint8Array> {

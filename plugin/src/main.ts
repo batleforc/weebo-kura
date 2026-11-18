@@ -436,7 +436,8 @@ export default class KuraPlugin extends Plugin {
         }
         if (vault === null) throw new Error("this vault is not visible to you");
         const c = vault.chunking;
-        const options = JSON.stringify({ device: s.device, vault: s.vault, ...c, maxFileSize: s.maxFileMiB * 1024 * 1024, dryRun, allowDeletions });
+        // The notes sync their folders too (RFC 0007); syncConfig builds its own options.
+        const options = JSON.stringify({ device: s.device, vault: s.vault, ...c, maxFileSize: s.maxFileMiB * 1024 * 1024, dryRun, allowDeletions, folders: true });
         const notes = await core.sync(host, api.remote(s.vault), state, options);
         // RFC 0006 phase 3: the console shows what this run left undone; a
         // failed report never fails the sync.
@@ -511,7 +512,8 @@ export default class KuraPlugin extends Plugin {
       // deleted on the user's other devices.
       const raw = await host.loadState();
       const state = forget(raw, keep);
-      await core.sync(host, api.remote(s.vault, "config"), state, options);
+      // The configuration space syncs files only (RFC 0007 §4.3).
+      await core.sync(host, api.remote(s.vault, "config"), state, options.replace('"folders":true', '"folders":false'));
       await guard.review(codeHashes(await host.loadState()));
     } catch (e) {
       new Notice(t("n.configFailed", { cause: because(e) }));

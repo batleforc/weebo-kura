@@ -36,6 +36,36 @@ describe("tree", () => {
     expect(noteName("Sessions/Session 11.md")).toBe("Session 11");
   });
 
+  it("adds folder entries, empty ones included, and skips deleted ones (RFC 0007)", () => {
+    const folder = (path: string, deleted = false): EntryState => ({
+      ...entry(path),
+      blob: undefined,
+      size: 0,
+      folder: true,
+      deleted,
+    });
+    const tree = buildTree(listed, [
+      folder("PNJ"),
+      folder("Sessions/Prep"),
+      folder("Gone", true),
+    ]);
+    expect(tree.folders.map((f) => f.name)).toEqual([
+      "PNJ",
+      "Resumes",
+      "Sessions",
+    ]);
+    const pnj = tree.folders[0];
+    expect([pnj?.folders.length, pnj?.notes.length]).toEqual([0, 0]);
+    expect(tree.folders[2]?.folders.map((f) => f.path)).toEqual([
+      "Sessions/Prep/",
+    ]);
+    expect(notesInOrder(tree).map((n) => n.entry)).toEqual([
+      "r12",
+      "map",
+      "s11",
+    ]);
+  });
+
   it("orders notes as the tree shows them, and names the folders on a path", () => {
     const tree = buildTree([entry("z.md"), ...listed]);
     expect(notesInOrder(tree).map((n) => n.path)).toEqual([

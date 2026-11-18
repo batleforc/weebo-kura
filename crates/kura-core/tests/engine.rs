@@ -340,6 +340,7 @@ fn opts(dry_run: bool) -> Options {
         allow_deletions: false,
         prefer_remote: false,
         writable: None,
+        folders: false,
     }
 }
 
@@ -358,6 +359,7 @@ fn served_as(path: &str, data: &[u8], n: u8, seq: u64) -> (EntryState, Vec<u8>) 
         deleted: false,
         blob: Some(blob),
         size: data.len() as u64,
+        folder: false,
     };
     (state, data.to_vec())
 }

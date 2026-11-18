@@ -9,13 +9,14 @@ export interface Folder {
   notes: EntryState[];
 }
 
-/** One tree of every listed entry; folders and notes sorted by name. */
-export function buildTree(entries: readonly EntryState[]): Folder {
+/** One tree of every listed entry; folders and notes sorted by name. Folder
+ * entries (RFC 0007) add the folders no note is in, empty ones included. */
+export function buildTree(
+  entries: readonly EntryState[],
+  folders: readonly EntryState[] = [],
+): Folder {
   const root: Folder = { name: "", path: "", folders: [], notes: [] };
-  for (const e of entries) {
-    if (e.deleted) continue;
-    const parts = e.path.split("/");
-    parts.pop();
+  const into = (parts: readonly string[]): Folder => {
     let at = root;
     for (const name of parts) {
       let next = at.folders.find((f) => f.name === name);
@@ -25,7 +26,16 @@ export function buildTree(entries: readonly EntryState[]): Folder {
       }
       at = next;
     }
-    at.notes.push(e);
+    return at;
+  };
+  for (const f of folders) {
+    if (!f.deleted) into(f.path.split("/"));
+  }
+  for (const e of entries) {
+    if (e.deleted) continue;
+    const parts = e.path.split("/");
+    parts.pop();
+    into(parts).notes.push(e);
   }
   const sort = (f: Folder) => {
     f.folders.sort((a, b) => a.name.localeCompare(b.name));

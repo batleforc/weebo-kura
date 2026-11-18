@@ -55,6 +55,12 @@ export class MemAdapter implements Adapter {
     }
     return Promise.resolve();
   }
+  rmdir(path: string, recursive: boolean): Promise<void> {
+    const held = [...this.files.keys(), ...this.folders].some((p) => p.startsWith(`${path}/`));
+    if (held && !recursive) return Promise.reject(new Error(`${path} is not empty`));
+    this.folders.delete(path);
+    return Promise.resolve();
+  }
   rename(from: string, to: string): Promise<void> {
     const f = this.files.get(from);
     if (f === undefined) return Promise.reject(new Error(`no ${from}`));

@@ -35,6 +35,10 @@ pub struct ChangesQuery {
     pub start: Option<u64>,
     /// `config`: the caller's own Obsidian configuration (§6.8).
     pub space: Option<String>,
+    /// Include folder entries (RFC 0007); a client that does not ask is
+    /// never sent one.
+    #[serde(default)]
+    pub folders: bool,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -44,6 +48,9 @@ pub struct EntriesQuery {
     pub after: Option<Uuid>,
     /// `config`: the caller's own Obsidian configuration (§6.8).
     pub space: Option<String>,
+    /// Include folder entries (RFC 0007).
+    #[serde(default)]
+    pub folders: bool,
 }
 
 fn query<T>(q: Result<Query<T>, QueryRejection>) -> Result<T, ApiError> {
@@ -160,13 +167,14 @@ pub async fn get_changes(
     }
     let rows = sqlx::query(concat!(
         head_select!(),
-        " WHERE e.vault_id = $1 AND e.last_seq > $2 AND e.path_key LIKE ANY($4) AND e.namespace = $5 ORDER BY e.last_seq LIMIT $3"
+        " WHERE e.vault_id = $1 AND e.last_seq > $2 AND (e.path_key LIKE ANY($4) OR (r.blob_hash IS NULL AND NOT e.deleted AND e.path_key || '/' LIKE ANY($4))) AND ($6 OR r.blob_hash IS NOT NULL OR e.deleted) AND e.namespace = $5 ORDER BY e.last_seq LIMIT $3"
     ))
     .bind(v)
     .bind(since)
     .bind(PAGE.saturating_add(1))
     .bind(&under)
     .bind(&ns)
+    .bind(q.folders)
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -205,13 +213,14 @@ pub async fn get_entries(
     let (mut tx, head, under, ns, _) = open(&state, &reader, v, q.space.as_deref()).await?;
     let rows = sqlx::query(concat!(
         head_select!(),
-        " WHERE e.vault_id = $1 AND NOT e.deleted AND ($2::uuid IS NULL OR e.id > $2) AND e.path_key LIKE ANY($4) AND e.namespace = $5 ORDER BY e.id LIMIT $3"
+        " WHERE e.vault_id = $1 AND NOT e.deleted AND ($2::uuid IS NULL OR e.id > $2) AND (e.path_key LIKE ANY($4) OR (r.blob_hash IS NULL AND NOT e.deleted AND e.path_key || '/' LIKE ANY($4))) AND ($6 OR r.blob_hash IS NOT NULL OR e.deleted) AND e.namespace = $5 ORDER BY e.id LIMIT $3"
     ))
     .bind(v)
     .bind(q.after)
     .bind(PAGE.saturating_add(1))
     .bind(&under)
     .bind(&ns)
+    .bind(q.folders)
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;

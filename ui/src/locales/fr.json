@@ -136,7 +136,8 @@
     "keys": "Raccourcis clavier",
     "keyFind": "trouver une note",
     "keyTurn": "tourner la page",
-    "keyClose": "fermer"
+    "keyClose": "fermer",
+    "emptyFolder": "Aucune note dans ce dossier."
   },
   "manage": {
     "title": "Gérer",

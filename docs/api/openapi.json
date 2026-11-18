@@ -1682,6 +1682,15 @@
             }
           },
           {
+            "name": "folders",
+            "in": "query",
+            "description": "Include folder entries (RFC 0007); a client that does not ask is\nnever sent one.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "X-Kura-Device",
             "in": "header",
             "description": "This device",
@@ -2278,6 +2287,15 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "folders",
+            "in": "query",
+            "description": "Include folder entries (RFC 0007).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           },
           {
@@ -3773,6 +3791,10 @@
           "entry": {
             "$ref": "#/components/schemas/EntryId"
           },
+          "folder": {
+            "type": "boolean",
+            "description": "A folder (RFC 0007): no blob, size 0. Sent only to a client that\nasked for folders."
+          },
           "path": {
             "type": "string"
           },
@@ -4007,6 +4029,36 @@
                 "enum": [
                   "delete"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Create (no `base`) or move a folder: an entry with no content\n(RFC 0007). A rename is a delete and a create.",
+            "required": [
+              "entry",
+              "path",
+              "op"
+            ],
+            "properties": {
+              "base": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              "entry": {
+                "$ref": "#/components/schemas/EntryId"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "folder"
+                ]
+              },
+              "path": {
+                "type": "string"
               }
             }
           }

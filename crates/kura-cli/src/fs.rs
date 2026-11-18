@@ -141,6 +141,27 @@ impl FsHost {
         renamed.map_err(|e| err("writing", e))
     }
 
+    /// Every folder under `dir`, as vault paths; dot-folders and links are
+    /// not followed, as in [`Self::walk`] (RFC 0007).
+    fn walk_folders(dir: &Path, rel: &str, out: &mut Vec<String>) -> Result<(), HostError> {
+        for entry in std::fs::read_dir(dir).map_err(|e| err("listing", e))? {
+            let entry = entry.map_err(|e| err("listing", e))?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let m = std::fs::symlink_metadata(entry.path()).map_err(|e| err("listing", e))?;
+            if !m.is_dir() || m.file_type().is_symlink() || name.starts_with('.') {
+                continue;
+            }
+            let path = if rel.is_empty() {
+                name
+            } else {
+                format!("{rel}/{name}")
+            };
+            Self::walk_folders(&entry.path(), &path, out)?;
+            out.push(path);
+        }
+        Ok(())
+    }
+
     fn walk(&self, dir: &Path, rel: &str, out: &mut Vec<FileMeta>) -> Result<(), HostError> {
         let entries = std::fs::read_dir(dir).map_err(|e| err("listing", e))?;
         for entry in entries {
@@ -228,6 +249,22 @@ impl Host for FsHost {
             n = n.saturating_add(1);
         }
         std::fs::rename(&src, &dst).map_err(|e| err("trash", e))
+    }
+
+    async fn folders(&self) -> Result<Vec<String>, HostError> {
+        let mut out = Vec::new();
+        Self::walk_folders(&self.root, "", &mut out)?;
+        Ok(out)
+    }
+
+    async fn make_folder(&self, path: &VaultPath) -> Result<(), HostError> {
+        self.ensure_dir(path.segments()).map(drop)
+    }
+
+    async fn remove_folder_if_empty(&self, path: &VaultPath) -> Result<bool, HostError> {
+        let full = self.resolve(path)?;
+        // `remove_dir` refuses a folder that holds anything: never a file lost.
+        Ok(std::fs::remove_dir(&full).is_ok())
     }
 
     async fn save(&self, state: &LocalState) -> Result<(), HostError> {

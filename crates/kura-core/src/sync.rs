@@ -62,6 +62,14 @@ pub struct Known {
     pub resend: bool,
 }
 
+/// What this device knows of one folder entry (RFC 0007): where it is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownFolder {
+    pub path: VaultPath,
+    pub revision: Uuid,
+}
+
 /// A remote version about to be written, recorded first (§6.8 journal).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pending {
@@ -80,6 +88,10 @@ pub struct LocalState {
     pub entries: BTreeMap<EntryId, Known>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending: Option<Pending>,
+    /// Folder entries (RFC 0007), apart from files: they have no content.
+    /// Absent from states written before them, so the version stays.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub folders: BTreeMap<EntryId, KnownFolder>,
 }
 
 impl LocalState {
@@ -92,6 +104,7 @@ impl LocalState {
             cursor: 0,
             entries: BTreeMap::new(),
             pending: None,
+            folders: BTreeMap::new(),
         }
     }
 
@@ -169,6 +182,22 @@ pub trait Host {
     /// Moves a file to the vault's `.trash`, never unlinks it (§6.3).
     async fn trash(&self, path: &VaultPath) -> Result<(), HostError>;
     async fn save(&self, state: &LocalState) -> Result<(), HostError>;
+    /// Every folder of the vault folder, recursively, dot-folders included
+    /// or not (the core skips them). RFC 0007; a host without folders keeps
+    /// [`Options::folders`] off and is never asked.
+    async fn folders(&self) -> Result<Vec<String>, HostError> {
+        Ok(Vec::new())
+    }
+    /// Creates a folder and its parents; present already is fine.
+    async fn make_folder(&self, path: &VaultPath) -> Result<(), HostError> {
+        let _ = path;
+        Ok(())
+    }
+    /// Removes a folder only if it holds nothing; false when it stayed.
+    async fn remove_folder_if_empty(&self, path: &VaultPath) -> Result<bool, HostError> {
+        let _ = path;
+        Ok(false)
+    }
     fn now_ms(&self) -> u64;
     fn random(&self) -> [u8; 16];
 }
@@ -245,6 +274,8 @@ const UPLOAD_MANIFEST_HASHES: usize = 12_000;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Report {
     pub pushed: usize,
+    /// Folders created or removed on the server by this run (RFC 0007).
+    pub folders: usize,
     /// Bytes of the files `pushed` counts (what a dry run would upload, §4.5).
     pub pushed_bytes: u64,
     pub pulled: usize,
@@ -307,6 +338,9 @@ pub struct Options {
     /// token, RFC 0004 §6.6): a change elsewhere stops the push before any
     /// upload, listed in [`Report::not_writable`]; the pull still runs.
     pub writable: Option<Writable>,
+    /// Sync folders as entries (RFC 0007): set by a host that implements
+    /// [`Host::folders`], for the notes only.
+    pub folders: bool,
 }
 
 /// A full resync asks first above this share of the local files, or this
@@ -379,10 +413,163 @@ async fn run<H: Host, R: Remote>(
         }
         Err(e) => return Err(e),
     }
+    if opts.folders && report.refused.is_none() {
+        match push_folders(host, remote, state, opts, report).await {
+            Ok(()) => {}
+            Err(SyncError::Remote(
+                e @ RemoteError::Problem {
+                    status: 403 | 422, ..
+                },
+            )) => report.refused = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
     if !opts.dry_run {
         pull(host, remote, state, opts, report).await?;
     }
     Ok(())
+}
+
+/// Folders (RFC 0007): a local folder the server lacks is created there, a
+/// known folder gone here is deleted there. After the files, so a folder's
+/// files have moved or gone before it does.
+async fn push_folders<H: Host, R: Remote>(
+    host: &H,
+    remote: &R,
+    state: &mut LocalState,
+    opts: &Options,
+    report: &mut Report,
+) -> Result<(), SyncError> {
+    let mut local: Vec<VaultPath> = Vec::new();
+    for f in host.folders().await? {
+        match VaultPath::from_local(&f) {
+            Ok(p) => local.push(p),
+            Err(PathError::Hidden) => {}
+            Err(e) => report.unsyncable.push((f, e.to_string())),
+        }
+    }
+    local.sort();
+    local.dedup();
+    let known: HashMap<&VaultPath, EntryId> =
+        state.folders.iter().map(|(e, k)| (&k.path, *e)).collect();
+    let mut ops: Vec<Operation> = state
+        .folders
+        .iter()
+        .filter(|(_, k)| local.binary_search(&k.path).is_err())
+        .map(|(e, k)| Operation::Delete {
+            entry: *e,
+            base: k.revision,
+        })
+        .collect();
+    for p in &local {
+        if !known.contains_key(p) {
+            ops.push(Operation::Folder {
+                entry: EntryId::new(host.now_ms(), &ten(host.random())),
+                path: p.clone(),
+                base: None,
+            });
+        }
+    }
+    if let Some(writable) = &opts.writable {
+        let path_of = |op: &Operation| match op {
+            Operation::Folder { path, .. } => Some(path.as_str().to_owned()),
+            Operation::Delete { entry, .. } => {
+                state.folders.get(entry).map(|k| k.path.as_str().to_owned())
+            }
+            Operation::Put { .. } => None,
+        };
+        let (keep, refuse): (Vec<Operation>, Vec<Operation>) = ops
+            .into_iter()
+            .partition(|op| path_of(op).is_none_or(|p| writable(&format!("{p}/"))));
+        report
+            .not_writable
+            .extend(refuse.iter().filter_map(path_of));
+        ops = keep;
+    }
+    report.folders = ops.len();
+    if opts.dry_run || ops.is_empty() {
+        return Ok(());
+    }
+    for batch in ops.chunks(BATCH) {
+        let req = CommitRequest {
+            idempotency_key: hex(&host.random()),
+            operations: batch.to_vec(),
+            epoch: state.epoch,
+            space: None,
+        };
+        let res = commit(remote, &req).await?;
+        for (op, r) in batch.iter().zip(res.results) {
+            match (op, r.outcome) {
+                (Operation::Delete { entry, .. }, Outcome::Conflicted) if !r.head.deleted => {
+                    // Moved on the server since: deleted again next run.
+                    if let Some(k) = state.folders.get_mut(entry) {
+                        k.revision = r.head.revision;
+                    }
+                }
+                (Operation::Delete { entry, .. }, _) => {
+                    state.folders.remove(entry);
+                }
+                (Operation::Folder { path, .. }, Outcome::Conflicted) => {
+                    // A file holds the name (§4.2): the folder stays local.
+                    report
+                        .unsyncable
+                        .push((path.to_string(), "a file has this name".into()));
+                }
+                (Operation::Folder { .. }, _) => {
+                    state.folders.insert(
+                        r.head.entry,
+                        KnownFolder {
+                            path: r.head.path.clone(),
+                            revision: r.head.revision,
+                        },
+                    );
+                }
+                (Operation::Put { .. }, _) => {}
+            }
+        }
+        host.save(state).await?;
+    }
+    Ok(())
+}
+
+/// A folder entry from the server (RFC 0007): made here, or removed here
+/// when it holds nothing. Never a file: those leave by their own entries.
+async fn apply_folder<H: Host>(
+    host: &H,
+    state: &mut LocalState,
+    item: &EntryState,
+    report: &mut Report,
+) {
+    let done = if item.deleted {
+        match state.folders.remove(&item.entry) {
+            Some(k) => host.remove_folder_if_empty(&k.path).await.map(drop),
+            None => Ok(()),
+        }
+    } else {
+        let old = state.folders.get(&item.entry).map(|k| k.path.clone());
+        let moved = match old.filter(|p| *p != item.path) {
+            Some(p) => host.remove_folder_if_empty(&p).await.map(drop),
+            None => Ok(()),
+        };
+        match moved.and(host.make_folder(&item.path).await) {
+            Ok(()) => {
+                state.folders.insert(
+                    item.entry,
+                    KnownFolder {
+                        path: item.path.clone(),
+                        revision: item.revision,
+                    },
+                );
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    };
+    // A folder never holds the cursor: it is made again on the next pass of
+    // its parent's files, or by the next run's push.
+    if let Err(e) = done {
+        report.failed.push((item.path.clone(), e.to_string()));
+    }
 }
 
 /// Full resync (§6.3, decision 32): every entry the server holds, matched to
@@ -484,6 +671,9 @@ async fn resync<H: Host, R: Remote>(
             report.trashed = report.trashed.saturating_add(1);
         }
     }
+    // Folders are learnt again from the pull below; the push re-creates any
+    // the server lost (RFC 0007).
+    state.folders.clear();
     // Everything is pulled again from 0 under the new epoch; entries already
     // in place are skipped by revision.
     state.epoch = Some(epoch);
@@ -656,23 +846,24 @@ async fn push<H: Host, R: Remote>(
     if let Some(writable) = &opts.writable {
         // A put is checked where it lands and where the entry lies (a rename
         // writes both ends); a deletion, where the entry lies.
-        let mut paths: Vec<String> = ops
-            .iter()
-            .flat_map(|(op, _)| {
-                let (entry, to) = match op {
-                    Operation::Put { entry, path, .. } => (entry, Some(path)),
-                    Operation::Delete { entry, .. } => (entry, None),
-                };
-                state
-                    .entries
-                    .get(entry)
-                    .map(|k| &k.path)
-                    .into_iter()
-                    .chain(to)
-            })
-            .map(|p| p.as_str().to_owned())
-            .filter(|p| !writable(p))
-            .collect();
+        let mut paths: Vec<String> =
+            ops.iter()
+                .flat_map(|(op, _)| {
+                    let (entry, to) = match op {
+                        Operation::Put { entry, path, .. }
+                        | Operation::Folder { entry, path, .. } => (entry, Some(path)),
+                        Operation::Delete { entry, .. } => (entry, None),
+                    };
+                    state
+                        .entries
+                        .get(entry)
+                        .map(|k| &k.path)
+                        .into_iter()
+                        .chain(to)
+                })
+                .map(|p| p.as_str().to_owned())
+                .filter(|p| !writable(p))
+                .collect();
         paths.sort();
         paths.dedup();
         if !paths.is_empty() {
@@ -947,7 +1138,9 @@ async fn settle<H: Host, R: Remote>(
             // written only if the file is still what was pushed; an edit made
             // since is pushed again against that base and merged again.
             let base = match op {
-                Operation::Put { base, .. } => base.unwrap_or(head.revision),
+                Operation::Put { base, .. } | Operation::Folder { base, .. } => {
+                    base.unwrap_or(head.revision)
+                }
                 Operation::Delete { base, .. } => *base,
             };
             state.entries.insert(
@@ -1018,8 +1211,15 @@ async fn pull<H: Host, R: Remote>(
             if i >= window_end {
                 window_end = pre.fill(&page.items, i, state).await?;
             }
+            let folder = item.folder || (item.deleted && state.folders.contains_key(&item.entry));
             let current = state.entries.get(&item.entry).map(|k| k.revision);
-            if current != Some(item.revision) {
+            if folder {
+                if opts.folders
+                    && state.folders.get(&item.entry).map(|k| k.revision) != Some(item.revision)
+                {
+                    apply_folder(host, state, item, report).await;
+                }
+            } else if current != Some(item.revision) {
                 match apply(host, &pre, state, item, opts, report).await {
                     Ok(Applied::Done) => {}
                     Ok(Applied::Deferred) => held = true,

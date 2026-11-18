@@ -27,6 +27,12 @@ export interface KuraHost {
   rename(from: string, to: string): Promise<KuraFile>;
   trash(path: string): Promise<void>;
   save(state: string): Promise<void>;
+  /** RFC 0007: every folder, recursively (the core skips dot-folders). */
+  folders(): Promise<string[]>;
+  /** Creates a folder and its parents. */
+  makeFolder(path: string): Promise<void>;
+  /** Removes a folder only if it holds nothing; false when it stayed. */
+  removeFolderIfEmpty(path: string): Promise<boolean>;
   nowMs(): number;
   random(): Uint8Array;
 }
@@ -68,6 +74,12 @@ extern "C" {
     async fn trash(this: &JsHost, path: &str) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(method, catch)]
     async fn save(this: &JsHost, state: &str) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(method, catch)]
+    async fn folders(this: &JsHost) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(method, catch, js_name = makeFolder)]
+    async fn make_folder(this: &JsHost, path: &str) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(method, catch, js_name = removeFolderIfEmpty)]
+    async fn remove_folder_if_empty(this: &JsHost, path: &str) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(method, js_name = nowMs)]
     fn now_ms(this: &JsHost) -> f64;
     #[wasm_bindgen(method)]
@@ -241,6 +253,24 @@ impl Host for HostAdapter {
         let s = serde_json::to_string(state).map_err(|e| HostError(e.to_string()))?;
         self.0.save(&s).await.map(drop).map_err(host_err)
     }
+    async fn folders(&self) -> Result<Vec<String>, HostError> {
+        serde_wasm(&self.0.folders().await.map_err(host_err)?).map_err(HostError)
+    }
+    async fn make_folder(&self, path: &VaultPath) -> Result<(), HostError> {
+        self.0
+            .make_folder(path.as_str())
+            .await
+            .map(drop)
+            .map_err(host_err)
+    }
+    async fn remove_folder_if_empty(&self, path: &VaultPath) -> Result<bool, HostError> {
+        let v = self
+            .0
+            .remove_folder_if_empty(path.as_str())
+            .await
+            .map_err(host_err)?;
+        Ok(v.as_bool().unwrap_or(false))
+    }
     fn now_ms(&self) -> u64 {
         #[expect(
             clippy::cast_possible_truncation,
@@ -412,6 +442,9 @@ struct SyncOptions {
     /// The configuration space: the server's copy wins on first contact (§6.8).
     #[serde(default)]
     prefer_remote: bool,
+    /// Sync folders as entries (RFC 0007); the notes only.
+    #[serde(default)]
+    folders: bool,
 }
 
 fn report(r: &Report) -> Value {
@@ -425,6 +458,7 @@ fn report(r: &Report) -> Value {
     };
     json!({
         "pushed": r.pushed,
+        "folders": r.folders,
         "pulled": r.pulled,
         "trashed": r.trashed,
         "conflicts": r.conflicts,
@@ -461,6 +495,7 @@ pub async fn sync(
         allow_deletions: o.allow_deletions,
         prefer_remote: o.prefer_remote,
         writable: None,
+        folders: o.folders,
     };
     let r = kura_core::sync::sync(&HostAdapter(host), &RemoteAdapter(remote), &mut st, &opts).await;
     match r {

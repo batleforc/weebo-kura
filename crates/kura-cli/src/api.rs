@@ -633,6 +633,9 @@ impl Remote for VaultRemote<'_> {
         }
         if let Some(s) = self.space {
             r = r.query(&[("space", s)]);
+        } else {
+            // The notes' folders too (RFC 0007); the core skips them when off.
+            r = r.query(&[("folders", "true")]);
         }
         self.api.json(r).await
     }

@@ -450,6 +450,15 @@ sets no cookie. `/app` is served with a Content-Security-Policy that allows
 scripts from Kura's origin only and connections to Kura and the identity
 provider, and with `frame-ancestors 'none'`.
 
+### Folders (RFC 0007)
+
+Folders sync as entries of their own, empty ones included: made, removed
+or renamed on one device, they follow on the others, and the console's
+tree shows them. A folder removed elsewhere leaves a device only when it
+holds nothing there; its files leave by their own deletions, to `.trash`.
+A client asks for folders with `folders=true`; an older plugin or CLI is
+never sent one and keeps working. The configuration space has none.
+
 ### Sync state (RFC 0006)
 
 For each device and each vault it syncs, the server keeps one row, written

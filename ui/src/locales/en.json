@@ -136,7 +136,8 @@
     "keys": "Keyboard shortcuts",
     "keyFind": "find a note",
     "keyTurn": "turn the page",
-    "keyClose": "close"
+    "keyClose": "close",
+    "emptyFolder": "No note in this folder."
   },
   "manage": {
     "title": "Manage",

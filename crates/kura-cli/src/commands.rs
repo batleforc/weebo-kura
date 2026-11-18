@@ -494,6 +494,8 @@ async fn sync_one(
         allow_deletions: yes,
         prefer_remote: false,
         writable,
+        // The notes' folders sync as entries (RFC 0007).
+        folders: true,
     };
     let r = loop {
         match sync(&host, &api.vault(a.id), &mut state, &opts).await {
@@ -638,6 +640,10 @@ async fn sync_one(
             r.trashed,
             r.conflicts.len()
         );
+        // RFC 0007: folders made or removed on the server by this run.
+        if r.folders > 0 && r.refused.is_none() {
+            println!("{name}: {} folders created or removed.", r.folders);
+        }
         if let Some(x) = cfg.vaults.get_mut(name) {
             x.last_sync = Some(host.now_ms());
         }
@@ -674,6 +680,8 @@ async fn sync_config(
         allow_deletions: yes,
         prefer_remote: true,
         writable: None,
+        // Configuration categories are files only (RFC 0007 §4.3).
+        folders: false,
     };
     match sync(&host, &api.vault_config(a.id), &mut state, &opts).await {
         Ok(r) => {
@@ -719,6 +727,7 @@ pub async fn status(ctx: &Ctx) -> Result<u8, Fail> {
             allow_deletions: false,
             prefer_remote: false,
             writable: None,
+            folders: true,
         };
         let r = sync(&host, &api.vault(a.id), &mut state, &opts)
             .await

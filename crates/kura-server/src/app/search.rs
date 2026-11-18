@@ -268,6 +268,7 @@ pub async fn search(
              SELECT e.id, e.path, r.blob_hash, r.size, (similarity(e.path, $2) / 2)::real AS score
              FROM entry e JOIN revision r ON r.id = e.head_revision
              WHERE e.vault_id = $1 AND e.namespace = 'notes' AND NOT e.deleted AND e.path_key LIKE ANY($3)
+               AND r.blob_hash IS NOT NULL -- a folder is not a note (RFC 0007)
                AND e.path % $2
              ORDER BY score DESC LIMIT $4
          )

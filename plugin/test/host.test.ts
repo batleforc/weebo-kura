@@ -54,3 +54,28 @@ describe("the vault host", () => {
     expect(h.random()[0]).toBe(7);
   });
 });
+
+describe("folders (RFC 0007)", () => {
+  it("lists every folder but dot-folders, makes one, and removes only an empty one", async () => {
+    const adapter = new MemAdapter();
+    adapter.put("JDR/Sessions/s1.md", "x");
+    await adapter.mkdir("JDR/Empty");
+    await adapter.mkdir(".obsidian/plugins");
+    const host = new ObsidianHost({ adapter, pluginDir: ".obsidian/plugins/weebo-kura", vault: "v", isOpen: () => false, now: () => 0, random: () => new Uint8Array(16) });
+    expect((await host.folders()).sort()).toEqual(["JDR", "JDR/Empty", "JDR/Sessions"]);
+    await host.makeFolder("New/Deep");
+    expect(adapter.folders.has("New/Deep")).toBe(true);
+    expect(await host.removeFolderIfEmpty("JDR/Sessions")).toBe(false);
+    expect(adapter.folders.has("JDR/Sessions")).toBe(true);
+    expect(await host.removeFolderIfEmpty("JDR/Empty")).toBe(true);
+    expect(adapter.folders.has("JDR/Empty")).toBe(false);
+    expect(await host.removeFolderIfEmpty("Gone")).toBe(false);
+  });
+
+  it("lists none in the configuration space", async () => {
+    const adapter = new MemAdapter();
+    await adapter.mkdir(".obsidian/snippets");
+    const host = new ObsidianHost({ adapter, pluginDir: ".obsidian/plugins/weebo-kura", vault: "v", isOpen: () => false, now: () => 0, random: () => new Uint8Array(16), root: ".obsidian" });
+    expect(await host.folders()).toEqual([]);
+  });
+});

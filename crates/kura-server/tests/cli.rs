@@ -1001,3 +1001,73 @@ async fn a_scoped_token_syncs_its_folders_and_refuses_the_rest() {
         "the local edit is kept"
     );
 }
+
+/// RFC 0007 §6.P observations 1 to 3, in process: an empty folder reaches
+/// the other device and leaves it; a folder still holding a file there is
+/// never removed with it.
+#[tokio::test]
+async fn folders_sync_between_devices() {
+    let Some(st) = storage(module_path!()).await else {
+        return;
+    };
+    let Some(e) = env_with(module_path!(), Some(st)).await else {
+        return;
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = format!("http://{}", listener.local_addr().unwrap());
+    let router = app(e.state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    let a = Ctx {
+        home: dir("fold-home-a"),
+        access_token: Some(e.key.token("u1", "sa", &["maxime-members"])),
+    };
+    let b = Ctx {
+        home: dir("fold-home-b"),
+        access_token: Some(e.key.token("u2", "sb", &["maxime-members"])),
+    };
+    let issuer = "https://auth.example.org/application/o/kura/".to_owned();
+    for (ctx, name) in [(&a, "fold-a"), (&b, "fold-b")] {
+        let r = commands::login(
+            ctx,
+            server.clone(),
+            issuer.clone(),
+            "kura-cli".into(),
+            Some(name.into()),
+        )
+        .await;
+        assert_eq!(code(r), 0);
+    }
+    let (fa, fb) = (dir("fold-vault-a"), dir("fold-vault-b"));
+    std::fs::create_dir_all(fa.join("JDR/Empty")).unwrap();
+    std::fs::create_dir_all(fa.join("JDR/Kept")).unwrap();
+    std::fs::write(fa.join("JDR/note.md"), "n\n").unwrap();
+    assert_eq!(
+        code(commands::attach(&a, "knowledge", fa.clone(), true).await),
+        0
+    );
+    assert_eq!(
+        code(commands::attach(&b, "knowledge", fb.clone(), true).await),
+        0
+    );
+    assert!(
+        fb.join("JDR/Empty").is_dir(),
+        "1: the empty folder reached b"
+    );
+    assert!(fb.join("JDR/Kept").is_dir());
+
+    // 3: b puts a note in Kept; a removes Kept (empty there) and Empty.
+    std::fs::write(fb.join("JDR/Kept/mine.md"), "b's\n").unwrap();
+    std::fs::remove_dir(fa.join("JDR/Kept")).unwrap();
+    std::fs::remove_dir(fa.join("JDR/Empty")).unwrap();
+    assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
+    assert_eq!(code(commands::sync_cmd(&b, None, false, false).await), 0);
+    assert!(
+        !fb.join("JDR/Empty").exists(),
+        "2: the removed folder left b"
+    );
+    assert!(fb.join("JDR/Kept/mine.md").is_file(), "3: b's note stays");
+    // b's push brings Kept and its note back to a.
+    assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
+    assert!(fa.join("JDR/Kept/mine.md").is_file());
+    assert!(!fa.join("JDR/Empty").exists());
+}

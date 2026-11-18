@@ -66,6 +66,22 @@ pub(super) struct Head {
 }
 
 impl Head {
+    /// A live entry with no content is a folder (RFC 0007): a file always
+    /// has a blob, a deleted entry never does.
+    pub(super) const fn is_folder(&self) -> bool {
+        !self.deleted && self.blob.is_none()
+    }
+
+    /// The path a scope checks: a folder's with its trailing `/`, so a
+    /// viewer of `Sessions/` sees the folder `Sessions` itself (RFC 0007).
+    pub(super) fn scoped_path(&self) -> String {
+        if self.is_folder() {
+            format!("{}/", self.path.as_str())
+        } else {
+            self.path.as_str().to_owned()
+        }
+    }
+
     pub(super) fn state(&self) -> Result<EntryState, ApiError> {
         Ok(EntryState {
             entry: EntryId::from_uuid(self.id)
@@ -76,6 +92,7 @@ impl Head {
             deleted: self.deleted,
             blob: self.blob,
             size: u64::try_from(self.size).unwrap_or_default(),
+            folder: self.is_folder(),
         })
     }
 }
@@ -371,6 +388,13 @@ pub async fn post_commit(
     )
     .await?;
     for (i, op) in req.operations.iter().enumerate() {
+        // Configuration categories are files only (RFC 0007 §4.3).
+        if matches!(op, Operation::Folder { .. }) && space.is_config() {
+            return Err(ApiError::with_detail(
+                ProblemType::InvalidPath,
+                format!("operations[{i}]: no folder in the configuration space"),
+            ));
+        }
         if let Operation::Put { path, .. } = op
             && !space.allows(path.as_str())
         {
@@ -390,6 +414,12 @@ pub async fn post_commit(
                     return Err(outside(&state, i));
                 }
                 blobs.push(*blob);
+            }
+            // A folder is written where its contents may be (RFC 0007 T2).
+            if let Operation::Folder { path, .. } = op
+                && !k.scope.writes(&format!("{path}/"))
+            {
+                return Err(outside(&state, i));
             }
         }
         let known = k.knows(&state, &a, &blobs, false).await?;
@@ -593,9 +623,9 @@ async fn decide(
         for (i, op) in req.operations.iter().enumerate() {
             let head_ok = heads
                 .get(op.entry().as_uuid())
-                .is_none_or(|h| k.scope.writes(h.path.as_str()));
+                .is_none_or(|h| k.scope.writes(&h.scoped_path()));
             let base = match op {
-                Operation::Put { base, .. } => *base,
+                Operation::Put { base, .. } | Operation::Folder { base, .. } => *base,
                 Operation::Delete { base, .. } => Some(*base),
             };
             let base_ok = base
@@ -611,7 +641,7 @@ async fn decide(
         .operations
         .iter()
         .filter_map(|o| match o {
-            Operation::Put { path, .. } => Some(path_key(path)),
+            Operation::Put { path, .. } | Operation::Folder { path, .. } => Some(path_key(path)),
             Operation::Delete { .. } => None,
         })
         .collect();
@@ -764,8 +794,12 @@ async fn enqueue_index(
     }
     // Every write: a rename away from `.md` must drop the old words too
     // (review 7 M3); the worker indexes Markdown heads only.
-    let (entries, revisions): (Vec<Uuid>, Vec<Uuid>) =
-        writes.iter().map(|w| (w.head.id, w.head.revision)).unzip();
+    // A folder has no words (RFC 0007).
+    let (entries, revisions): (Vec<Uuid>, Vec<Uuid>) = writes
+        .iter()
+        .filter(|w| !w.head.is_folder())
+        .map(|w| (w.head.id, w.head.revision))
+        .unzip();
     if entries.is_empty() {
         return Ok(());
     }
@@ -816,7 +850,7 @@ async fn load_bases(
         .operations
         .iter()
         .filter_map(|o| match o {
-            Operation::Put { base, .. } => *base,
+            Operation::Put { base, .. } | Operation::Folder { base, .. } => *base,
             Operation::Delete { base, .. } => Some(*base),
         })
         .collect();
@@ -849,7 +883,7 @@ async fn check_blobs(tx: &mut Tx, v: Uuid, req: &CommitRequest) -> Result<(), Ap
         .enumerate()
         .filter_map(|(i, o)| match o {
             Operation::Put { blob, size, .. } => Some((i, *blob, *size)),
-            Operation::Delete { .. } => None,
+            Operation::Delete { .. } | Operation::Folder { .. } => None,
         })
         .collect();
     let raw: Vec<Vec<u8>> = wanted
@@ -900,7 +934,7 @@ async fn apply(
     }
     // T17: a base must be a revision of this entry in this vault.
     let base = match op {
-        Operation::Put { base, .. } => *base,
+        Operation::Put { base, .. } | Operation::Folder { base, .. } => *base,
         Operation::Delete { base, .. } => Some(*base),
     };
     let base_rev = match base {
@@ -948,6 +982,34 @@ async fn apply(
                 conflict: None,
             })
         }
+        Operation::Folder { path, .. } => {
+            if existing
+                .as_ref()
+                .is_some_and(|h| !h.deleted && !h.is_folder())
+            {
+                return Err(refused(i, "this entry is a file"));
+            }
+            if let Some(h) = existing.as_ref().filter(|h| !h.deleted && h.path == *path) {
+                // Already there: a late retry is a no-op.
+                return accepted(h.clone());
+            }
+            match c.occupant(&path_key(path)).await? {
+                Some(o) if o != id => {
+                    let other = c.head(o).await?;
+                    if other.is_folder() {
+                        // The same folder made elsewhere: one entry for both.
+                        return accepted(other);
+                    }
+                    // A file holds the name: the folder stays local (§4.2).
+                    Ok(OpResult {
+                        outcome: Outcome::Conflicted,
+                        head: other.state()?,
+                        conflict: None,
+                    })
+                }
+                _ => accepted(c.write(id, path.clone(), false, None, 0, base)),
+            }
+        }
         Operation::Put {
             path, blob, size, ..
         } => {
@@ -955,6 +1017,9 @@ async fn apply(
             let Some(h) = existing else {
                 return put_new(c, i, id, path, *blob, size).await;
             };
+            if h.is_folder() {
+                return Err(refused(i, "this entry is a folder"));
+            }
             if h.deleted {
                 // An edit against a deleted entry wins and restores it.
                 let p = c.free_path(i, path, id).await?;
@@ -1053,6 +1118,11 @@ async fn apply_config(
         })
     };
     match op {
+        // Refused before the lock (post_commit); kept total here.
+        Operation::Folder { .. } => Err(ApiError::with_detail(
+            ProblemType::InvalidPath,
+            format!("operations[{i}]: no folder in the configuration space"),
+        )),
         Operation::Delete { .. } => match existing {
             Some(h) if h.deleted => accepted(h),
             Some(h) => {
