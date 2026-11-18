@@ -1452,9 +1452,9 @@
     "semantic_hash": ""
   },
   "ui/src/reader/FolderTree.vue": {
-    "mtime": 1795037658.5751169,
-    "seen": 1795038020.0375183,
-    "ast_hash": "bb27906bf09a7b06bb6f862b7578406f",
+    "mtime": 1795038567.5831864,
+    "seen": 1795038636.3480322,
+    "ast_hash": "e5996fbdfcd779b15739046eb89fc919",
     "semantic_hash": ""
   },
   "ui/src/reader/NoteFrame.vue": {
@@ -1476,9 +1476,9 @@
     "semantic_hash": ""
   },
   "ui/src/reader/reader.spec.ts": {
-    "mtime": 1795037678.263258,
-    "seen": 1795038020.0377257,
-    "ast_hash": "636186f0f7f9fac66260a717fdce90c8",
+    "mtime": 1795038581.765008,
+    "seen": 1795038636.3482397,
+    "ast_hash": "114146e9f540a4fe9b7ab84640a1ed01",
     "semantic_hash": ""
   },
   "ui/src/reader/render.ts": {
@@ -1488,9 +1488,9 @@
     "semantic_hash": ""
   },
   "ui/src/reader/tree.ts": {
-    "mtime": 1795037646.670315,
-    "seen": 1795038020.0378752,
-    "ast_hash": "f0f517fcc6573942cab4f6fbfed658bc",
+    "mtime": 1795038567.5830917,
+    "seen": 1795038636.348376,
+    "ast_hash": "854c285624cf7247c1f0b028ed9bf2dc",
     "semantic_hash": ""
   },
   "ui/src/reader/vault.ts": {
@@ -2019,6 +2019,12 @@
     "mtime": 1795038337.630267,
     "seen": 1795038385.7064672,
     "ast_hash": "36cc6a0779aa834355e36df409bb9bb1",
+    "semantic_hash": ""
+  },
+  "ui/src/reader/folder-tree.spec.ts": {
+    "mtime": 1795038581.7600079,
+    "seen": 1795038636.3482382,
+    "ast_hash": "fc0e9086c6bd2869d99fa471c973fe0c",
     "semantic_hash": ""
   },
   "plugin/pnpm-lock.yaml": {

@@ -8,7 +8,14 @@ import { parseRecords } from "./content";
 import NoteFrame from "./NoteFrame.vue";
 import { ENTRY_LINK, frameDocument, MAX_IMAGE, renderNote } from "./render";
 import { ago, day } from "./time";
-import { buildTree, foldersOf, noteName, notesInOrder, resolver } from "./tree";
+import {
+  buildTree,
+  folderNote,
+  foldersOf,
+  noteName,
+  notesInOrder,
+  resolver,
+} from "./tree";
 
 const entry = (path: string, id = path, size = 10): EntryState => ({
   entry: id,
@@ -64,6 +71,20 @@ describe("tree", () => {
       "map",
       "s11",
     ]);
+  });
+
+  it("finds a folder's own note by the folder's name, Markdown only", () => {
+    const tree = buildTree([
+      entry("Golem/Golem.md", "g"),
+      entry("Golem/Golem.png", "gp"),
+      entry("Golem/Notes.md", "n"),
+      entry("Runes/runes.md", "r"),
+      entry("Assets/Assets.png", "a"),
+    ]);
+    const [assets, golem, runes] = tree.folders;
+    expect(golem && folderNote(golem)?.entry).toBe("g");
+    expect(runes && folderNote(runes)).toBeUndefined();
+    expect(assets && folderNote(assets)).toBeUndefined();
   });
 
   it("orders notes as the tree shows them, and names the folders on a path", () => {

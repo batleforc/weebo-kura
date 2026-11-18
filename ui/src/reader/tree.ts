@@ -51,6 +51,14 @@ export function noteName(path: string): string {
   return (path.split("/").pop() ?? path).replace(/\.md$/i, "");
 }
 
+/** A folder's own note, as Obsidian's "folder notes" name it: the Markdown
+ * note inside it with the folder's name (`Golem/Golem.md`). */
+export function folderNote(f: Folder): EntryState | undefined {
+  return f.notes.find(
+    (n) => /\.md$/i.test(n.path) && noteName(n.path) === f.name,
+  );
+}
+
 /**
  * Resolves a link target against the entries the caller was listed, never
  * against the server: a hidden target is indistinguishable from a missing
