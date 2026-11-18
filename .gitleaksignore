@@ -1,0 +1,3 @@
+# Findings that are not secrets, by fingerprint (history cannot be rewritten).
+# RFC 0004 §4.5 mock: `KURA_TOKEN=kura_01JD3K7Q..._v7cX...`, a placeholder with ellipses.
+a4d3ddd6ed03d6747764df3d816d49c152c1d184:docs/RFC/rfc0004-scoped-token-folders-and-write.md:generic-api-key:264
