@@ -91,6 +91,12 @@ export const routes: RouteRecordRaw[] = [
         meta: { access: "member" },
       },
       {
+        path: "config",
+        name: "vault-config",
+        component: () => import("@/pages/ConfigPage.vue"),
+        meta: { access: "member" },
+      },
+      {
         path: "access",
         name: "vault-access",
         component: () => import("@/pages/AccessPage.vue"),

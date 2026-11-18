@@ -75,7 +75,14 @@ import VaultOverview from "./VaultOverview.vue";
 async function open(role: string, tenantRole = "member") {
   vi.mocked(sdk.listVaults).mockResolvedValue({
     data: [
-      { id: "v1", name: "notes", tenant: "dev", role, managedBy: "config" },
+      {
+        id: "v1",
+        name: "notes",
+        tenant: "dev",
+        role,
+        managedBy: "config",
+        configSync: [],
+      },
     ],
   } as never);
   vi.mocked(sdk.me).mockResolvedValue({

@@ -113,6 +113,7 @@ describe("my vaults", () => {
             tenant: "jdr",
             role: "viewer",
             managedBy: "config",
+            configSync: [],
           },
         ],
       } as never);
@@ -179,6 +180,7 @@ describe("my devices", () => {
           tenant: "dev",
           role: "viewer",
           managedBy: "config",
+          configSync: [],
         },
       ],
     } as never);
@@ -276,8 +278,20 @@ describe("shell", () => {
   it("folds each vault's sections under it, the open one unfolded, the manager's tabs for a tenant admin", async () => {
     vi.mocked(sdk.listVaults).mockResolvedValue({
       data: [
-        { id: "v1", name: "campagne", tenant: "jdr", role: "viewer" },
-        { id: "v2", name: "archives", tenant: "jdr", role: "viewer" },
+        {
+          id: "v1",
+          name: "campagne",
+          tenant: "jdr",
+          role: "viewer",
+          configSync: [],
+        },
+        {
+          id: "v2",
+          name: "archives",
+          tenant: "jdr",
+          role: "viewer",
+          configSync: [],
+        },
       ],
     } as never);
     const { wrapper, router } = await shell({

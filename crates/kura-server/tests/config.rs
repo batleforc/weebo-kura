@@ -397,3 +397,229 @@ async fn configuration_writes_last_wins_without_conflict_files() {
         .await;
     assert_eq!(st, StatusCode::NOT_FOUND, "nobody else's");
 }
+
+impl S {
+    async fn get(&self, d: &D, uri: &str) -> (StatusCode, Value) {
+        self.e
+            .call(
+                "GET",
+                &format!("/v1/vaults/{}/{uri}", self.v),
+                &d.tok,
+                Some(&d.id),
+                None,
+            )
+            .await
+    }
+
+    /// The `entries` items of a space, by path.
+    async fn listed(&self, d: &D, query: &str) -> std::collections::BTreeMap<String, Value> {
+        let (st, b) = self.get(d, &format!("entries?{query}")).await;
+        assert_eq!(st, StatusCode::OK, "{query}: {b}");
+        b["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| (i["path"].as_str().unwrap().to_owned(), i.clone()))
+            .collect()
+    }
+}
+
+/// RFC 0008 T1, T2, T4, T6: the console lists its owner's configuration by
+/// profile, reads what holds no secret, is never given a hidden file's hash
+/// or content, and writes nothing.
+#[tokio::test]
+async fn a_web_device_lists_and_reads_only_what_holds_no_secret() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    let (desk, web, phone) = (
+        s.device("u1", "desktop").await,
+        s.device("u1", "web").await,
+        s.device("u1", "mobile").await,
+    );
+    let secret = format!("{{\"token\":\"s3cret-{}\"}}", Uuid::new_v4());
+    let (snippet, data) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
+    for (entry, path, text) in [
+        (snippet.as_str(), "snippets/wide.css", ".x{}"),
+        (data.as_str(), "plugins/dataview/data.json", secret.as_str()),
+        (
+            &Uuid::now_v7().to_string(),
+            "plugins/dataview/manifest.json",
+            "{\"name\":\"Dataview\"}",
+        ),
+    ] {
+        let (st, r) = s.put(&desk, entry, path, text, None).await;
+        assert_eq!(st, StatusCode::OK, "{path}: {r}");
+    }
+    let data_blob = blob_hash(secret.len() as u64, &[ChunkHash::of(secret.as_bytes())]).to_string();
+    let data_chunk = ChunkHash::of(secret.as_bytes()).to_string();
+
+    // Listed by profile, the hidden file without its hash.
+    let items = s.listed(&web, "space=config&profile=desktop").await;
+    assert_eq!(items.len(), 3, "{items:?}");
+    assert!(items["snippets/wide.css"]["blob"].is_string());
+    assert!(items["plugins/dataview/manifest.json"]["blob"].is_string());
+    assert!(items["plugins/dataview/data.json"].get("blob").is_none());
+    assert!(
+        s.listed(&web, "space=config&profile=mobile")
+            .await
+            .is_empty()
+    );
+    for (q, want) in [
+        ("entries?space=config", StatusCode::BAD_REQUEST),
+        (
+            "entries?space=config&profile=tablet",
+            StatusCode::BAD_REQUEST,
+        ),
+        ("entries?space=config&profile=web", StatusCode::BAD_REQUEST),
+        ("changes?since=0&space=config", StatusCode::FORBIDDEN),
+    ] {
+        assert_eq!(s.get(&web, q).await.0, want, "{q}");
+    }
+    // T6: an Obsidian device names its own profile only.
+    assert_eq!(
+        s.listed(&desk, "space=config&profile=desktop").await.len(),
+        3
+    );
+    assert_eq!(
+        s.get(&desk, "entries?space=config&profile=mobile").await.0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // T2: content of the viewable file only; the hidden one as a random hash.
+    let snippet_blob = items["snippets/wide.css"]["blob"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        s.get(&web, &format!("blobs/{snippet_blob}")).await.0,
+        StatusCode::OK
+    );
+    let hidden = s.get(&web, &format!("blobs/{data_blob}")).await;
+    let random = s.get(&web, &format!("blobs/{}", "ab".repeat(32))).await;
+    assert_eq!(hidden, random, "a hidden file reads as an unknown hash");
+    assert_eq!(hidden.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        s.get(&web, &format!("chunks/{data_chunk}")).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        s.get(&desk, &format!("blobs/{data_blob}")).await.0,
+        StatusCode::OK
+    );
+    let (st, batch) =
+        s.e.call(
+            "POST",
+            &format!("/v1/vaults/{}/blobs/batch", s.v),
+            &web.tok,
+            Some(&web.id),
+            Some(json!({ "blobs": [data_blob, snippet_blob] })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK, "{batch}");
+    // Missing, as an unknown hash; only the viewable file has a manifest.
+    assert_eq!(batch["missing"], json!([data_blob]), "{batch}");
+    assert_eq!(
+        batch["manifests"][0]["hash"],
+        json!(snippet_blob),
+        "{batch}"
+    );
+    let req = Request::post(format!("/v1/vaults/{}/chunks/batch", s.v))
+        .header("authorization", format!("Bearer {}", web.tok))
+        .header("x-kura-device", &web.id)
+        .header("content-type", "application/json")
+        .body(Body::from(json!({ "chunks": [data_chunk] }).to_string()))
+        .unwrap();
+    let r = app(s.e.state.clone()).oneshot(req).await.unwrap();
+    let records = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+    assert_eq!(
+        records[32..],
+        [1, 0, 0, 0, 0],
+        "a hidden chunk reads as missing"
+    );
+
+    // History: the hidden file's revisions carry no hash for the console.
+    let (_, revs) = s.get(&web, &format!("entries/{data}/revisions")).await;
+    assert!(
+        revs["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i.get("blob").is_none()),
+        "{revs}"
+    );
+    let (_, revs) = s.get(&web, &format!("entries/{snippet}/revisions")).await;
+    assert!(revs["items"][0]["blob"].is_string(), "{revs}");
+    let (_, revs) = s.get(&desk, &format!("entries/{data}/revisions")).await;
+    assert!(
+        revs["items"][0]["blob"].is_string(),
+        "the owner's device keeps it"
+    );
+
+    // T3, T4: no content write from the console, not even a note on the hash.
+    let size = secret.len() as u64;
+    let note = json!([{ "op": "put", "entry": Uuid::now_v7().to_string(), "path": "leak.md", "blob": data_blob, "size": size }]);
+    let (st, b) = s.commit(&web, None, note).await;
+    assert_eq!(
+        (st, problem(&b)),
+        (StatusCode::FORBIDDEN, "/v1/problems/insufficient_role"),
+        "{b}"
+    );
+    let (_, revs) = s.get(&desk, &format!("entries/{snippet}/revisions")).await;
+    let first = revs["items"][0]["revision"].as_str().unwrap().to_owned();
+    for d in [&web, &phone] {
+        let (st, b) =
+            s.e.call(
+                "POST",
+                &format!("/v1/vaults/{}/entries/{snippet}/restore", s.v),
+                &d.tok,
+                Some(&d.id),
+                Some(json!({ "revision": first })),
+            )
+            .await;
+        assert_eq!(st, StatusCode::FORBIDDEN, "restore refused: {b}");
+    }
+    let chunk = ChunkHash::of(b"x").to_string();
+    let req = Request::put(format!("/v1/vaults/{}/chunks/{chunk}", s.v))
+        .header("authorization", format!("Bearer {}", web.tok))
+        .header("x-kura-device", &web.id)
+        .body(Body::from(b"x".to_vec()))
+        .unwrap();
+    assert_eq!(
+        app(s.e.state.clone()).oneshot(req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+
+    // T1: another member's console sees none of it.
+    let other = s.device("u2", "web").await;
+    assert!(
+        s.listed(&other, "space=config&profile=desktop")
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        s.get(&other, &format!("blobs/{snippet_blob}")).await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+/// RFC 0008 §5.2: hidden revisions sharing a note's bytes never crowd the
+/// note out of the 200-row window the content check reads.
+#[tokio::test]
+async fn a_note_sharing_bytes_with_hidden_configuration_stays_readable() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    let (desk, web) = (s.device("u1", "desktop").await, s.device("u1", "web").await);
+    let (b, size) = s.upload(&desk, b"{}").await;
+    let ops: Vec<Value> = (0..201)
+        .map(|i| json!({ "op": "put", "entry": Uuid::now_v7().to_string(), "path": format!("plugins/p{i}/data.json"), "blob": b, "size": size }))
+        .collect();
+    let (st, r) = s.commit(&desk, Some("config"), Value::Array(ops)).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let (st, r) = s
+        .commit(&desk, None, json!([{ "op": "put", "entry": Uuid::now_v7().to_string(), "path": "n.md", "blob": b, "size": size }]))
+        .await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(s.get(&web, &format!("blobs/{b}")).await.0, StatusCode::OK);
+}

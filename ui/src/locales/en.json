@@ -489,7 +489,8 @@
     "recent": "Changed last",
     "browse": "Browse the notes",
     "missing": "No vault here: it does not exist, or it is not open to you.",
-    "missingTitle": "Vault not found"
+    "missingTitle": "Vault not found",
+    "config": "Configuration"
   },
   "filter": {
     "label": "Filter",
@@ -529,5 +530,47 @@
     "ask": "Ask a manager of this vault, or an admin of its tenant.",
     "toVault": "Back to the vault",
     "toHome": "Back home"
+  },
+  "config": {
+    "intro": "Your Obsidian settings that sync with this vault. Only you see them.",
+    "profiles": "Device profile",
+    "profile": {
+      "desktop": "Desktop",
+      "mobile": "Mobile"
+    },
+    "syncedHere": "Synced here: {list}",
+    "notSyncedHere": "Not synced on this vault: {list}",
+    "category": {
+      "snippets": "Snippets",
+      "themes": "Themes",
+      "plugins": "Plugins",
+      "hotkeys": "Hotkeys"
+    },
+    "empty": "Nothing synced from this profile yet. Open the vault in Obsidian with the Kura plugin on a computer (Desktop) or a phone or tablet (Mobile) to sync its settings.",
+    "failed": "Could not load your configuration",
+    "notShown": {
+      "code": "code, not shown",
+      "settings": "settings, not shown",
+      "other": "not shown"
+    },
+    "hidden": {
+      "code": "A plugin's code is not shown in a browser.",
+      "settings": "A plugin's settings can hold its passwords or API keys: they stay on your devices and are never shown in a browser.",
+      "other": "This file is not shown in a browser."
+    },
+    "whyHidden": "A plugin's settings can hold its passwords or API keys: they stay on your devices and are never shown in a browser.",
+    "manifest": {
+      "missing": "its manifest is not synced",
+      "tooLarge": "its manifest is too large to read",
+      "unreadable": "its manifest could not be read"
+    },
+    "back": "◂ Back to the list",
+    "gone": "This file is no longer synced on this profile.",
+    "tooLarge": "Too large to show here ({size}; the limit is {max}).",
+    "unreadable": "This file could not be read.",
+    "lastEdited": "Last edited {date}",
+    "lastEditedBy": "Last edited {date} by {who}",
+    "notSynced": "This vault does not sync Obsidian settings.",
+    "notForYou": "This page is not available to you."
   }
 }

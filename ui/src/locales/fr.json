@@ -489,7 +489,8 @@
     "recent": "Modifié en dernier",
     "browse": "Parcourir les notes",
     "missing": "Aucun coffre ici : il n'existe pas, ou il ne vous est pas ouvert.",
-    "missingTitle": "Coffre introuvable"
+    "missingTitle": "Coffre introuvable",
+    "config": "Configuration"
   },
   "filter": {
     "label": "Filtrer",
@@ -529,5 +530,47 @@
     "ask": "Demandez à un gestionnaire de ce coffre, ou à un administrateur de son tenant.",
     "toVault": "Retour au coffre",
     "toHome": "Retour à l'accueil"
+  },
+  "config": {
+    "intro": "Vos réglages Obsidian synchronisés avec ce coffre. Vous seul les voyez.",
+    "profiles": "Profil d'appareil",
+    "profile": {
+      "desktop": "Ordinateur",
+      "mobile": "Mobile"
+    },
+    "syncedHere": "Synchronisé ici : {list}",
+    "notSyncedHere": "Non synchronisé sur ce coffre : {list}",
+    "category": {
+      "snippets": "Snippets",
+      "themes": "Thèmes",
+      "plugins": "Plugins",
+      "hotkeys": "Raccourcis"
+    },
+    "empty": "Rien n'a encore été synchronisé depuis ce profil. Ouvrez le coffre dans Obsidian avec le plugin Kura sur un ordinateur (Ordinateur) ou un téléphone ou une tablette (Mobile) pour synchroniser ses réglages.",
+    "failed": "Impossible de charger votre configuration",
+    "notShown": {
+      "code": "code, non affiché",
+      "settings": "réglages, non affichés",
+      "other": "non affiché"
+    },
+    "hidden": {
+      "code": "Le code d'un plugin n'est pas affiché dans un navigateur.",
+      "settings": "Les réglages d'un plugin peuvent contenir ses mots de passe ou clés d'API : ils restent sur vos appareils et ne sont jamais affichés dans un navigateur.",
+      "other": "Ce fichier n'est pas affiché dans un navigateur."
+    },
+    "whyHidden": "Les réglages d'un plugin peuvent contenir ses mots de passe ou clés d'API : ils restent sur vos appareils et ne sont jamais affichés dans un navigateur.",
+    "manifest": {
+      "missing": "son manifeste n'est pas synchronisé",
+      "tooLarge": "son manifeste est trop gros pour être lu",
+      "unreadable": "son manifeste n'a pas pu être lu"
+    },
+    "back": "◂ Retour à la liste",
+    "gone": "Ce fichier n'est plus synchronisé sur ce profil.",
+    "tooLarge": "Trop gros pour être affiché ici ({size} ; la limite est de {max}).",
+    "unreadable": "Ce fichier n'a pas pu être lu.",
+    "lastEdited": "Modifié le {date}",
+    "lastEditedBy": "Modifié le {date} par {who}",
+    "notSynced": "Ce coffre ne synchronise pas les réglages Obsidian.",
+    "notForYou": "Cette page ne vous est pas accessible."
   }
 }

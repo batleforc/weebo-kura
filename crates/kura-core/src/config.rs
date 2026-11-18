@@ -38,6 +38,36 @@ pub fn plugin_of(path: &str) -> Option<(String, bool)> {
     Some((id.to_owned(), file == "main.js"))
 }
 
+/// Whether a browser may be shown this file (RFC 0008 §4.2): a synced file
+/// that cannot hold a secret. A plugin's settings (`data.json`) and code
+/// (`main.js`), and anything not named here, are hidden.
+pub fn viewable(path: &str) -> bool {
+    if category(path).is_none() {
+        return false;
+    }
+    let path = path.to_lowercase();
+    let parts: Vec<&str> = path.split('/').collect();
+    match parts.as_slice() {
+        ["hotkeys.json"] => true,
+        ["snippets", .., last] => last.ends_with(".css"),
+        ["themes", _, file] => matches!(*file, "theme.css" | "manifest.json"),
+        ["plugins", _, file] => matches!(*file, "manifest.json" | "styles.css"),
+        _ => false,
+    }
+}
+
+/// [`viewable`] as `LIKE` patterns over the lower-cased path: a superset of
+/// it (`%` crosses folders), for a query to narrow its rows before
+/// [`viewable`] decides.
+pub const VIEWABLE_LIKE: [&str; 6] = [
+    "hotkeys.json",
+    "snippets/%.css",
+    "themes/%/theme.css",
+    "themes/%/manifest.json",
+    "plugins/%/manifest.json",
+    "plugins/%/styles.css",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,5 +102,63 @@ mod tests {
         );
         assert!(!synced("plugins/WEEBO-KURA/data.json", &all));
         assert_eq!(plugin_of("snippets/a.css"), None);
+    }
+
+    #[test]
+    fn only_files_without_secrets_are_viewable() {
+        for yes in [
+            "hotkeys.json",
+            "snippets/wide.css",
+            "SNIPPETS/A/B.CSS",
+            "themes/Minimal/theme.css",
+            "themes/Minimal/manifest.json",
+            "plugins/dataview/manifest.json",
+            "plugins/dataview/styles.css",
+        ] {
+            assert!(viewable(yes), "{yes}");
+        }
+        for no in [
+            "plugins/dataview/data.json",
+            "plugins/dataview/main.js",
+            "Plugins/DV/MAIN.JS",
+            "plugins/weebo-kura/manifest.json",
+            "plugins/dataview/sub/manifest.json",
+            "themes/x/other.json",
+            "themes/x/sub/theme.css",
+            "snippets/notes.txt",
+            "app.json",
+            "community-plugins.json",
+        ] {
+            assert!(!viewable(no), "{no}");
+        }
+    }
+
+    /// The `LIKE` patterns never drop a viewable path (they may keep more).
+    #[test]
+    fn like_patterns_cover_viewable() {
+        let like = |pattern: &str, path: &str| {
+            let (head, tail) = pattern.split_once('%').unwrap_or((pattern, ""));
+            match tail.split_once('%') {
+                None if pattern.contains('%') => {
+                    path.starts_with(head)
+                        && path.ends_with(tail)
+                        && path.len() >= head.len() + tail.len()
+                }
+                None => path == pattern,
+                Some(_) => false,
+            }
+        };
+        for path in [
+            "hotkeys.json",
+            "snippets/wide.css",
+            "snippets/a/b.css",
+            "themes/minimal/theme.css",
+            "themes/minimal/manifest.json",
+            "plugins/dataview/manifest.json",
+            "plugins/dataview/styles.css",
+        ] {
+            assert!(viewable(path));
+            assert!(VIEWABLE_LIKE.iter().any(|p| like(p, path)), "{path}");
+        }
     }
 }

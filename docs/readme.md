@@ -19,6 +19,7 @@ Every project keeps its documentation here, either as plain markdown or as a
 | [0005](RFC/rfc0005-folder-restricted-viewers.md) | Folder-restricted viewers and the web reader | Implemented ([implementation plan](RFC/rfc0005-implementation-plan.md)) | How people without Obsidian read and search the folders of a vault that a manager opens to them, and nothing else |
 | [0006](RFC/rfc0006-device-sync-state.md) | Sync state per device and per vault | Implemented | How the console shows, for one vault, which devices sync it, when each last caught up, and how far behind it is |
 | [0007](RFC/rfc0007-folder-entries.md) | Folders as synced entries | Implemented | How a folder, empty or not, reaches every device and the console: created, renamed and removed like a note |
+| [0008](RFC/rfc0008-console-config-view.md) | The synced Obsidian configuration in the console | Implemented | How a member sees, from a browser, which Obsidian configuration files sync for them, per device profile, and reads the ones that hold no secret |
 
 ### Planned
 

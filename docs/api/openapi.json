@@ -2290,6 +2290,15 @@
             }
           },
           {
+            "name": "profile",
+            "in": "query",
+            "description": "With `space=config`: `desktop` or `mobile`. The console names one;\nan Obsidian device may name only its own (RFC 0008 §4.3).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "folders",
             "in": "query",
             "description": "Include folder entries (RFC 0007).",
@@ -2311,11 +2320,31 @@
         ],
         "responses": {
           "200": {
-            "description": "At most 1,000 entries; follow `next` for more",
+            "description": "At most 1,000 entries; follow `next` for more. To the console, a hidden configuration file has no `blob` (RFC 0008)",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ChangesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A `profile` missing, unknown, or not this device's own",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The configuration space for a scoped token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -2409,7 +2438,7 @@
             }
           },
           "403": {
-            "description": "Below editor",
+            "description": "Below editor; the console's device; or another profile's configuration (RFC 0008)",
             "content": {
               "application/problem+json": {
                 "schema": {

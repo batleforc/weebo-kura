@@ -4,13 +4,9 @@
 //! as registered, the owner the caller, and row-level security keeps every
 //! other user's configuration out of reach.
 
-use kura_api::spec::ConfigCategory;
-use uuid::Uuid;
-
-use super::SharedState;
 use crate::authz::VaultAccess;
-use crate::db;
 use crate::problem::{ApiError, ProblemType};
+use kura_api::spec::ConfigCategory;
 
 /// A resolved space.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,18 +56,30 @@ pub fn category(path: &str) -> Option<ConfigCategory> {
     }
 }
 
-/// The space a request names (`space=config`, else notes), for this device.
-pub async fn resolve(
-    state: &SharedState,
+/// What a request does in the space it names (RFC 0008 §5.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Use<'a> {
+    /// `GET entries`: the console may list, naming a profile.
+    List { profile: Option<&'a str> },
+    /// `GET changes`: a device's sync only.
+    Changes,
+    /// A commit: a device's sync only.
+    Write,
+}
+
+/// The space a request names (`space=config`, else notes), for this
+/// device: `caller` is its subject and registered profile.
+pub fn resolve(
     asked: Option<&str>,
     a: &VaultAccess,
-    caller: Option<(&str, Uuid)>,
+    caller: Option<(&str, &str)>,
+    usage: Use<'_>,
 ) -> Result<Space, ApiError> {
     match asked {
         None | Some("notes") => Ok(Space::notes()),
         Some("config") => {
             // A scoped token never reads configuration (decision 34).
-            let Some((sub, device)) = caller else {
+            let Some((sub, device_profile)) = caller else {
                 return Err(ApiError::with_detail(
                     ProblemType::InsufficientRole,
                     "configuration is served to its owner's devices only",
@@ -83,20 +91,46 @@ pub async fn resolve(
                     "this vault does not sync the Obsidian configuration",
                 ));
             }
-            let mut tx = db::begin_subject(&state.db, sub).await?;
-            let profile: String = sqlx::query_scalar("SELECT profile FROM device WHERE id = $1")
-                .bind(device)
-                .fetch_optional(&mut *tx)
-                .await?
-                .ok_or(ApiError::of(ProblemType::DeviceUnknown))?;
-            tx.commit().await?;
-            // The console never holds an Obsidian configuration (RFC 0003 §6.2).
-            if profile == "web" {
+            let named = match usage {
+                Use::List { profile } => profile,
+                Use::Changes | Use::Write => None,
+            };
+            if let Some(p) = named
+                && !matches!(p, "desktop" | "mobile")
+            {
                 return Err(ApiError::with_detail(
-                    ProblemType::InsufficientRole,
-                    "configuration is served to Obsidian devices only",
+                    ProblemType::InvalidRequest,
+                    format!("profile: {p} is neither desktop nor mobile"),
                 ));
             }
+            let profile = if device_profile == "web" {
+                // The console lists, by a profile it names; it never follows
+                // or writes the configuration (RFC 0008 §5.1).
+                match (usage, named) {
+                    (Use::List { .. }, Some(p)) => p,
+                    (Use::List { .. }, None) => {
+                        return Err(ApiError::with_detail(
+                            ProblemType::InvalidRequest,
+                            "profile: the console names desktop or mobile",
+                        ));
+                    }
+                    (Use::Changes | Use::Write, _) => {
+                        return Err(ApiError::with_detail(
+                            ProblemType::InsufficientRole,
+                            "configuration is served to Obsidian devices only",
+                        ));
+                    }
+                }
+            } else {
+                // An Obsidian device reads its own profile only.
+                if named.is_some_and(|p| p != device_profile) {
+                    return Err(ApiError::with_detail(
+                        ProblemType::InvalidRequest,
+                        "profile: a device reads its own profile only",
+                    ));
+                }
+                device_profile
+            };
             Ok(Space {
                 namespace: format!("config:{profile}"),
                 owner: Some(sub.to_owned()),

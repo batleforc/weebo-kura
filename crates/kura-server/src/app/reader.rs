@@ -46,11 +46,22 @@ pub struct ReadAccess {
     /// The signed-in user, whose own configuration is visible (§6.8); none
     /// for a scoped token.
     pub subject: Option<String>,
+    /// The console's device: of the configuration, it sees only what
+    /// [`kura_core::config::viewable`] allows (RFC 0008 §5.2).
+    pub web: bool,
 }
 
 impl ReadAccess {
     pub fn sees(&self, path: &str) -> bool {
         self.scope.sees(path)
+    }
+
+    /// Whether this caller may be given the content (or its hash) of a
+    /// revision at `path` of an entry now at `head` in `namespace`.
+    pub fn sees_content_of(&self, namespace: &str, path: &str, head: &str) -> bool {
+        namespace == "notes"
+            || !self.web
+            || (kura_core::config::viewable(path) && kura_core::config::viewable(head))
     }
 
     /// T16: a token under a prefix gets a blob (`chunk` false) or a chunk
@@ -84,17 +95,27 @@ impl ReadAccess {
         // per-hash `LATERAL … LIMIT 200`: with a new vault's stale statistics
         // its nested loops scanned every revision per hash and passed the 5 s
         // statement timeout (RFC 0002 plan D4).
+        // RFC 0008 §5.2: for the console, hidden configuration rows are
+        // dropped before the 200-row window (a superset by `LIKE`, decided
+        // exactly below), and notes rows come first in it, so rows that may
+        // never serve cannot crowd out one that should.
         let sql = if chunk {
             "WITH c AS (SELECT DISTINCT chunk_hash, blob_hash FROM blob_chunk WHERE vault_id = $1 AND chunk_hash = ANY($2)),
-             x AS (SELECT c.chunk_hash AS h, r.path, e.path AS head, row_number() OVER (PARTITION BY c.chunk_hash) AS n
+             x AS (SELECT c.chunk_hash AS h, r.path, e.path AS head, e.namespace AS ns,
+                          row_number() OVER (PARTITION BY c.chunk_hash ORDER BY (e.namespace = 'notes') DESC) AS n
                    FROM c JOIN revision r ON r.vault_id = $1 AND r.blob_hash = c.blob_hash
-                   JOIN entry e ON e.vault_id = r.vault_id AND e.id = r.entry_id)
-             SELECT h, path, head FROM x WHERE n <= 200"
+                   JOIN entry e ON e.vault_id = r.vault_id AND e.id = r.entry_id
+                   WHERE NOT $3 OR e.namespace = 'notes'
+                      OR (lower(r.path) LIKE ANY($4) AND lower(e.path) LIKE ANY($4)))
+             SELECT h, path, head, ns FROM x WHERE n <= 200"
         } else {
-            "WITH x AS (SELECT r.blob_hash AS h, r.path, e.path AS head, row_number() OVER (PARTITION BY r.blob_hash) AS n
+            "WITH x AS (SELECT r.blob_hash AS h, r.path, e.path AS head, e.namespace AS ns,
+                          row_number() OVER (PARTITION BY r.blob_hash ORDER BY (e.namespace = 'notes') DESC) AS n
                    FROM revision r JOIN entry e ON e.vault_id = r.vault_id AND e.id = r.entry_id
-                   WHERE r.vault_id = $1 AND r.blob_hash = ANY($2))
-             SELECT h, path, head FROM x WHERE n <= 200"
+                   WHERE r.vault_id = $1 AND r.blob_hash = ANY($2)
+                     AND (NOT $3 OR e.namespace = 'notes'
+                          OR (lower(r.path) LIKE ANY($4) AND lower(e.path) LIKE ANY($4))))
+             SELECT h, path, head, ns FROM x WHERE n <= 200"
         };
         let raw: Vec<Vec<u8>> = hashes.iter().map(|h| h.as_bytes().to_vec()).collect();
         // Under the caller's subject: another user's configuration is out of
@@ -104,15 +125,22 @@ impl ReadAccess {
         let rows = sqlx::query(sql)
             .bind(self.access.vault)
             .bind(&raw)
+            .bind(self.web)
+            .bind(&kura_core::config::VIEWABLE_LIKE[..])
             .fetch_all(&mut *tx)
             .await?;
         tx.commit().await?;
         let mut out = std::collections::HashSet::new();
         for r in &rows {
-            let (h, path, head): (Vec<u8>, String, String) =
-                (r.try_get("h")?, r.try_get("path")?, r.try_get("head")?);
+            let (h, path, head, ns): (Vec<u8>, String, String, String) = (
+                r.try_get("h")?,
+                r.try_get("path")?,
+                r.try_get("head")?,
+                r.try_get("ns")?,
+            );
             if self.sees(&path)
                 && self.sees(&head)
+                && self.sees_content_of(&ns, &path, &head)
                 && let Ok(b) = <[u8; 32]>::try_from(h.as_slice())
             {
                 out.insert(kura_core::ChunkHash::from_bytes(b));
@@ -177,10 +205,21 @@ impl FromRequestParts<SharedState> for Writer {
         state: &SharedState,
     ) -> Result<Self, Self::Rejection> {
         Ok(match Reader::from_request_parts(parts, state).await? {
+            // The console writes no content (RFC 0008 §5.1): refused here, so
+            // a write route added later refuses it too.
+            Reader::Device(d) if d.is_web() => return Err(console_writes_nothing()),
             Reader::Device(d) => Self::Device(d),
             Reader::Key(k) => Self::Key(k),
         })
     }
+}
+
+/// The refusal of any content write from the console's device.
+pub fn console_writes_nothing() -> ApiError {
+    ApiError::with_detail(
+        ProblemType::InsufficientRole,
+        "the console does not write content",
+    )
 }
 
 /// The detail of every possession refusal, whether the content exists
@@ -272,6 +311,7 @@ impl KeyCaller {
             access: a.clone(),
             scope: self.scope.clone(),
             subject: None,
+            web: false,
         };
         let mut known = ra.sees_contents(state, hashes, chunk).await?;
         let raw: Vec<Vec<u8>> = hashes.iter().map(|h| h.as_bytes().to_vec()).collect();
@@ -487,6 +527,7 @@ impl Reader {
                     scope: access.scope.clone(),
                     access,
                     subject: Some(d.caller.principal.sub.clone()),
+                    web: d.is_web(),
                 })
             }
             Self::Key(k) => {
@@ -506,8 +547,17 @@ impl Reader {
                     access,
                     scope: k.scope.clone(),
                     subject: None,
+                    web: false,
                 })
             }
+        }
+    }
+
+    /// A signed-in device's registered profile; `None` for a scoped token.
+    pub fn profile(&self) -> Option<&str> {
+        match self {
+            Self::Device(d) => Some(&d.profile),
+            Self::Key(_) => None,
         }
     }
 

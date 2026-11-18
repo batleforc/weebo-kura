@@ -50,6 +50,11 @@ export function sectionsOf(
   return [
     { name: "vault", to: base, label: "vault.overview" },
     { name: "vault-notes", to: `${base}/notes`, label: "vault.notes" },
+    // RFC 0008: every member's own settings, when the vault syncs them; a
+    // restricted viewer's scope never holds them.
+    ...(v.configSync.length > 0 && !v.paths
+      ? [{ name: "vault-config", to: `${base}/config`, label: "vault.config" }]
+      : []),
     ...(manages
       ? [
           {
@@ -71,7 +76,14 @@ export function sectionsOf(
 /** The section a route belongs to: a note, its history and search are Notes. */
 export function sectionOf(routeName: unknown): string {
   const name = String(routeName ?? "");
-  if (["vault-access", "vault-keys", "vault-notifications"].includes(name))
+  if (
+    [
+      "vault-config",
+      "vault-access",
+      "vault-keys",
+      "vault-notifications",
+    ].includes(name)
+  )
     return name;
   return name === "vault" ? "vault" : "vault-notes";
 }

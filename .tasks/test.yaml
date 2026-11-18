@@ -11,6 +11,7 @@ tasks:
       - tests/heavy/console.sh
       - tests/heavy/notify.sh
       - tests/heavy/devices.sh
+      - tests/heavy/config-view.sh
 
   test:
     desc: "Run every unit and integration test (tests needing PostgreSQL skip loudly unless KURA_TEST_DATABASE_URL is set, see task dev:up)"

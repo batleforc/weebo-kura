@@ -653,6 +653,10 @@ creation and now points inside is refused at send time.**
 
 ### 6.2 Sign-in and the web device
 
+> Amended by [RFC 0008](rfc0008-console-config-view.md): the web device
+> lists and reads its owner's configuration (never a plugin's settings or
+> code), and writes no content at all.
+
 - The browser is a public client using the authorization code flow with
   PKCE, written on Web Crypto after `weebo-notify-v2`'s `web/src/auth/pkce.ts`
   and its spec file [R30], with no OIDC library (decision 6). It asks for

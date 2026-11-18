@@ -16,6 +16,7 @@ vi.mock("@/api/generated/sdk.gen", () => ({
         tenant: "dev",
         role: "editor",
         managedBy: "config",
+        configSync: [],
       },
       {
         id: "v2",
@@ -23,6 +24,7 @@ vi.mock("@/api/generated/sdk.gen", () => ({
         tenant: "jdr",
         role: "viewer",
         managedBy: "config",
+        configSync: [],
         paths: ["Sessions/"],
       },
     ],

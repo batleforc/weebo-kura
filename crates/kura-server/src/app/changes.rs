@@ -16,6 +16,7 @@ use uuid::Uuid;
 use super::SharedState;
 use super::commits::{head_from_row, head_select};
 use super::reader::Reader;
+use super::space::Use;
 use crate::db;
 use crate::problem::{ApiError, Problem, ProblemType};
 
@@ -48,6 +49,9 @@ pub struct EntriesQuery {
     pub after: Option<Uuid>,
     /// `config`: the caller's own Obsidian configuration (§6.8).
     pub space: Option<String>,
+    /// With `space=config`: `desktop` or `mobile`. The console names one;
+    /// an Obsidian device may name only its own (RFC 0008 §4.3).
+    pub profile: Option<String>,
     /// Include folder entries (RFC 0007).
     #[serde(default)]
     pub folders: bool,
@@ -71,6 +75,7 @@ async fn open(
     reader: &Reader,
     v: Uuid,
     space: Option<&str>,
+    usage: Use<'_>,
 ) -> Result<
     (
         sqlx::Transaction<'static, sqlx::Postgres>,
@@ -83,7 +88,11 @@ async fn open(
 > {
     let ra = reader.access(state, v, VaultRole::Viewer).await?;
     // The notes, or the caller's own configuration (never a key's, §6.8).
-    let space = super::space::resolve(state, space, &ra.access, reader.device()).await?;
+    let caller = reader
+        .device()
+        .zip(reader.profile())
+        .map(|((sub, _), p)| (sub, p));
+    let space = super::space::resolve(space, &ra.access, caller, usage)?;
     let mut tx = db::begin_tenant_snapshot(&state.db, ra.access.tenant, &reader.subject()).await?;
     let row = sqlx::query("SELECT epoch, head_seq, horizon_seq FROM vault WHERE id = $1")
         .bind(v)
@@ -146,7 +155,8 @@ pub async fn get_changes(
 ) -> Result<Json<ChangesResponse>, ApiError> {
     let q = query(q)?;
     let since = i64::try_from(q.since).map_err(|_| ApiError::of(ProblemType::HistoryRewound))?;
-    let (mut tx, head, under, ns, tenant) = open(&state, &reader, v, q.space.as_deref()).await?;
+    let (mut tx, head, under, ns, tenant) =
+        open(&state, &reader, v, q.space.as_deref(), Use::Changes).await?;
     // The server lost history this device has seen (§6.3, decision 32).
     if q.epoch.is_some_and(|e| e != head.epoch) || since > head.head_seq {
         return Err(ApiError::of(ProblemType::HistoryRewound));
@@ -198,7 +208,9 @@ pub async fn get_changes(
     tag = "sync",
     params(("v" = Uuid, Path, description = "Vault id"), EntriesQuery, ("X-Kura-Device" = Uuid, Header, description = "This device")),
     responses(
-        (status = 200, description = "At most 1,000 entries; follow `next` for more", body = ChangesResponse),
+        (status = 200, description = "At most 1,000 entries; follow `next` for more. To the console, a hidden configuration file has no `blob` (RFC 0008)", body = ChangesResponse),
+        (status = 400, description = "A `profile` missing, unknown, or not this device's own", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "The configuration space for a scoped token", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "No such vault", body = Problem, content_type = "application/problem+json"),
     ),
     security(("bearer_token" = [])),
@@ -210,7 +222,16 @@ pub async fn get_entries(
     q: Result<Query<EntriesQuery>, QueryRejection>,
 ) -> Result<Json<ChangesResponse>, ApiError> {
     let q = query(q)?;
-    let (mut tx, head, under, ns, _) = open(&state, &reader, v, q.space.as_deref()).await?;
+    let (mut tx, head, under, ns, _) = open(
+        &state,
+        &reader,
+        v,
+        q.space.as_deref(),
+        Use::List {
+            profile: q.profile.as_deref(),
+        },
+    )
+    .await?;
     let rows = sqlx::query(concat!(
         head_select!(),
         " WHERE e.vault_id = $1 AND NOT e.deleted AND ($2::uuid IS NULL OR e.id > $2) AND (e.path_key LIKE ANY($4) OR (r.blob_hash IS NULL AND NOT e.deleted AND e.path_key || '/' LIKE ANY($4))) AND ($6 OR r.blob_hash IS NOT NULL OR e.deleted) AND e.namespace = $5 ORDER BY e.id LIMIT $3"
@@ -224,5 +245,14 @@ pub async fn get_entries(
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
-    Ok(Json(response(&head, &rows, |h| h.id.to_string())?))
+    let mut page = response(&head, &rows, |h| h.id.to_string())?;
+    // RFC 0008 §5.2: the console is not told a hidden file's hash.
+    if reader.profile() == Some("web") {
+        for item in &mut page.items {
+            if !kura_core::config::viewable(item.path.as_str()) && ns != "notes" {
+                item.blob = None;
+            }
+        }
+    }
+    Ok(Json(page))
 }

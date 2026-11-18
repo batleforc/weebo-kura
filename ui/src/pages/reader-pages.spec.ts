@@ -431,6 +431,7 @@ describe("reader gaps of RFC 0005 §18", () => {
             role: "viewer",
             paths: ["Sessions/", "Resumes/"],
             managedBy: "config",
+            configSync: [],
             updatedAt: new Date(Date.now() - 2 * 3_600_000).toISOString(),
           },
         ],

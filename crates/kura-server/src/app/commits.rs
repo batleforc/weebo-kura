@@ -377,16 +377,15 @@ pub async fn post_commit(
     })?;
     validate(&req)?;
     let space = super::space::resolve(
-        &state,
         req.space.as_deref(),
         &a,
         // A token has no device, so never the configuration space (§6.8).
         match &caller {
-            Writer::Device(d) => Some((d.caller.principal.sub.as_str(), d.device)),
+            Writer::Device(d) => Some((d.caller.principal.sub.as_str(), d.profile.as_str())),
             Writer::Key(_) => None,
         },
-    )
-    .await?;
+        super::space::Use::Write,
+    )?;
     for (i, op) in req.operations.iter().enumerate() {
         // Configuration categories are files only (RFC 0007 §4.3).
         if matches!(op, Operation::Folder { .. }) && space.is_config() {
@@ -1475,15 +1474,15 @@ pub async fn get_revisions(
         .map_or(i64::MAX, |b| i64::try_from(b).unwrap_or(i64::MAX));
     let mut tx = db::begin_tenant_snapshot(&state.db, ra.access.tenant, &reader.subject()).await?;
     // T16: an entry renamed out of a token's prefix disappears with its history.
-    let head: Option<String> =
-        sqlx::query_scalar("SELECT path FROM entry WHERE vault_id = $1 AND id = $2")
+    let head: Option<(String, String)> =
+        sqlx::query_as("SELECT path, namespace FROM entry WHERE vault_id = $1 AND id = $2")
             .bind(v)
             .bind(e)
             .fetch_optional(&mut *tx)
             .await?;
-    if !head.is_some_and(|p| ra.sees(&p)) {
+    let Some((head, namespace)) = head.filter(|(p, _)| ra.sees(p)) else {
         return Err(ApiError::of(ProblemType::NotFound));
-    }
+    };
     let rows = sqlx::query(
         "SELECT id, seq, path, deleted, blob_hash, size, created_at FROM revision
          WHERE vault_id = $1 AND entry_id = $2 AND seq < $3 ORDER BY seq DESC LIMIT $4",
@@ -1525,13 +1524,20 @@ pub async fn get_revisions(
         .map(|r| {
             let created: time::OffsetDateTime = r.try_get("created_at")?;
             let id: Uuid = r.try_get("id")?;
+            let path: String = r.try_get("path")?;
+            // RFC 0008 §5.2: the console is not told a hidden file's hash.
+            let blob = if ra.sees_content_of(&namespace, &path, &head) {
+                hash_of(r.try_get("blob_hash")?)?
+            } else {
+                None
+            };
             Ok(RevisionInfo {
                 author: authors.get(&id).cloned(),
                 revision: id,
                 seq: u64::try_from(r.try_get::<i64, _>("seq")?).unwrap_or_default(),
-                path: stored_path(&r.try_get::<String, _>("path")?)?,
+                path: stored_path(&path)?,
                 deleted: r.try_get("deleted")?,
-                blob: hash_of(r.try_get("blob_hash")?)?,
+                blob,
                 size: u64::try_from(r.try_get::<i64, _>("size")?).unwrap_or_default(),
                 created_at: created
                     .format(&time::format_description::well_known::Rfc3339)
@@ -1570,7 +1576,7 @@ pub struct RevisionsQuery {
     request_body = RestoreRequest,
     responses(
         (status = 200, description = "The entry's new head", body = OpResult),
-        (status = 403, description = "Below editor", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Below editor; the console's device; or another profile's configuration (RFC 0008)", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "No such vault, entry or revision", body = Problem, content_type = "application/problem+json"),
         (status = 400, description = "The revision is a deletion", body = Problem, content_type = "application/problem+json"),
     ),
@@ -1585,6 +1591,10 @@ pub async fn restore_revision(
     let snap = state
         .snapshot()
         .ok_or(ApiError::of(ProblemType::Unavailable))?;
+    // The console writes no content (RFC 0008 §5.1).
+    if caller.is_web() {
+        return Err(super::reader::console_writes_nothing());
+    }
     let p = &caller.caller.principal;
     let a = authz::require_role(&state.db, &snap, p, v, VaultRole::Editor).await?;
     let entry = EntryId::from_uuid(e).ok_or(ApiError::of(ProblemType::NotFound))?;
@@ -1598,6 +1608,13 @@ pub async fn restore_revision(
             .fetch_optional(&mut *tx)
             .await?
             .ok_or(ApiError::of(ProblemType::NotFound))?;
+    // A device rewrites its own profile's configuration only (RFC 0008 §4.3).
+    if namespace != "notes" && namespace != format!("config:{}", caller.profile) {
+        return Err(ApiError::with_detail(
+            ProblemType::InsufficientRole,
+            "a device restores its own profile's configuration only",
+        ));
+    }
     let rev = sqlx::query(
         "SELECT path, blob_hash, size FROM revision WHERE vault_id = $1 AND entry_id = $2 AND id = $3",
     )

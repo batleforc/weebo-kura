@@ -18,6 +18,16 @@ pub const DEVICE_HEADER: &str = "x-kura-device";
 pub struct DeviceCaller {
     pub caller: Caller,
     pub device: Uuid,
+    /// `desktop`, `mobile` or `web`, as registered.
+    pub profile: String,
+}
+
+impl DeviceCaller {
+    /// The console's device (RFC 0003 §6.2): it reads, and writes no
+    /// content (RFC 0008 §5.1).
+    pub fn is_web(&self) -> bool {
+        self.profile == "web"
+    }
 }
 
 impl FromRequestParts<SharedState> for DeviceCaller {
@@ -36,9 +46,13 @@ impl FromRequestParts<SharedState> for DeviceCaller {
             .and_then(|h| h.to_str().ok())
             .and_then(|h| Uuid::parse_str(h).ok())
             .ok_or(ApiError::of(ProblemType::DeviceUnknown))?;
-        require_device(state, &caller.principal, device).await?;
+        let profile = require_device(state, &caller.principal, device).await?;
         rate_limit(state, parts, &device.to_string())?;
-        Ok(Self { caller, device })
+        Ok(Self {
+            caller,
+            device,
+            profile,
+        })
     }
 }
 
@@ -66,18 +80,20 @@ pub fn require_session(p: &crate::auth::Principal) -> Result<(), ApiError> {
 /// Refuses a revoked device, and any device used with a token of a session
 /// whose device was revoked: otherwise a stolen refresh token would keep
 /// working through another of the user's device ids (decision 35, T2).
+/// Returns the device's profile, read in the same query (RFC 0008 §5.1).
 pub async fn require_device(
     state: &SharedState,
     p: &crate::auth::Principal,
     device: Uuid,
-) -> Result<(), ApiError> {
+) -> Result<String, ApiError> {
     require_session(p)?;
     let mut tx = db::begin_subject(&state.db, &p.sub).await?;
-    let row: Option<(Option<time::OffsetDateTime>, bool, bool)> = sqlx::query_as(
+    let row: Option<(Option<time::OffsetDateTime>, bool, bool, String)> = sqlx::query_as(
         "SELECT revoked_at,
                 EXISTS (SELECT 1 FROM device r WHERE r.revoked_at IS NOT NULL
                         AND (r.session_sid = $2 OR (r.user_sub = $4 AND r.session_auth_time = $3))),
-                signed_out_at IS NOT NULL
+                signed_out_at IS NOT NULL,
+                profile
          FROM device WHERE id = $1",
     )
     .bind(device)
@@ -89,11 +105,11 @@ pub async fn require_device(
     match row {
         // A signed-out web device is gone for this browser, nothing more
         // (RFC 0003 decision 24): unknown, not revoked.
-        None | Some((None, false, true)) => Err(ApiError::of(ProblemType::DeviceUnknown)),
-        Some((Some(_), _, _)) | Some((None, true, _)) => {
+        None | Some((None, false, true, _)) => Err(ApiError::of(ProblemType::DeviceUnknown)),
+        Some((Some(_), _, _, _)) | Some((None, true, _, _)) => {
             Err(ApiError::of(ProblemType::DeviceRevoked))
         }
-        Some((None, false, false)) => {
+        Some((None, false, false, profile)) => {
             // At most one write a minute per device; the tenant links follow the
             // caller's current memberships at the same pace.
             let touched = sqlx::query(
@@ -116,7 +132,7 @@ pub async fn require_device(
                     .await?;
             }
             tx.commit().await?;
-            Ok(())
+            Ok(profile)
         }
     }
 }

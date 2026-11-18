@@ -338,6 +338,16 @@ kept on the device. Plugin settings (`data.json`) and CSS apply without
 asking. `kura sync` syncs the desktop profile of a vault folder that has
 `.obsidian`.
 
+In the web console, each member sees their own synced configuration under
+the vault's **Configuration** page (RFC 0008), per profile: the files by
+category, plugins by the name and version of their manifest, and the text of
+the files that cannot hold a secret (snippets, theme CSS and manifests,
+plugin manifests and `styles.css`, `hotkeys.json`). A plugin's settings
+(`data.json`) and code (`main.js`) are listed, never shown: the server
+withholds their hashes and content from a browser. The console writes no
+content at all: a commit, an upload or a restore from its device answers
+`403`. A device restores configuration of its own profile only.
+
 ### Search
 
 Off unless the tenant sets `search: { enabled: true }` (decision 39): the
