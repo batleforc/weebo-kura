@@ -39,10 +39,10 @@ vi.mock("@/reader/events", () => ({
 import * as sdk from "@/api/generated/sdk.gen";
 import { useSession } from "@/auth/session";
 import { fileBytes } from "@/reader/content";
+import HistoryPanel from "@/reader/HistoryPanel.vue";
 import { MAX_RENDER } from "@/reader/render";
 import { MAX_PAGES } from "@/reader/vault";
 import BrowsePage from "./BrowsePage.vue";
-import HistoryPage from "./HistoryPage.vue";
 import HomePage from "./HomePage.vue";
 import SearchPage from "./SearchPage.vue";
 
@@ -110,6 +110,10 @@ async function mountAt(component: object, path: string, routePath: string) {
       { path: routePath, component },
       { path: "/vaults/:v", component: { template: "<p/>" } },
       { path: "/vaults/:v/notes/:entry", component: { template: "<p/>" } },
+      {
+        path: "/vaults/:v/notes/:entry/history",
+        component: { template: "<p/>" },
+      },
       { path: "/vaults/:v/search", component: { template: "<p/>" } },
       { path: "/vaults", component: { template: "<p/>" } },
     ],
@@ -230,6 +234,61 @@ describe("browse and read", () => {
     expect(wrapper.find("[role=alert]").text()).toContain(
       "could not be loaded",
     );
+  });
+});
+
+describe("reading like an app", () => {
+  it("opens the way to the note, turns the page, finds by name and shows the history beside it", async () => {
+    vi.mocked(sdk.getEntries).mockResolvedValue({
+      data: {
+        items: [
+          entry("Sessions/s11.md", "s11"),
+          entry("Sessions/s12.md", "s12"),
+          entry("Resumes/r1.md", "r1"),
+        ],
+        epoch: "e",
+        headSeq: 3,
+      },
+    } as never);
+    vi.mocked(sdk.getRevisions).mockResolvedValue({
+      data: { items: [] },
+    } as never);
+    contentServer({ "b-s11": "# Eleven" });
+    const { wrapper, router } = await mountAt(
+      BrowsePage,
+      "/vaults/v1/notes/s11",
+      "/vaults/:v/notes/:entry",
+    );
+    // Only the folder of the open note is open, and it is remembered.
+    const open = wrapper.findAll("[data-test=tree] details[open]");
+    expect(open.map((d) => d.attributes("data-folder"))).toEqual(["Sessions/"]);
+    expect(localStorage.getItem("kura:folders:v1")).toBe('["Sessions/"]');
+    // Resumes/ comes first: r1 before s11, s12 after it.
+    expect(wrapper.find("[data-test=prev]").attributes("href")).toContain(
+      "/notes/r1",
+    );
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "]" }));
+    await flushPromises();
+    expect(router.currentRoute.value.path).toBe("/vaults/v1/notes/s12");
+    await wrapper.find("[data-test=finder]").setValue("r1");
+    expect(wrapper.find("[data-test=finder-results]").text()).toContain(
+      "Resumes",
+    );
+    expect(wrapper.find("[data-test=tree]").exists()).toBe(false);
+    wrapper.unmount();
+
+    const drawer = await mountAt(
+      BrowsePage,
+      "/vaults/v1/notes/s11/history",
+      "/vaults/:v/notes/:entry/history",
+    );
+    expect(drawer.wrapper.find("#history-drawer").exists()).toBe(true);
+    expect(
+      drawer.wrapper
+        .find("[data-test=history-toggle]")
+        .attributes("aria-expanded"),
+    ).toBe("true");
+    drawer.wrapper.unmount();
   });
 });
 
@@ -485,11 +544,13 @@ describe("history", () => {
       data: { items: [], epoch: "e", headSeq: 2 },
     } as never);
     contentServer({ "b-old": "first draft" });
-    const { wrapper } = await mountAt(
-      HistoryPage,
-      "/vaults/v1/notes/s12/history",
-      "/vaults/:v/notes/:entry/history",
-    );
+    const panel = (entry: string) =>
+      mount(HistoryPanel, {
+        props: { vault: "v1", entry, entries: [] },
+        global: { plugins: [i18n] },
+      });
+    const wrapper = panel("s12");
+    await flushPromises();
     // Relative, the exact moment kept in the markup and on hover.
     expect(wrapper.find("time").attributes("datetime")).toMatch(
       /^2026-11-08T21:14/,
@@ -497,17 +558,18 @@ describe("history", () => {
     expect(wrapper.text()).toContain("current");
     expect(wrapper.text()).toContain("laptop");
     expect(wrapper.text()).toContain("key discord-recap");
-    await wrapper.find("button").trigger("click");
+    // The past one shows in the note's frame: the panel hands it over.
+    await wrapper.findAll("button")[2]?.trigger("click");
     await flushPromises();
-    expect(
-      wrapper.find("[data-test=note-frame]").attributes("srcdoc"),
-    ).toContain("first draft");
-    const hidden = await mountAt(
-      HistoryPage,
-      "/vaults/v1/notes/x/history",
-      "/vaults/:v/notes/:entry/history",
-    );
-    expect(hidden.wrapper.find("[data-test=not-found]").exists()).toBe(true);
+    expect(wrapper.emitted("show")?.[0]?.[0]).toMatchObject({
+      revision: "r1",
+      doc: expect.stringContaining("first draft"),
+    });
+    await wrapper.findAll("button")[1]?.trigger("click");
+    expect(wrapper.emitted("show")?.[1]).toEqual([null]);
+    const hidden = panel("x");
+    await flushPromises();
+    expect(hidden.find("[data-test=not-found]").exists()).toBe(true);
   });
 });
 

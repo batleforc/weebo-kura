@@ -2,12 +2,13 @@ import { mount } from "@vue/test-utils";
 import { describe, expect, it, vi } from "vitest";
 
 import type { EntryState } from "@/api/generated/types.gen";
+import { theme } from "@/prefs";
 import { BRIDGE, bridgeHash } from "./bridge";
 import { parseRecords } from "./content";
 import NoteFrame from "./NoteFrame.vue";
 import { ENTRY_LINK, frameDocument, MAX_IMAGE, renderNote } from "./render";
 import { ago, day } from "./time";
-import { buildTree, noteName, resolver } from "./tree";
+import { buildTree, foldersOf, noteName, notesInOrder, resolver } from "./tree";
 
 const entry = (path: string, id = path, size = 10): EntryState => ({
   entry: id,
@@ -33,6 +34,16 @@ describe("tree", () => {
     expect(tree.folders.map((f) => f.name)).toEqual(["Resumes", "Sessions"]);
     expect(tree.folders[1]?.notes.map((n) => n.entry)).toEqual(["map", "s11"]);
     expect(noteName("Sessions/Session 11.md")).toBe("Session 11");
+  });
+
+  it("orders notes as the tree shows them, and names the folders on a path", () => {
+    const tree = buildTree([entry("z.md"), ...listed]);
+    expect(notesInOrder(tree).map((n) => n.path)).toEqual([
+      ...tree.folders.flatMap((f) => f.notes.map((n) => n.path)),
+      "z.md",
+    ]);
+    expect(foldersOf("a/b/c.md")).toEqual(["a/", "a/b/"]);
+    expect(foldersOf("c.md")).toEqual([]);
   });
 
   it("resolves a target by path or by name, and only among listed entries", () => {
@@ -211,6 +222,12 @@ describe("note frame", () => {
     await wrapper.vm.$nextTick();
     expect(vm.height).toBe(640);
     expect(wrapper.emitted("link")).toEqual([["#entry:s11"]]);
+    // A theme switch reaches the frame as a message, not a reload.
+    const post = vi.spyOn(own as Window, "postMessage");
+    theme.value = theme.value === "dark" ? "light" : "dark";
+    await wrapper.vm.$nextTick();
+    expect(post).toHaveBeenCalledWith({ theme: theme.value }, "*");
+    expect(frame.attributes("srcdoc")).toBe("<p>x</p>");
     wrapper.unmount();
   });
 });

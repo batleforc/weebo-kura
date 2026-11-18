@@ -85,7 +85,7 @@ describe("the words of §4.5", () => {
     expect(word({ ...base, error: p("history_rewound") })).toBe("resyncing");
     expect(word({ ...base, signedIn: false })).toBe("sign in");
     expect(word({ ...base, last: { ...report, refused: p("quota_exceeded") } })).toBe("quota full");
-    expect(word({ ...base, role: "viewer", pending: 3 })).toBe("read-only (viewer)");
+    expect(word({ ...base, role: "viewer", pending: 3 })).toBe("read-only (reader)");
     expect(word({ ...base, last: { ...report, conflicts: ["a", "b"] } })).toBe("2 conflicts");
     expect(word({ ...base, last: { ...report, conflicts: ["a"] } })).toBe("1 conflict");
     expect(word({ ...base, last: { ...report, unsyncable: [["x", "y"]] } })).toBe("unsyncable");

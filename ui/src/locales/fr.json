@@ -13,7 +13,8 @@
     "home": "Accueil",
     "findVault": "Rechercher un coffre",
     "findVaultHint": "notes, campaign…",
-    "noVault": "Aucun coffre ne correspond."
+    "noVault": "Aucun coffre ne correspond.",
+    "sectionsOf": "Sections de {name}"
   },
   "signIn": {
     "action": "Se connecter avec Authentik",
@@ -92,7 +93,6 @@
     "notFound": "Cette note n'existe pas, ou ne vous est pas partagée.",
     "back": "Retour à {name}",
     "backToVault": "Retour au coffre",
-    "backToNote": "Retour à la note",
     "download": "Télécharger {name}",
     "history": "Historique",
     "searchOff": "La recherche n'est pas activée pour ce coffre. Parcourez plutôt les dossiers.",
@@ -101,7 +101,6 @@
     "noRevision": "Aucune révision.",
     "current": "actuelle",
     "deleted": "supprimée",
-    "view": "Voir",
     "reach": "{n} dossiers",
     "whole": "coffre entier",
     "open": "Ouvrir",
@@ -109,7 +108,26 @@
     "lastEdited": "Modifiée le {date}",
     "lastEditedBy": "Modifiée le {date} par {who}",
     "cut": "Ce coffre compte plus de {n} entrées : les dossiers n'affichent que les {n} premières. La recherche trouve les autres.",
-    "unavailable": "Kura ne répond pas (503). Nouvel essai dans 30 s…"
+    "unavailable": "Kura ne répond pas (503). Nouvel essai dans 30 s…",
+    "close": "Fermer",
+    "notShown": "non affichée ici",
+    "find": "Trouver une note",
+    "findHint": "Nom ou texte…",
+    "byName": "Par nom",
+    "inText": "Dans le texte",
+    "noName": "Aucune note de ce nom.",
+    "searching": "Recherche…",
+    "prev": "Note précédente : {name}",
+    "next": "Note suivante : {name}",
+    "copyLink": "Copier le lien",
+    "copied": "Lien copié",
+    "pastRevision": "La version du {date}, pas l'actuelle.",
+    "backToCurrent": "Revenir à l'actuelle",
+    "revealFolder": "Afficher {name} dans les dossiers",
+    "keys": "Raccourcis clavier",
+    "keyFind": "trouver une note",
+    "keyTurn": "tourner la page",
+    "keyClose": "fermer"
   },
   "manage": {
     "title": "Gérer",
@@ -418,7 +436,6 @@
     "notes": "Notes",
     "sections": "Sections du coffre",
     "youAre": "vous êtes {role}",
-    "read": "Lire dans le navigateur",
     "who": "Qui peut l'ouvrir",
     "manageAccess": "Gérer l'accès",
     "liveKeys": "Clés d'accès actives",
@@ -427,5 +444,9 @@
     "manageKeys": "Gérer les clés",
     "recent": "Modifié en dernier",
     "browse": "Parcourir les notes"
+  },
+  "filter": {
+    "label": "Filtrer",
+    "none": "Rien ne correspond à « {q} »."
   }
 }

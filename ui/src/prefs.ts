@@ -42,6 +42,9 @@ export const localePref = ref<LocalePref>(
   read("kura:locale", ["en", "fr"] as const),
 );
 
+/** The theme in force, for what cannot read `data-theme` itself (the note frame). */
+export const theme = ref<"light" | "dark">("dark");
+
 export function resolvedTheme(): "light" | "dark" {
   if (themePref.value !== "system") return themePref.value;
   return lightQuery().matches ? "light" : "dark";
@@ -53,7 +56,8 @@ export function resolvedLocale(): "en" | "fr" {
 }
 
 function apply(): void {
-  document.documentElement.dataset.theme = resolvedTheme();
+  theme.value = resolvedTheme();
+  document.documentElement.dataset.theme = theme.value;
   const locale = resolvedLocale();
   i18n.global.locale.value = locale;
   document.documentElement.lang = locale;

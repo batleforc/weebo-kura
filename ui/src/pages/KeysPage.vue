@@ -17,6 +17,8 @@ import ConfirmRow from "@/components/ui/ConfirmRow.vue";
 import ForbiddenState from "@/components/ui/ForbiddenState.vue";
 import RevokedToggle from "@/components/ui/RevokedToggle.vue";
 import StateMark from "@/components/ui/StateMark.vue";
+import TableFilter from "@/components/ui/TableFilter.vue";
+import { matching } from "@/filter";
 import { useLoad } from "@/manage/useLoad";
 import { useMe } from "@/me";
 import { ago, when } from "@/reader/time";
@@ -63,8 +65,13 @@ const showRevoked = ref(false);
 const revokedCount = computed(
   () => tokens.value.filter((k) => k.revoked).length,
 );
+const query = ref("");
 const shown = computed(() =>
-  showRevoked.value ? tokens.value : tokens.value.filter((k) => !k.revoked),
+  matching(
+    showRevoked.value ? tokens.value : tokens.value.filter((k) => !k.revoked),
+    query.value,
+    (k) => [k.name, k.createdBy, ...k.cidrs],
+  ),
 );
 
 /** "you" for the caller's own keys, else the subject cut short (the full one on hover). */
@@ -168,7 +175,8 @@ onMounted(() => {
       </div>
       <p v-if="refusal" role="alert" class="mb-2 border-l border-rule pl-3">{{ refusal }}</p>
       <p v-if="tokens.length === 0" class="text-ink-dim">{{ t("keys.empty") }}</p>
-      <div v-else class="relative overflow-x-auto" tabindex="0">
+      <TableFilter v-if="tokens.length > 0" v-model="query" :empty="shown.length === 0" />
+      <div v-if="tokens.length > 0" class="relative overflow-x-auto" tabindex="0">
       <table class="w-full text-left">
         <thead>
           <tr>

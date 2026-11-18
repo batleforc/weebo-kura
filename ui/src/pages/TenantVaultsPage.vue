@@ -11,6 +11,8 @@ import { messageOf } from "@/api/problem";
 import AsyncState from "@/components/ui/AsyncState.vue";
 import BreadCrumbs from "@/components/ui/BreadCrumbs.vue";
 import ConfirmRow from "@/components/ui/ConfirmRow.vue";
+import TableFilter from "@/components/ui/TableFilter.vue";
+import { matching } from "@/filter";
 import { useLoad } from "@/manage/useLoad";
 
 const { t } = useI18n();
@@ -32,6 +34,10 @@ const {
 );
 const vaults = computed(() =>
   all.value.filter((v) => v.tenant === tenant.value),
+);
+const query = ref("");
+const shown = computed(() =>
+  matching(vaults.value, query.value, (v) => [`${v.namespace}/${v.name}`]),
 );
 const name = ref("");
 const refusal = ref<string | null>(null);
@@ -80,6 +86,7 @@ onMounted(load);
       :title="t('manage.failed')"
       :can-retry="canRetry" @retry="load"
     >
+      <TableFilter v-model="query" :empty="shown.length === 0" />
       <div class="relative overflow-x-auto" tabindex="0">
       <table class="w-full text-left">
         <thead>
@@ -90,7 +97,7 @@ onMounted(load);
           </tr>
         </thead>
         <tbody>
-          <template v-for="v in vaults" :key="v.id">
+          <template v-for="v in shown" :key="v.id">
           <tr class="border-t border-rule-soft">
             <td>{{ v.namespace }}/{{ v.name }}</td>
             <td>{{ v.managedBy === "api" ? "API" : t("access.configuration") }}</td>

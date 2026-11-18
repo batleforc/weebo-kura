@@ -68,3 +68,14 @@ export function resolver(
     );
   };
 }
+
+/** Every note in the order the tree shows them: a folder's folders, then its notes. */
+export function notesInOrder(folder: Folder): EntryState[] {
+  return [...folder.folders.flatMap(notesInOrder), ...folder.notes];
+}
+
+/** The folders on the way to a path, as the tree names them: `a/`, `a/b/`. */
+export function foldersOf(path: string): string[] {
+  const parts = path.split("/").slice(0, -1);
+  return parts.map((_, i) => `${parts.slice(0, i + 1).join("/")}/`);
+}

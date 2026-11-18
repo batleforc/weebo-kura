@@ -288,6 +288,11 @@ describe("keys", () => {
       "Sessions/ (read), Resumes/ (read and write)",
     );
     expect(w.find("tbody").text()).toContain("never");
+    await w.find("[data-test=filter]").setValue("nope");
+    expect(w.findAll("tbody tr")).toHaveLength(0);
+    expect(w.find("[role=status]").text()).toContain("Nothing matches “nope”");
+    await w.find("[data-test=filter]").setValue("RECAP");
+    expect(w.findAll("tbody tr")).toHaveLength(1);
     await w.find("[data-test=new-key]").trigger("click");
     await w.find("[data-test=cidrs]").setValue("10.42.0.0/16 192.168.1.0/24");
     await w.find("form").trigger("submit");

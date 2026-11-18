@@ -15,6 +15,8 @@ import { messageOf } from "@/api/problem";
 import AsyncState from "@/components/ui/AsyncState.vue";
 import ConfirmRow from "@/components/ui/ConfirmRow.vue";
 import ForbiddenState from "@/components/ui/ForbiddenState.vue";
+import TableFilter from "@/components/ui/TableFilter.vue";
+import { matching } from "@/filter";
 import { useLoad } from "@/manage/useLoad";
 import { useVault } from "@/manage/useVault";
 
@@ -49,6 +51,10 @@ const who = ref("");
 const role = ref("viewer");
 const folders = ref("");
 const refusal = ref<string | null>(null);
+const query = ref("");
+const shown = computed(() =>
+  matching(bindings.value, query.value, (b) => [subject(b), b.role]),
+);
 /** A remove or a role change, waiting to be confirmed under its row. */
 const pending = ref<{ subject: string; role?: string } | null>(null);
 const vault = useVault(v);
@@ -125,6 +131,7 @@ onMounted(load);
     <ForbiddenState v-if="forbidden" :detail="forbiddenDetail" />
     <AsyncState v-else :loading="loading" :error="error" :empty="false" empty-message="" :title="t('manage.failed')" :can-retry="canRetry" @retry="load">
       <p v-if="refusal" role="alert" class="mb-2 border-l border-rule pl-3">{{ refusal }}</p>
+      <TableFilter v-model="query" :empty="shown.length === 0" />
       <div class="relative overflow-x-auto" tabindex="0">
       <table class="w-full text-left">
         <thead>
@@ -145,7 +152,7 @@ onMounted(load);
             <td>{{ t("access.tenantRole") }}</td>
             <td />
           </tr>
-          <template v-for="b in bindings" :key="b.subject">
+          <template v-for="b in shown" :key="b.subject">
           <tr class="border-t border-rule-soft" :data-binding="b.subject">
             <td>{{ subject(b) }}</td>
             <td>
