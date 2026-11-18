@@ -324,7 +324,11 @@ async fn the_console_is_served_with_its_headers() {
         "https://auth.example.org/".into(),
         Some("https://auth.example.org/application/o/kura-web/".into()),
     )
-    .unwrap();
+    .unwrap()
+    .with_plugin(kura_server::app::ui::PluginClient {
+        client_id: "kura-plugin".into(),
+        issuer: "https://auth.example.org/application/o/kura-plugin/".into(),
+    });
     let state = kura_server::app::AppState::new(
         kura_server::metrics::Metrics::new().unwrap(),
         e.t.app.clone(),
@@ -359,6 +363,10 @@ async fn the_console_is_served_with_its_headers() {
             "issuer": "https://auth.example.org/",
             "discovery": "https://auth.example.org/application/o/kura-web/",
             "clientId": "kura-web",
+            "plugin": {
+                "clientId": "kura-plugin",
+                "issuer": "https://auth.example.org/application/o/kura-plugin/",
+            },
         })
     );
     assert!(h.get("content-security-policy").is_some());

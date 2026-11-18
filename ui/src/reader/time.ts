@@ -15,6 +15,14 @@ export function ago(iso: string, locale: string, now = Date.now()): string {
   return rtf.format(0, "second");
 }
 
+/** A date and a time in the reader's locale, for an exact moment. */
+export function when(iso: string, locale: string): string {
+  return new Intl.DateTimeFormat(locale, {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  }).format(new Date(iso));
+}
+
 /** A calendar date in the reader's locale. */
 export function day(iso: string, locale: string): string {
   return new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(

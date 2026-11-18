@@ -26,8 +26,8 @@ vi.mock("@/api/generated/sdk.gen", () => ({
 import * as sdk from "@/api/generated/sdk.gen";
 import { anything, targets } from "@/manage/targets";
 import AccessPage from "./AccessPage.vue";
+import HomePage from "./HomePage.vue";
 import KeysPage from "./KeysPage.vue";
-import ManagePage from "./ManagePage.vue";
 import StatusPage from "./StatusPage.vue";
 import TenantDevicesPage from "./TenantDevicesPage.vue";
 import TenantVaultsPage from "./TenantVaultsPage.vue";
@@ -87,7 +87,7 @@ describe("targets", () => {
     ).toBe(true);
   });
 
-  it("lists them on the index", async () => {
+  it("lists them on the home page", async () => {
     vi.mocked(sdk.me).mockResolvedValue({
       data: {
         subject: "s",
@@ -98,12 +98,15 @@ describe("targets", () => {
     vi.mocked(sdk.listVaults).mockResolvedValue({
       data: [vault("campaign", "jdr", "manager")],
     } as never);
-    const w = await at(ManagePage, "/manage", "/manage");
-    expect(w.text()).toContain("jdr ▸ campaign");
-    expect(w.find('a[href="/app/manage/vaults/campaign/keys"]').exists()).toBe(
+    const w = await at(HomePage, "/vaults", "/vaults");
+    expect(
+      w.find('[data-test=vaults] a[href="/app/vaults/campaign"]').exists(),
+    ).toBe(true);
+    const run = w.find("[data-test=manage]");
+    expect(run.find('a[href="/app/manage/tenants/jdr/vaults"]').exists()).toBe(
       true,
     );
-    expect(w.find('a[href="/app/manage/status"]').exists()).toBe(true);
+    expect(run.find('a[href="/app/manage/status"]').exists()).toBe(true);
   });
 });
 
@@ -131,12 +134,22 @@ describe("access", () => {
     expect(rows[1]?.text()).toContain("Sessions/");
     expect(rows[1]?.text()).toContain("read only");
     expect(rows[2]?.find("select").exists()).toBe(true);
+    // A role change and a removal each wait for a confirmation under the row.
     await rows[2]?.find("select").setValue("viewer");
+    expect(sdk.putBinding).not.toHaveBeenCalled();
+    expect(w.find("[role=alertdialog]").text()).toContain("to viewer");
+    await w.find("[role=alertdialog] button:last-child").trigger("click");
+    expect(w.find("[role=alertdialog]").exists()).toBe(false);
+    await rows[2]?.find("select").setValue("viewer");
+    await w.find("[data-test=confirm]").trigger("click");
+    await flushPromises();
     expect(vi.mocked(sdk.putBinding).mock.calls[0]?.[0]).toMatchObject({
       path: { v: "v1", b: "user:bob" },
       body: { role: "viewer" },
     });
     await rows[2]?.find("button").trigger("click");
+    expect(sdk.deleteBinding).not.toHaveBeenCalled();
+    await w.find("[data-test=confirm]").trigger("click");
     await flushPromises();
     expect(vi.mocked(sdk.deleteBinding).mock.calls[0]?.[0]?.path).toEqual({
       v: "v1",
@@ -214,10 +227,11 @@ describe("access", () => {
       "/manage/vaults/:v/access",
     );
     await w.find("button.mt-4").trigger("click");
-    expect(w.findAll("[data-test=group] option").map((o) => o.text())).toEqual([
-      "jdr-mj",
-      "jdr-players",
-    ]);
+    expect(
+      w
+        .findAll("[data-test=group] option:not([disabled])")
+        .map((o) => o.text()),
+    ).toEqual(["jdr-mj", "jdr-players"]);
     await w.find("[data-test=group]").setValue("jdr-players");
     await w.find("form").trigger("submit");
     await flushPromises();
@@ -270,7 +284,9 @@ describe("keys", () => {
       "/manage/vaults/v1/keys",
       "/manage/vaults/:v/keys",
     );
-    expect(w.find("tbody").text()).toContain("r:Sessions/ w:Resumes/");
+    expect(w.find("tbody").text()).toContain(
+      "Sessions/ (read), Resumes/ (read and write)",
+    );
     expect(w.find("tbody").text()).toContain("never");
     await w.find("[data-test=new-key]").trigger("click");
     await w.find("[data-test=cidrs]").setValue("10.42.0.0/16 192.168.1.0/24");

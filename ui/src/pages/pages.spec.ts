@@ -19,8 +19,8 @@ import App from "@/App.vue";
 import * as sdk from "@/api/generated/sdk.gen";
 import CallbackPage from "./CallbackPage.vue";
 import DevicesPage from "./DevicesPage.vue";
+import HomePage from "./HomePage.vue";
 import SignInPage from "./SignInPage.vue";
-import VaultsPage from "./VaultsPage.vue";
 
 const device = (
   id: string,
@@ -116,7 +116,7 @@ describe("my vaults", () => {
           },
         ],
       } as never);
-    const { wrapper } = await page(VaultsPage);
+    const { wrapper } = await page(HomePage);
     await flushPromises();
     // RFC 0005 §4.5: a 503 says it retries by itself, and keeps the button.
     expect(wrapper.find("[role=alert]").text()).toContain(
@@ -124,7 +124,7 @@ describe("my vaults", () => {
     );
     await wrapper.find("[role=alert] button").trigger("click");
     await flushPromises();
-    expect(wrapper.find("tbody").text()).toContain("campaign");
+    expect(wrapper.find("[data-test=vaults]").text()).toContain("campaign");
     expect(vi.mocked(sdk.listVaults).mock.calls[0]?.[0]?.headers).toEqual({
       "X-Kura-Device": "this-browser",
     });
@@ -145,6 +145,9 @@ describe("my devices", () => {
     const signOut = vi.spyOn(session, "signOut").mockResolvedValue();
     const { wrapper, router } = await page(DevicesPage);
     await flushPromises();
+    // The revoked device stays folded until asked for.
+    expect(wrapper.findAll("tbody tr")).toHaveLength(2);
+    await wrapper.find("[data-test=show-revoked]").trigger("click");
     const rows = wrapper.findAll("tbody tr");
     expect(rows.map((r) => r.text())).toEqual([
       expect.stringContaining("this browser"),

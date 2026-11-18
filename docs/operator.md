@@ -77,6 +77,9 @@ ui:               # the web console (RFC 0003); absent or enabled: false: /app i
   oidc:
     clientId: kura-web           # must also be in oidc.audiences
     discovery: https://auth.example.org/application/o/kura-web/   # with Authentik: the console's own application
+  plugin:                        # what the console's "Open in Obsidian" link gives the plugin
+    clientId: kura-plugin        # the default; must also be in oidc.audiences
+    discovery: https://auth.example.org/application/o/kura-plugin/   # absent: oidc.discovery, else the issuer
 notifications:    # webhooks (RFC 0003); absent or enabled: false: rule routes are 409, nothing is sent
   enabled: true
   webhook:

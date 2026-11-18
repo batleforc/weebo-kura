@@ -28,7 +28,7 @@ tasks:
       - pnpm run test
 
   ui:build:
-    desc: "Build the console into ui/dist; serve it with `ui: { enabled: true, dir: ui/dist }` (dev/server.yaml does)"
+    desc: "Build the console into ui/dist; serve it with `ui: { enabled: true, dir: ui/dist }` (dev/server.yaml does). It carries the Obsidian plugin's zip (Help page) when plugin/main.js exists: task plugin:build first"
     dir: ui
     cmds:
       - pnpm run build

@@ -17,16 +17,20 @@ async function signIn(): Promise<void> {
   try {
     await session.login(to, stay.value);
   } catch (error) {
-    failure.value = t("signIn.failed", {
-      message: error instanceof Error ? error.message : String(error),
-    });
+    // fetch() rejects with a TypeError when the IdP is unreachable or refuses this origin (CORS).
+    failure.value =
+      error instanceof TypeError
+        ? t("signIn.unreachable")
+        : t("signIn.failed", {
+            message: error instanceof Error ? error.message : String(error),
+          });
   }
 }
 </script>
 
 <template>
-  <main class="mx-auto mt-16 max-w-md border border-rule p-6">
-    <h1>{{ t("app.name") }}</h1>
+  <main class="mx-auto mt-16 max-w-xl px-4">
+    <h1 class="mb-4 font-display text-[length:var(--t-display)] uppercase tracking-[0.04em]">{{ t("app.name") }}</h1>
     <p class="mb-4 text-ink-dim">{{ t("app.tagline") }}</p>
     <p v-if="session.endedUnexpectedly" role="alert" class="mb-4 border border-accent p-3" data-test="ended">
       {{ t("signIn.ended") }}

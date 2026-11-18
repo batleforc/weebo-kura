@@ -152,7 +152,8 @@ export async function frameDocument(
     img.removeAttribute("data-entry");
   }
   return (
-    '<!doctype html><html><head><meta charset="utf-8">' +
+    // shortcut: the frame takes the theme it opens in; a theme switched while a note is open applies on the next note.
+    `<!doctype html><html data-theme="${document.documentElement.dataset.theme === "light" ? "light" : "dark"}"><head><meta charset="utf-8">` +
     '<link rel="stylesheet" href="/app/frame.css"></head>' +
     `<body>${doc.body.innerHTML}<script>${BRIDGE}</script></body></html>`
   );

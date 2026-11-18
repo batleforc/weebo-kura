@@ -37,7 +37,7 @@ export const routes: RouteRecordRaw[] = [
   {
     path: "/vaults",
     name: "vaults",
-    component: () => import("@/pages/VaultsPage.vue"),
+    component: () => import("@/pages/HomePage.vue"),
     meta: { access: "member" },
   },
   {
@@ -46,49 +46,79 @@ export const routes: RouteRecordRaw[] = [
     component: () => import("@/pages/DevicesPage.vue"),
     meta: { access: "member" },
   },
-  // The reader (RFC 0005): browse, read, search, history.
+  {
+    path: "/help",
+    name: "help",
+    component: () => import("@/pages/HelpPage.vue"),
+    meta: { access: "member" },
+  },
+  // One vault: its overview, the reader (RFC 0005) and, for its managers,
+  // the back office of RFC 0003, as tabs; the API decides, the tabs only show.
   {
     path: "/vaults/:v",
-    name: "browse",
-    component: () => import("@/pages/BrowsePage.vue"),
+    component: () => import("@/pages/VaultLayout.vue"),
     meta: { access: "member" },
+    children: [
+      {
+        path: "",
+        name: "vault",
+        component: () => import("@/pages/VaultOverview.vue"),
+        meta: { access: "member" },
+      },
+      {
+        path: "notes",
+        name: "vault-notes",
+        component: () => import("@/pages/BrowsePage.vue"),
+        meta: { access: "member" },
+      },
+      {
+        path: "notes/:entry",
+        name: "note",
+        component: () => import("@/pages/BrowsePage.vue"),
+        meta: { access: "member" },
+      },
+      {
+        path: "notes/:entry/history",
+        name: "history",
+        component: () => import("@/pages/HistoryPage.vue"),
+        meta: { access: "member" },
+      },
+      {
+        path: "search",
+        name: "search",
+        component: () => import("@/pages/SearchPage.vue"),
+        meta: { access: "member" },
+      },
+      {
+        path: "access",
+        name: "vault-access",
+        component: () => import("@/pages/AccessPage.vue"),
+        meta: { access: "member" },
+      },
+      {
+        path: "keys",
+        name: "vault-keys",
+        component: () => import("@/pages/KeysPage.vue"),
+        meta: { access: "member" },
+      },
+      {
+        path: "notifications",
+        name: "vault-notifications",
+        component: () => import("@/pages/NotificationsPage.vue"),
+        meta: { access: "member" },
+      },
+    ],
   },
-  {
-    path: "/vaults/:v/notes/:entry",
-    name: "note",
-    component: () => import("@/pages/BrowsePage.vue"),
-    meta: { access: "member" },
-  },
-  {
-    path: "/vaults/:v/notes/:entry/history",
-    name: "history",
-    component: () => import("@/pages/HistoryPage.vue"),
-    meta: { access: "member" },
-  },
-  {
-    path: "/vaults/:v/search",
-    name: "search",
-    component: () => import("@/pages/SearchPage.vue"),
-    meta: { access: "member" },
-  },
-  // The back office (RFC 0003 phase 2): shown by role, decided by the API.
-  {
-    path: "/manage",
-    name: "manage",
-    component: () => import("@/pages/ManagePage.vue"),
-    meta: { access: "member" },
-  },
+  // The tenant-wide back office, reached from the home page; the old
+  // per-vault addresses lead to the vault's tabs.
+  { path: "/manage", redirect: "/vaults" },
   {
     path: "/manage/vaults/:v/access",
-    name: "access",
-    component: () => import("@/pages/AccessPage.vue"),
-    meta: { access: "member" },
+    redirect: (to) => `/vaults/${String(to.params.v)}/access`,
   },
   {
     path: "/manage/vaults/:v/keys",
-    name: "keys",
-    component: () => import("@/pages/KeysPage.vue"),
-    meta: { access: "member" },
+    redirect: (to) => `/vaults/${String(to.params.v)}/keys`,
   },
   {
     path: "/manage/tenants/:t/vaults",

@@ -7,21 +7,24 @@ import { useRoute } from "vue-router";
 import { withDevice } from "@/api/client";
 import { getRevisions } from "@/api/generated/sdk.gen";
 import type { RevisionInfo } from "@/api/generated/types.gen";
-import { problemType } from "@/api/problem";
+import { problemType, retryable } from "@/api/problem";
 import AsyncState from "@/components/ui/AsyncState.vue";
+import BreadCrumbs from "@/components/ui/BreadCrumbs.vue";
 import { fileBytes } from "@/reader/content";
 import NoteFrame from "@/reader/NoteFrame.vue";
 import { frameDocument, MAX_RENDER, renderNote } from "@/reader/render";
 import { useAutoRetry } from "@/reader/retry";
+import { ago, when } from "@/reader/time";
 import { loadVault } from "@/reader/vault";
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const route = useRoute();
 const vaultId = computed(() => String(route.params.v));
 const entryId = computed(() => String(route.params.entry));
 const revisions = ref<RevisionInfo[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
+const canRetry = ref(true);
 const missing = ref(false);
 const shown = ref<{ revision: string; doc: string } | null>(null);
 const failure = useAutoRetry(() => load());
@@ -40,7 +43,10 @@ async function load(): Promise<void> {
     revisions.value = data.items;
   } catch (e) {
     if (problemType(e) === "not_found") missing.value = true;
-    else error.value = failure(e);
+    else {
+      error.value = failure(e);
+      canRetry.value = retryable(e);
+    }
   } finally {
     loading.value = false;
   }
@@ -63,9 +69,7 @@ onMounted(load);
 
 <template>
   <section>
-    <p class="mb-3">
-      <RouterLink :to="`/vaults/${vaultId}/notes/${entryId}`" class="underline">{{ t("reader.backToNote") }}</RouterLink>
-    </p>
+    <BreadCrumbs :items="[{ label: revisions[0]?.path ?? t('reader.backToNote'), to: `/vaults/${vaultId}/notes/${entryId}` }, { label: t('reader.history') }]" />
     <div v-if="missing" role="alert" data-test="not-found">{{ t("reader.notFound") }}</div>
     <AsyncState
       v-else
@@ -74,12 +78,13 @@ onMounted(load);
       :empty="revisions.length === 0"
       :empty-message="t('reader.noRevision')"
       :title="t('reader.failed')"
+      :can-retry="canRetry"
       @retry="load"
     >
-      <h1 class="mb-3">{{ t("reader.history") }}</h1>
+      <h2 class="sr-only">{{ t("reader.history") }}</h2>
       <ul>
         <li v-for="(r, i) in revisions" :key="r.revision" class="border-t border-rule-soft py-1">
-          <time :datetime="r.createdAt">{{ r.createdAt.slice(0, 16).replace("T", " ") }}</time>
+          <time :datetime="r.createdAt" :title="when(r.createdAt, locale)">{{ ago(r.createdAt, locale) }}</time>
           <span class="ml-2">{{ r.path }}</span>
           <span v-if="r.author" class="ml-2 text-ink-dim">{{ r.author.kind === "key" ? t("reader.byKey", { name: r.author.name }) : r.author.name }}</span>
           <span v-if="i === 0" class="ml-2 text-ink-dim">{{ t("reader.current") }}</span>

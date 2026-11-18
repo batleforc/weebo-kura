@@ -1,6 +1,6 @@
 import { ref } from "vue";
 
-import { detailOf, messageOf, problemType } from "@/api/problem";
+import { detailOf, messageOf, problemType, retryable } from "@/api/problem";
 
 /**
  * One load of a page: loading, error, and whether the server refused the
@@ -12,6 +12,7 @@ export function useLoad<T>(fetch: () => Promise<T>, initial: T) {
   const error = ref<string | null>(null);
   const forbidden = ref(false);
   const forbiddenDetail = ref<string | null>(null);
+  const canRetry = ref(true);
   async function load(): Promise<void> {
     loading.value = true;
     error.value = null;
@@ -21,10 +22,13 @@ export function useLoad<T>(fetch: () => Promise<T>, initial: T) {
       if (problemType(e) === "insufficient_role") {
         forbidden.value = true;
         forbiddenDetail.value = detailOf(e) ?? null;
-      } else error.value = messageOf(e);
+      } else {
+        error.value = messageOf(e);
+        canRetry.value = retryable(e);
+      }
     } finally {
       loading.value = false;
     }
   }
-  return { data, loading, error, forbidden, forbiddenDetail, load };
+  return { data, loading, error, forbidden, forbiddenDetail, canRetry, load };
 }

@@ -35,11 +35,11 @@ test("1 and 2: alice signs in, gets no cookie, and a key's secret is shown once"
     });
   });
 
-  // 1. Through Authentik, onto My vaults; every /v1 call carries the token
+  // 1. Through Authentik, onto Home; every /v1 call carries the token
   // and the device, and nothing from Kura sets a cookie.
   await signIn(page, "alice");
-  await expect(page.getByRole("heading", { name: "My vaults" })).toBeVisible();
-  await expect(page.locator("tbody")).toContainText("notes");
+  await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
+  await expect(page.locator("[data-test=vaults]")).toContainText("notes");
   const v1 = api.filter((a) => Object.keys(a.headers).length > 0);
   expect(v1.length).toBeGreaterThan(0);
   for (const a of v1) expect(a.headers.authorization).toMatch(/^Bearer /);

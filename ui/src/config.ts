@@ -9,6 +9,8 @@ export interface ConsoleConfig {
   /** Where the discovery document is (Authentik's per-application URL). */
   discovery: string;
   clientId: string;
+  /** What the "Open in Obsidian" link gives the plugin (`ui.plugin`); absent from an older server. */
+  plugin?: { clientId: string; issuer: string };
 }
 
 let loaded: ConsoleConfig | null = null;
@@ -33,10 +35,26 @@ export async function loadConfig(
     }
     return value;
   };
+  const plugin: unknown =
+    typeof body === "object" && body !== null
+      ? Reflect.get(body, "plugin")
+      : undefined;
+  const pluginField = (k: string): string | undefined => {
+    const v: unknown =
+      typeof plugin === "object" && plugin !== null
+        ? Reflect.get(plugin, k)
+        : undefined;
+    return typeof v === "string" && v !== "" ? v : undefined;
+  };
+  const pluginClient = pluginField("clientId");
+  const pluginIssuer = pluginField("issuer");
   loaded = {
     issuer: read("issuer"),
     discovery: read("discovery"),
     clientId: read("clientId"),
+    ...(pluginClient && pluginIssuer
+      ? { plugin: { clientId: pluginClient, issuer: pluginIssuer } }
+      : {}),
   };
   return loaded;
 }
@@ -46,6 +64,11 @@ export function config(): ConsoleConfig {
   if (!loaded) {
     throw new Error("the console configuration is not loaded yet");
   }
+  return loaded;
+}
+
+/** The configuration when loaded, else `null`: for what can do without it. */
+export function loadedConfig(): ConsoleConfig | null {
   return loaded;
 }
 

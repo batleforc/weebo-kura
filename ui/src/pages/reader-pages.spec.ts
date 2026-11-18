@@ -43,8 +43,8 @@ import { MAX_RENDER } from "@/reader/render";
 import { MAX_PAGES } from "@/reader/vault";
 import BrowsePage from "./BrowsePage.vue";
 import HistoryPage from "./HistoryPage.vue";
+import HomePage from "./HomePage.vue";
 import SearchPage from "./SearchPage.vue";
-import VaultsPage from "./VaultsPage.vue";
 
 const entry = (path: string, id: string, blob: string | null = `b-${id}`) => ({
   entry: id,
@@ -377,10 +377,10 @@ describe("reader gaps of RFC 0005 §18", () => {
         ],
       } as never)
       .mockResolvedValueOnce({ data: [] } as never);
-    const { wrapper } = await mountAt(VaultsPage, "/vaults", "/vaults");
-    expect(wrapper.find("tbody").text()).toContain("2 folders");
-    expect(wrapper.find("tbody time").text()).toBe("2 hours ago");
-    const empty = await mountAt(VaultsPage, "/vaults", "/vaults");
+    const { wrapper } = await mountAt(HomePage, "/vaults", "/vaults");
+    expect(wrapper.find("[data-test=vaults]").text()).toContain("2 folders");
+    expect(wrapper.find("[data-test=vaults] time").text()).toBe("2 hours ago");
+    const empty = await mountAt(HomePage, "/vaults", "/vaults");
     expect(empty.wrapper.text()).toContain("Ask a vault manager to add you");
   });
 });
@@ -490,7 +490,10 @@ describe("history", () => {
       "/vaults/v1/notes/s12/history",
       "/vaults/:v/notes/:entry/history",
     );
-    expect(wrapper.text()).toContain("2026-11-08 21:14");
+    // Relative, the exact moment kept in the markup and on hover.
+    expect(wrapper.find("time").attributes("datetime")).toMatch(
+      /^2026-11-08T21:14/,
+    );
     expect(wrapper.text()).toContain("current");
     expect(wrapper.text()).toContain("laptop");
     expect(wrapper.text()).toContain("key discord-recap");

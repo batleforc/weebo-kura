@@ -5,6 +5,7 @@ import type { App } from "obsidian";
 import wasmBytes from "./wasm/kura_bg.wasm";
 import { isRecord } from "./types";
 import { AuthError, Session, discover, secretId, secureUrl, startDevice, waitForApproval } from "./auth";
+import { type Setup, parseSetup } from "./setup";
 import type { DeviceCode, Http } from "./auth";
 import { Controller } from "./controller";
 import { loadCore } from "./core";
@@ -173,6 +174,42 @@ class PluginModal extends Modal {
   }
 }
 
+/** What a setup link would change, shown before anything is applied. */
+class SetupModal extends Modal {
+  private answer: (yes: boolean) => void = () => undefined;
+  constructor(app: App, private readonly setup: Setup, private readonly current: Settings) {
+    super(app);
+  }
+  ask(): Promise<boolean> {
+    return new Promise((resolve) => {
+      this.answer = resolve;
+      this.open();
+    });
+  }
+  override onOpen(): void {
+    this.setTitle("Kura: connect this vault?");
+    this.contentEl.createEl("p", { text: "A link asks Kura Sync to use these settings. Accept only if you opened it from your Kura console." });
+    const list = this.contentEl.createEl("ul");
+    list.createEl("li", { text: `Server: ${this.setup.server}` });
+    list.createEl("li", { text: `Sign in with: ${this.setup.issuer}` });
+    list.createEl("li", { text: `Kura vault: ${this.setup.vault === "" ? "chosen after signing in" : this.setup.vaultName}` });
+    if (this.current.server !== "" && this.current.server !== this.setup.server) {
+      this.contentEl.createEl("p", { text: `This replaces the connection to ${this.current.server}; this device signs in again.` });
+    }
+    this.contentEl.createEl("button", { text: "Cancel" }).onclick = () => {
+      this.close();
+    };
+    this.contentEl.createEl("button", { text: "Connect and sign in", cls: "mod-cta" }).onclick = () => {
+      this.answer(true);
+      this.answer = () => undefined;
+      this.close();
+    };
+  }
+  override onClose(): void {
+    this.answer(false);
+  }
+}
+
 class ConfirmModal extends Modal {
   private answer: (yes: boolean) => void = () => undefined;
   constructor(app: App, private readonly deletions: number, private readonly files: number) {
@@ -234,6 +271,8 @@ export default class KuraPlugin extends Plugin {
     this.addSettingTab(this.tab);
     this.addCommand({ id: "sync-now", name: "Sync now", callback: () => void this.controller?.sync(true) });
     this.addCommand({ id: "sign-in", name: "Sign in", callback: () => void this.signIn() });
+    // The console's "Open in Obsidian": obsidian://kura-setup?server=…&issuer=…&kuraVault=…
+    this.registerObsidianProtocolHandler("kura-setup", (params) => void this.setupFrom(params));
     const touched = (): void => this.controller?.touched();
     this.registerEvent(this.app.vault.on("create", touched));
     this.registerEvent(this.app.vault.on("modify", touched));
@@ -437,11 +476,40 @@ export default class KuraPlugin extends Plugin {
       // `display` is deprecated from 1.13; the plugin supports 1.11.4 (§6.8).
       // eslint-disable-next-line @typescript-eslint/no-deprecated
       this.tab?.display();
-      new Notice("Signed in to Kura. Choose a vault in the settings.");
+      new Notice(
+        this.vaults.some((v) => v.id === s.vault)
+          ? `Signed in to Kura: syncing ${s.vaultName}.`
+          : "Signed in to Kura. Choose a vault in the settings.",
+      );
       await this.start();
     } catch (e) {
       new Notice(e instanceof AuthError ? e.message : `Sign-in failed: ${String(e)}`);
     }
+  }
+
+  /** A setup link: checked, shown, and applied only when accepted; then the sign-in. */
+  async setupFrom(params: Record<string, string | undefined>): Promise<void> {
+    const setup = parseSetup(params);
+    if (typeof setup === "string") {
+      new Notice(`Kura: this setup link is refused: ${setup}.`);
+      return;
+    }
+    if (!(await new SetupModal(this.app, setup, this.config).ask())) return;
+    const s = this.config;
+    if (s.server !== setup.server) {
+      // A device belongs to one server: a new server registers a new one.
+      this.signOut();
+      s.device = "";
+    }
+    s.server = setup.server;
+    s.issuer = setup.issuer;
+    s.clientId = setup.clientId;
+    if (setup.vault !== "") {
+      s.vault = setup.vault;
+      s.vaultName = setup.vaultName;
+    }
+    await this.saveSettings();
+    await this.signIn();
   }
 
   /** Choosing another vault detaches first: the sync state is dropped, files stay (§4.5). */

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import { signOut, withDevice } from "@/api/client";
@@ -8,13 +8,24 @@ import type { Device } from "@/api/generated/types.gen";
 import { messageOf } from "@/api/problem";
 import { useSession } from "@/auth/session";
 import AsyncState from "@/components/ui/AsyncState.vue";
+import ConfirmRow from "@/components/ui/ConfirmRow.vue";
+import RevokedToggle from "@/components/ui/RevokedToggle.vue";
+import StateMark from "@/components/ui/StateMark.vue";
+import { ago, when } from "@/reader/time";
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const router = useRouter();
 const session = useSession();
 const devices = ref<Device[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
+// Others' devices (they carry an owner) are a tenant admin's, under Manage.
+const mine = computed(() => devices.value.filter((d) => !d.owner));
+const showRevoked = ref(false);
+const revokedCount = computed(() => mine.value.filter((d) => d.revoked).length);
+const shown = computed(() =>
+  showRevoked.value ? mine.value : mine.value.filter((d) => !d.revoked),
+);
 /** The device a revocation waits to be confirmed for. */
 const confirming = ref<Device | null>(null);
 
@@ -65,11 +76,12 @@ onMounted(load);
     <AsyncState
       :loading="loading"
       :error="error"
-      :empty="devices.length === 0"
+      :empty="mine.length === 0"
       :empty-message="t('devices.empty')"
       :title="t('devices.failed')"
       @retry="load"
     >
+      <div class="relative overflow-x-auto" tabindex="0">
       <table class="w-full text-left">
         <thead>
           <tr>
@@ -77,17 +89,16 @@ onMounted(load);
             <th scope="col">{{ t("devices.kind") }}</th>
             <th scope="col">{{ t("devices.lastSeen") }}</th>
             <th scope="col">{{ t("devices.state") }}</th>
-            <th scope="col">{{ t("devices.owner") }}</th>
             <th scope="col"><span class="sr-only">{{ t("devices.revoke") }}</span></th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="d in devices" :key="d.id" class="border-t border-rule-soft" :data-device="d.id">
+          <template v-for="d in shown" :key="d.id">
+          <tr class="border-t border-rule-soft" :data-device="d.id">
             <td>{{ d.name }}</td>
             <td>{{ d.profile }}</td>
-            <td><time :datetime="d.lastSeen">{{ d.lastSeen.slice(0, 16).replace("T", " ") }}</time></td>
-            <td>{{ state(d) }}</td>
-            <td>{{ d.owner ?? "" }}</td>
+            <td><time :datetime="d.lastSeen" :title="when(d.lastSeen, locale)">{{ ago(d.lastSeen, locale) }}</time></td>
+            <td><StateMark :kind="d.revoked ? 'gone' : 'live'" :word="state(d)" /></td>
             <td>
               <button
                 v-if="!d.revoked && d.id === session.device()"
@@ -109,17 +120,19 @@ onMounted(load);
               </button>
             </td>
           </tr>
+          <ConfirmRow
+            v-if="confirming?.id === d.id"
+            :colspan="5"
+            :question="t('devices.confirmRevoke', { name: d.name })"
+            :action="t('devices.confirm')"
+            @confirm="revoke(d)"
+            @cancel="confirming = null"
+          />
+          </template>
         </tbody>
       </table>
-      <div v-if="confirming" role="alertdialog" aria-modal="false" class="mt-4 border border-accent p-4">
-        <p>{{ t("devices.confirmRevoke", { name: confirming.name }) }}</p>
-        <button type="button" class="mr-2 bg-accent px-3 py-1 text-accent-ink" data-test="confirm" @click="revoke(confirming)">
-          {{ t("devices.confirm") }}
-        </button>
-        <button type="button" class="border border-rule px-3 py-1" @click="confirming = null">
-          {{ t("devices.cancel") }}
-        </button>
       </div>
+      <RevokedToggle v-model="showRevoked" :count="revokedCount" />
     </AsyncState>
   </section>
 </template>

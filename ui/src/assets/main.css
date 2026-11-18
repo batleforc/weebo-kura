@@ -1,6 +1,7 @@
 @import "tailwindcss";
 /* The two faces of the design tokens (OFL-1.1), bundled: `font-src 'self'`. */
 @import "@fontsource/silkscreen/400.css";
+@import "@fontsource/silkscreen/700.css";
 @import "@fontsource/jetbrains-mono/400.css";
 @import "@fontsource/jetbrains-mono/700.css";
 @import "./tokens.css";
@@ -15,19 +16,109 @@
   --color-accent: var(--accent);
   --color-accent-ink: var(--accent-ink);
   --color-focus: var(--focus);
+  --color-copper: var(--copper);
+  --font-display: var(--face-display);
 }
 
-html,
-body {
-  background: var(--ground);
-  color: var(--ink);
-  font-family: var(--face-text);
-  font-size: var(--t-body);
+/* Element defaults: in the base layer, so a utility class on an element wins. */
+@layer base {
+  html,
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--face-text);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* The page title: the text face, bold, in its own case. Silkscreen is the wordmark's alone. */
+  h1 {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+  }
+
+  /* Data cells keep their value on one line: a narrow window scrolls the table, it never breaks an id or a date. */
+  main th,
+  main td {
+    padding-block: 0.75rem;
+    padding-inline-end: 1rem;
+    white-space: nowrap;
+    vertical-align: baseline;
+  }
+  main thead th {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-dim);
+    border-bottom: 1px solid var(--rule-strong);
+  }
+  main td,
+  main tbody th {
+    font-size: var(--t-row);
+  }
+  /* The one filled action of a view. */
+  button.bg-accent {
+    font-weight: 700;
+  }
+
+  /* Running text keeps a readable measure however wide the window. */
+  main p {
+    max-width: 75ch;
+  }
 }
 
-h1 {
-  font-family: var(--face-display);
-  font-size: var(--t-px-md);
+/* House pieces, as utilities so a page can still adjust one. */
+@layer components {
+  /* A section's label: small, dim, in its own case. */
+  .label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink-dim);
+  }
+  .meta {
+    font-size: var(--t-meta);
+    letter-spacing: 0.02em;
+  }
+  /* The one filled action of a view. */
+  .action {
+    display: inline-block;
+    background: var(--accent);
+    color: var(--accent-ink);
+    padding: 0.625rem 1rem;
+    font-weight: 700;
+    text-decoration: none;
+  }
+  /* A control: a frame, no fill. */
+  .ctl {
+    display: inline-block;
+    border: 1px solid var(--rule-strong);
+    padding: 0.5625rem 0.9375rem;
+    text-decoration: none;
+  }
+  .ctl:hover {
+    border-color: var(--ink-dim);
+  }
+}
+
+/* Unlayered on purpose: a row's `border-t` utility must not undo the dashed rest state. */
+/* Rows: dashed at rest, solid under the pointer (batlehub-design, Data table). */
+main tbody tr {
+  border-top-style: dashed;
+}
+main tbody tr:hover {
+  border-top-style: solid;
+  border-top-color: var(--rule-strong);
+  background: var(--ground-raised);
+}
+
+/* A finger needs a bigger target than a pointer. */
+@media (pointer: coarse) {
+  button,
+  select,
+  input:not([type="checkbox"], [type="radio"]) {
+    min-height: 44px;
+  }
 }
 
 :focus-visible {

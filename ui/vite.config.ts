@@ -7,6 +7,7 @@ import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 
 import { buildChecks } from "./build-checks.ts";
+import { pluginZip } from "./plugin-zip.ts";
 import { BRIDGE } from "./src/reader/bridge.ts";
 
 /**
@@ -33,7 +34,7 @@ function frameHash(): Plugin {
 // Served by kura-server under /app (RFC 0003 §6.1), same origin as the API.
 export default defineConfig({
   base: "/app/",
-  plugins: [vue(), tailwindcss(), frameHash(), buildChecks()],
+  plugins: [vue(), tailwindcss(), frameHash(), pluginZip(), buildChecks()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   server: {
     // `pnpm dev` against `task dev:run`: the API and config.json come from it.
@@ -43,7 +44,13 @@ export default defineConfig({
       "/app/config.json": "http://127.0.0.1:58080",
     },
   },
-  build: { outDir: "dist", assetsDir: "assets" },
+  build: {
+    outDir: "dist",
+    assetsDir: "assets",
+    // Fonts are always files: `font-src 'self'` refuses a `data:` font.
+    assetsInlineLimit: (file: string) =>
+      /\.woff2?$/.test(file) ? false : undefined,
+  },
   test: {
     environment: "jsdom",
     // e2e/ is Playwright's, run against a real browser by tests/heavy/reader.sh.

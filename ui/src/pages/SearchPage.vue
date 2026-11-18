@@ -57,8 +57,7 @@ async function run(): Promise<void> {
 
 <template>
   <section>
-    <p class="mb-3"><RouterLink :to="`/vaults/${vaultId}`" class="underline">{{ t("reader.backToVault") }}</RouterLink></p>
-    <h1 class="mb-3">{{ t("reader.search") }}</h1>
+    <h2 class="label mb-3">{{ t("reader.search") }}</h2>
     <p v-if="disabled" role="status" data-test="search-off">{{ t("reader.searchOff") }}</p>
     <template v-else>
       <form role="search" class="mb-4 flex gap-2" @submit.prevent="run">

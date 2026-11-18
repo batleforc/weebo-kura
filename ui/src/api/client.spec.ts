@@ -12,7 +12,7 @@ vi.mock("./generated/sdk.gen", () => ({
 
 import { browserName, ensureDevice, signOut, withDevice } from "./client";
 import { registerDevice } from "./generated/sdk.gen";
-import { messageOf, problemType } from "./problem";
+import { messageOf, problemType, retryable } from "./problem";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -86,5 +86,20 @@ describe("problems", () => {
     expect(messageOf(offline)).toMatch(/server/i);
     expect(messageOf(new Error("boom"))).toBe("boom");
     expect(messageOf("?")).toMatch(/unexpected/i);
+    // A bare 400 or 404 (no problem body) still reads as a sentence.
+    expect(messageOf(refusal(400))).toMatch(/not valid/i);
+    expect(messageOf(refusal(404))).toMatch(/not found/i);
+  });
+
+  it("offer a retry only when asking again can help", () => {
+    const offline = new AxiosError("down", "ERR_NETWORK", {
+      headers: new AxiosHeaders(),
+    });
+    expect(retryable(offline)).toBe(true);
+    expect(retryable(refusal(503, "unavailable"))).toBe(true);
+    expect(retryable(refusal(429, "rate_limited"))).toBe(true);
+    expect(retryable(refusal(404, "not_found"))).toBe(false);
+    expect(retryable(refusal(403, "insufficient_role"))).toBe(false);
+    expect(retryable(refusal(400))).toBe(false);
   });
 });

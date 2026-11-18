@@ -13,10 +13,15 @@ import { createToken, listTokens, revokeToken } from "@/api/generated/sdk.gen";
 import type { ScopeRule, TokenView } from "@/api/generated/types.gen";
 import { messageOf } from "@/api/problem";
 import AsyncState from "@/components/ui/AsyncState.vue";
+import ConfirmRow from "@/components/ui/ConfirmRow.vue";
 import ForbiddenState from "@/components/ui/ForbiddenState.vue";
+import RevokedToggle from "@/components/ui/RevokedToggle.vue";
+import StateMark from "@/components/ui/StateMark.vue";
 import { useLoad } from "@/manage/useLoad";
+import { useMe } from "@/me";
+import { ago, when } from "@/reader/time";
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const route = useRoute();
 const v = computed(() => String(route.params.v));
 const {
@@ -25,6 +30,7 @@ const {
   error,
   forbidden,
   forbiddenDetail,
+  canRetry,
   load,
 } = useLoad<TokenView[]>(
   () =>
@@ -52,14 +58,28 @@ const refusal = ref<string | null>(null);
 const secret = ref<string | null>(null);
 const copied = ref(false);
 const confirming = ref<TokenView | null>(null);
+const meStore = useMe();
+const showRevoked = ref(false);
+const revokedCount = computed(
+  () => tokens.value.filter((k) => k.revoked).length,
+);
+const shown = computed(() =>
+  showRevoked.value ? tokens.value : tokens.value.filter((k) => !k.revoked),
+);
+
+/** "you" for the caller's own keys, else the subject cut short (the full one on hover). */
+function creator(k: TokenView): string {
+  if (k.createdBy === meStore.me?.subject) return t("keys.you");
+  return k.createdBy.length > 12 ? `${k.createdBy.slice(0, 8)}…` : k.createdBy;
+}
 
 function scopes(k: TokenView): string {
   return k.scopes
     .map(
       (r) =>
-        `${r.mode === "write" ? "w" : "r"}:${r.path === "" ? t("reader.whole") : r.path}`,
+        `${r.path === "" ? t("reader.whole") : r.path} (${r.mode === "write" ? t("keys.write") : t("keys.read")})`,
     )
-    .join(" ");
+    .join(", ");
 }
 
 async function create(): Promise<void> {
@@ -120,12 +140,15 @@ async function revoke(k: TokenView): Promise<void> {
   }
 }
 
-onMounted(load);
+onMounted(() => {
+  void meStore.load().catch(() => undefined);
+  void load();
+});
 </script>
 
 <template>
   <section>
-    <h1 class="mb-4">{{ t("manage.keys") }}</h1>
+    <h2 class="sr-only">{{ t("manage.keys") }}</h2>
     <ForbiddenState v-if="forbidden" :detail="forbiddenDetail" />
     <AsyncState
       v-else
@@ -134,7 +157,7 @@ onMounted(load);
       :empty="false"
       empty-message=""
       :title="t('manage.failed')"
-      @retry="load"
+      :can-retry="canRetry" @retry="load"
     >
       <div v-if="secret" role="dialog" aria-labelledby="created" class="mb-4 border border-accent p-4" data-test="created">
         <h2 id="created" class="font-bold">{{ t("keys.created") }}</h2>
@@ -143,9 +166,10 @@ onMounted(load);
         <p class="my-2">{{ t("keys.once") }}</p>
         <button type="button" class="bg-accent px-3 text-accent-ink" data-test="close" @click="close">{{ t("keys.stored") }}</button>
       </div>
-      <p v-if="refusal" role="alert" class="mb-2 border border-accent p-2">{{ refusal }}</p>
+      <p v-if="refusal" role="alert" class="mb-2 border-l border-rule pl-3">{{ refusal }}</p>
       <p v-if="tokens.length === 0" class="text-ink-dim">{{ t("keys.empty") }}</p>
-      <table v-else class="w-full text-left">
+      <div v-else class="relative overflow-x-auto" tabindex="0">
+      <table class="w-full text-left">
         <thead>
           <tr>
             <th scope="col">{{ t("keys.name") }}</th>
@@ -159,31 +183,38 @@ onMounted(load);
           </tr>
         </thead>
         <tbody>
-          <tr v-for="k in tokens" :key="k.id" class="border-t border-rule-soft">
+          <template v-for="k in shown" :key="k.id">
+          <tr class="border-t border-rule-soft">
             <td>{{ k.name }}</td>
             <td>{{ scopes(k) }}</td>
             <td>{{ k.cidrs.join(", ") }}</td>
-            <td>{{ k.expiresAt.slice(0, 10) }}</td>
-            <td>{{ k.lastUsedAt ? k.lastUsedAt.slice(0, 16).replace("T", " ") : t("keys.never") }}</td>
-            <td>{{ k.createdBy }}</td>
-            <td>{{ k.revoked ? t("devices.revoked") : t("devices.active") }}</td>
+            <td><time :datetime="k.expiresAt" :title="when(k.expiresAt, locale)">{{ ago(k.expiresAt, locale) }}</time></td>
+            <td><time v-if="k.lastUsedAt" :datetime="k.lastUsedAt" :title="when(k.lastUsedAt, locale)">{{ ago(k.lastUsedAt, locale) }}</time><template v-else>{{ t("keys.never") }}</template></td>
+            <td :title="k.createdBy">{{ creator(k) }}</td>
+            <td><StateMark :kind="k.revoked ? 'gone' : 'live'" :word="k.revoked ? t('devices.revoked') : t('devices.active')" /></td>
             <td>
               <button v-if="!k.revoked" type="button" class="border border-accent px-2" @click="confirming = k">
                 {{ t("devices.revoke") }}
               </button>
             </td>
           </tr>
+          <ConfirmRow
+            v-if="confirming?.id === k.id"
+            :colspan="8"
+            :question="t('keys.confirmRevoke', { name: k.name })"
+            :action="t('devices.confirm')"
+            @confirm="revoke(k)"
+            @cancel="confirming = null"
+          />
+          </template>
         </tbody>
       </table>
-      <div v-if="confirming" role="alertdialog" class="mt-4 border border-accent p-4">
-        <p>{{ t("keys.confirmRevoke", { name: confirming.name }) }}</p>
-        <button type="button" class="mr-2 bg-accent px-3 text-accent-ink" @click="revoke(confirming)">{{ t("devices.confirm") }}</button>
-        <button type="button" class="border border-rule px-3" @click="confirming = null">{{ t("devices.cancel") }}</button>
       </div>
+      <RevokedToggle v-model="showRevoked" :count="revokedCount" />
       <button v-if="!creating" type="button" class="mt-4 border border-rule px-3" data-test="new-key" @click="creating = true">
         {{ t("keys.new") }}
       </button>
-      <form v-else class="mt-4 grid max-w-xl gap-2 border border-rule p-4" @submit.prevent="create">
+      <form v-else class="mt-4 grid max-w-xl gap-2 border-t border-dashed border-rule-soft pt-4" @submit.prevent="create">
         <label>{{ t("keys.name") }} <input v-model="name" maxlength="64" class="ml-2 border border-rule bg-ground px-1" /></label>
         <fieldset>
           <legend>{{ t("keys.folders") }}</legend>
@@ -194,7 +225,7 @@ onMounted(load);
               <option value="write">{{ t("keys.write") }}</option>
             </select>
           </div>
-          <button type="button" class="mt-1 border border-rule px-2" @click="rules.push({ path: '', mode: 'read' })">+</button>
+          <button type="button" class="mt-1 border border-rule px-2" @click="rules.push({ path: '', mode: 'read' })">+ {{ t("keys.addFolder") }}</button>
         </fieldset>
         <label>{{ t("keys.expiresIn") }}
           <input v-model.number="days" type="number" min="1" max="90" class="ml-2 w-20 border border-rule bg-ground px-1" />

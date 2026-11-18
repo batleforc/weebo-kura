@@ -78,6 +78,35 @@ pub struct UiConfig {
     #[serde(default = "default_ui_dir")]
     pub dir: std::path::PathBuf,
     pub oidc: UiOidc,
+    /// What the console's "Open in Obsidian" link gives the plugin.
+    #[serde(default)]
+    pub plugin: UiPlugin,
+}
+
+/// The Obsidian plugin's public client, as the console hands it over.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiPlugin {
+    /// Also one of `oidc.audiences`.
+    #[serde(default = "default_plugin_client")]
+    pub client_id: String,
+    /// Where the plugin discovers the identity provider (with Authentik: the
+    /// plugin's own application). Absent: `oidc.discovery`, else the issuer.
+    #[serde(default)]
+    pub discovery: Option<String>,
+}
+
+impl Default for UiPlugin {
+    fn default() -> Self {
+        Self {
+            client_id: default_plugin_client(),
+            discovery: None,
+        }
+    }
+}
+
+fn default_plugin_client() -> String {
+    "kura-plugin".into()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

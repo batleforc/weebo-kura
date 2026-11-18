@@ -22,8 +22,18 @@ pub struct UiSettings {
     pub issuer: String,
     /// Where the discovery document is (`oidc.discovery`, else the issuer).
     pub discovery: String,
+    /// The Obsidian plugin's client and discovery URL, for the setup link.
+    pub plugin: PluginClient,
     /// The Content-Security-Policy of every `/app` answer, built once.
     csp: HeaderValue,
+}
+
+/// What the plugin signs in with (`ui.plugin` in `server.yaml`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginClient {
+    pub client_id: String,
+    pub issuer: String,
 }
 
 impl UiSettings {
@@ -53,10 +63,23 @@ impl UiSettings {
         Some(Self {
             dir,
             client_id,
+            plugin: PluginClient {
+                client_id: "kura-plugin".into(),
+                issuer: discovery.clone(),
+            },
             issuer,
             discovery,
             csp,
         })
+    }
+}
+
+impl UiSettings {
+    /// The plugin's own client (`ui.plugin`), instead of the defaults.
+    #[must_use]
+    pub fn with_plugin(mut self, plugin: PluginClient) -> Self {
+        self.plugin = plugin;
+        self
     }
 }
 
@@ -101,6 +124,7 @@ struct ConsoleConfig {
     issuer: String,
     discovery: String,
     client_id: String,
+    plugin: PluginClient,
 }
 
 async fn config(State(state): State<SharedState>) -> Response {
@@ -109,6 +133,7 @@ async fn config(State(state): State<SharedState>) -> Response {
             issuer: ui.issuer.clone(),
             discovery: ui.discovery.clone(),
             client_id: ui.client_id.clone(),
+            plugin: ui.plugin.clone(),
         })
         .into_response(),
         None => axum::http::StatusCode::NOT_FOUND.into_response(),

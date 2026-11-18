@@ -11,6 +11,7 @@ import type {
   RevisionInfo,
   Vault,
 } from "@/api/generated/types.gen";
+import { retryable } from "@/api/problem";
 import AsyncState from "@/components/ui/AsyncState.vue";
 import { fileBytes } from "@/reader/content";
 import { type Watch, watchVault } from "@/reader/events";
@@ -39,6 +40,7 @@ const vault = ref<Vault | undefined>();
 const entries = ref<EntryState[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
+const canRetry = ref(true);
 const note = ref<EntryState | undefined>();
 const doc = ref<string | null>(null);
 const download = ref<string | null>(null);
@@ -58,6 +60,7 @@ async function loadAll(): Promise<void> {
     cut.value = loaded.cut;
   } catch (e) {
     error.value = failure(e);
+    canRetry.value = retryable(e);
   } finally {
     loading.value = false;
   }
@@ -164,29 +167,26 @@ watch(entryId, () => void open());
 
 <template>
   <section>
-    <h1 class="sr-only">{{ note ? noteName(note.path) : (vault?.name ?? t("reader.folders")) }}</h1>
-    <nav :aria-label="t('reader.breadcrumb')" class="mb-3 flex flex-wrap gap-2">
-      <RouterLink to="/vaults">{{ t("nav.vaults") }}</RouterLink>
-      <span aria-hidden="true">▸</span>
-      <RouterLink :to="`/vaults/${vaultId}`">{{ vault?.name ?? "…" }}</RouterLink>
-      <template v-if="note">
-        <span aria-hidden="true">▸</span><span>{{ note.path }}</span>
-      </template>
+    <h2 class="sr-only">{{ note ? noteName(note.path) : t("reader.folders") }}</h2>
+    <div class="mb-3 flex flex-wrap gap-2">
+      <span class="min-w-0 break-words text-ink-dim">{{ note?.path ?? "" }}</span>
       <RouterLink :to="`/vaults/${vaultId}/search`" class="ml-auto underline">{{ t("reader.search") }}</RouterLink>
-    </nav>
+    </div>
     <AsyncState
       :loading="loading"
       :error="error"
       :empty="entries.length === 0"
       :empty-message="t('reader.emptyVault')"
       :title="t('reader.failed')"
+      :can-retry="canRetry"
       @retry="loadAll"
     >
       <p v-if="cut" role="status" class="mb-3 border border-rule p-2" data-test="cut">
         {{ t("reader.cut", { n: (MAX_PAGES * 1000).toLocaleString(locale) }) }}
       </p>
       <div class="grid gap-4 md:grid-cols-[16rem_1fr]">
-        <nav :aria-label="t('reader.folders')" class="border-r border-rule-soft" data-test="tree">
+        <!-- On a phone, an open note comes first and its folders after it. -->
+        <nav :aria-label="t('reader.folders')" class="md:border-r md:border-rule-soft" :class="{ 'order-2 md:order-none': entryId }" data-test="tree">
           <FolderTree :folder="tree" :vault="vaultId" :current="entryId" />
         </nav>
         <article>

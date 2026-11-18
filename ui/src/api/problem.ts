@@ -39,10 +39,18 @@ export function messageOf(error: unknown): string {
   const type = problemType(error);
   if (type && KNOWN.has(type)) return t(`problem.${type}`);
   if (axios.isAxiosError(error)) {
-    return (
-      detailOf(error) ??
-      t("problem.status", { status: error.response?.status ?? 0 })
-    );
+    const status = error.response?.status ?? 0;
+    // A bare 400 is a malformed address (an id that is not one), a bare 404 a missing object.
+    if (status === 400) return detailOf(error) ?? t("problem.invalid_request");
+    if (status === 404) return t("problem.not_found");
+    return detailOf(error) ?? t("problem.status", { status });
   }
   return error instanceof Error ? error.message : t("problem.unexpected");
+}
+
+/** Whether asking again can help: the network, the server, or a rate limit; never a refusal. */
+export function retryable(error: unknown): boolean {
+  if (!axios.isAxiosError(error) || !error.response) return true;
+  const status = error.response.status;
+  return status >= 500 || status === 408 || status === 429;
 }

@@ -6,26 +6,33 @@ import { useRoute, useRouter } from "vue-router";
 import { ensureDevice, signOut } from "@/api/client";
 import { problemType } from "@/api/problem";
 import { useSession } from "@/auth/session";
+import PrefsMenu from "@/components/PrefsMenu.vue";
 import { useMe } from "@/me";
+import { useVaults } from "@/vaults";
 
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const session = useSession();
 const meStore = useMe();
-const shell = computed(() => route.meta.access === "member");
-/**
- * The back office is one more menu, present only when `GET /me` gives a role
- * that can use it (§4.5): a tenant admin or owner, a platform admin. A vault
- * manager without a tenant role finds it from the vault (decision D1 of the
- * phase 2 plan).
- */
-const canManage = computed(
-  () =>
-    !!meStore.me &&
-    (meStore.me.platformAdmin ||
-      meStore.me.tenants.some((x) => x.role !== "member")),
+const vaultStore = useVaults();
+/** The sidebar's filter over the caller's vaults. */
+const filter = ref("");
+const groups = computed(() => {
+  const q = filter.value.trim().toLowerCase();
+  const shown = vaultStore.list.filter((v) => v.name.toLowerCase().includes(q));
+  return [...new Set(shown.map((v) => v.tenant))].sort().map((tenant) => ({
+    tenant,
+    vaults: shown
+      .filter((v) => v.tenant === tenant)
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  }));
+});
+/** On a phone the vault list folds under the header; open from 768px. */
+const wide = ref(
+  typeof matchMedia === "function" && matchMedia("(min-width: 768px)").matches,
 );
+const shell = computed(() => route.meta.access === "member");
 /** Signed in, but in no tenant: registering a device is refused (§4.5). */
 const noTenant = ref(false);
 
@@ -36,7 +43,10 @@ watch(
     try {
       const me = await meStore.load();
       noTenant.value = me.tenants.length === 0;
-      if (!noTenant.value) await ensureDevice();
+      if (!noTenant.value) {
+        await ensureDevice();
+        await vaultStore.load().catch(() => undefined);
+      }
     } catch (error) {
       noTenant.value = problemType(error) === "insufficient_role";
     }
@@ -47,31 +57,61 @@ watch(
 async function leave(): Promise<void> {
   await signOut();
   meStore.me = null;
+  vaultStore.list = [];
+  vaultStore.loaded = false;
   await router.replace({ name: "signin" });
 }
 </script>
 
 <template>
   <template v-if="shell">
-    <header class="flex flex-wrap items-center gap-4 border-b border-rule px-4 py-2">
-      <span class="font-bold">{{ t("app.name") }}</span>
-      <nav :aria-label="t('nav.main')" class="flex gap-4">
-        <RouterLink to="/vaults" active-class="underline">{{ t("nav.vaults") }}</RouterLink>
-        <RouterLink to="/devices" active-class="underline">{{ t("nav.devices") }}</RouterLink>
-        <RouterLink v-if="canManage" to="/manage" active-class="underline" data-test="manage">{{ t("manage.nav") }}</RouterLink>
-      </nav>
-      <span class="ml-auto text-ink-dim">{{ meStore.me?.name ?? meStore.me?.subject ?? "" }}</span>
-      <button type="button" class="border border-rule px-2" data-test="sign-out" @click="leave">
-        {{ t("nav.signOut") }}
-      </button>
-    </header>
-    <main class="p-4">
-      <div v-if="noTenant" role="alert" data-test="no-tenant">
-        <p>{{ t("noTenant.text", { name: meStore.me?.name ?? meStore.me?.subject ?? "" }) }}</p>
-        <p>{{ t("noTenant.hint") }}</p>
-      </div>
-      <RouterView v-else />
-    </main>
+    <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-2 focus:z-10 focus:bg-ground focus:px-2">{{ t("nav.skip") }}</a>
+    <div class="flex min-h-screen flex-wrap">
+      <aside class="flex w-full flex-col gap-5 border-b border-rule-soft px-4 py-5 md:w-64 md:border-r md:border-b-0 md:py-6" :aria-label="t('nav.main')">
+        <RouterLink to="/vaults" class="font-display text-[length:var(--t-px-md)] font-bold tracking-[0.04em] no-underline">KURA</RouterLink>
+        <nav :aria-label="t('nav.main')" class="flex flex-col">
+          <RouterLink to="/vaults" class="px-2 py-1.5 text-ink-dim hover:text-ink" exact-active-class="bg-ink font-bold !text-ground" data-test="home">{{ t("nav.home") }}</RouterLink>
+        </nav>
+        <details :open="wide" class="group">
+          <summary class="cursor-pointer px-2 text-ink-dim md:hidden">{{ t("nav.vaults") }}</summary>
+          <div class="mt-3 flex flex-col gap-4 md:mt-0">
+            <label class="flex flex-col gap-1 px-2 text-ink-dim">{{ t("nav.findVault") }}
+              <input v-model="filter" type="search" class="border border-rule bg-ground px-2 py-1 text-ink" :placeholder="t('nav.findVaultHint')" data-test="vault-filter" />
+            </label>
+            <nav :aria-label="t('nav.vaults')" class="flex flex-col gap-3" data-test="vault-nav">
+              <div v-for="g in groups" :key="g.tenant" class="flex flex-col">
+                <span class="px-2 pb-1 text-ink-dim">{{ g.tenant }}</span>
+                <RouterLink
+                  v-for="v in g.vaults"
+                  :key="v.id"
+                  :to="`/vaults/${v.id}`"
+                  class="px-2 py-1 no-underline hover:text-ink"
+                  :class="route.params.v === v.id ? 'bg-ink font-bold text-ground' : ''"
+                  :aria-current="route.params.v === v.id ? 'page' : undefined"
+                >{{ v.name }}</RouterLink>
+              </div>
+              <p v-if="vaultStore.loaded && !groups.length" class="px-2 text-ink-dim">{{ t("nav.noVault") }}</p>
+            </nav>
+          </div>
+        </details>
+        <div class="flex flex-row flex-wrap items-center gap-x-4 gap-y-2 border-t border-dashed border-rule-soft px-2 pt-4 text-ink-dim md:mt-auto md:flex-col md:items-start">
+          <RouterLink to="/devices" class="hover:text-ink" active-class="!text-ink font-bold">{{ t("nav.devices") }}</RouterLink>
+          <RouterLink to="/help" class="hover:text-ink" active-class="!text-ink font-bold" data-test="help">{{ t("nav.help") }}</RouterLink>
+          <PrefsMenu class="self-start" />
+          <span>
+            {{ meStore.me?.name ?? meStore.me?.subject ?? "" }} ·
+            <button type="button" class="underline hover:text-ink" data-test="sign-out" @click="leave">{{ t("nav.signOut") }}</button>
+          </span>
+        </div>
+      </aside>
+      <main id="main" tabindex="-1" class="min-w-0 flex-[999_1_560px] px-4 py-8 outline-none sm:px-8 md:px-12 md:py-10">
+        <div v-if="noTenant" role="alert" data-test="no-tenant">
+          <p>{{ t("noTenant.text", { name: meStore.me?.name ?? meStore.me?.subject ?? "" }) }}</p>
+          <p>{{ t("noTenant.hint") }}</p>
+        </div>
+        <RouterView v-else />
+      </main>
+    </div>
   </template>
   <RouterView v-else />
 </template>

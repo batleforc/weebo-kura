@@ -8,10 +8,12 @@ import { withDevice } from "@/api/client";
 import { listDeliveries } from "@/api/generated/sdk.gen";
 import type { DeliveryView } from "@/api/generated/types.gen";
 import AsyncState from "@/components/ui/AsyncState.vue";
+import BreadCrumbs from "@/components/ui/BreadCrumbs.vue";
 import ForbiddenState from "@/components/ui/ForbiddenState.vue";
 import { useLoad } from "@/manage/useLoad";
+import { when } from "@/reader/time";
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const route = useRoute();
 const tenant = computed(() => String(route.params.t));
 const rule = computed(() => String(route.params.n));
@@ -21,6 +23,7 @@ const {
   error,
   forbidden,
   forbiddenDetail,
+  canRetry,
   load,
 } = useLoad<DeliveryView[]>(
   () =>
@@ -41,10 +44,11 @@ onMounted(load);
 
 <template>
   <section>
-    <p class="mb-3"><RouterLink :to="`/manage/tenants/${tenant}/notifications`" class="underline">{{ t("notifications.back") }}</RouterLink></p>
+    <BreadCrumbs :items="[{ label: t('home.title'), to: '/vaults' }, { label: tenant }, { label: t('manage.notifications'), to: `/manage/tenants/${tenant}/notifications` }]" />
     <h1 class="mb-4">{{ t("notifications.deliveriesTitle") }}</h1>
     <ForbiddenState v-if="forbidden" :detail="forbiddenDetail" />
-    <AsyncState v-else :loading="loading" :error="error" :empty="deliveries.length === 0" :empty-message="t('notifications.noDelivery')" :title="t('manage.failed')" @retry="load">
+    <AsyncState v-else :loading="loading" :error="error" :empty="deliveries.length === 0" :empty-message="t('notifications.noDelivery')" :title="t('manage.failed')" :can-retry="canRetry" @retry="load">
+      <div class="relative overflow-x-auto" tabindex="0">
       <table class="w-full text-left">
         <thead>
           <tr>
@@ -56,13 +60,14 @@ onMounted(load);
         </thead>
         <tbody>
           <tr v-for="d in deliveries" :key="d.id" class="border-t border-rule-soft">
-            <td>{{ d.at.slice(0, 19).replace("T", " ") }}</td>
+            <td><time :datetime="d.at">{{ when(d.at, locale) }}</time></td>
             <td>{{ d.event }}</td>
             <td>{{ d.attempts }}</td>
             <td>{{ d.status === "failed" || d.status === "pending" ? t(`notifications.${d.status}`, { result: d.result ?? "" }) : d.result }}</td>
           </tr>
         </tbody>
       </table>
+      </div>
     </AsyncState>
   </section>
 </template>

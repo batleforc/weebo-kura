@@ -5,13 +5,18 @@
  */
 import { useI18n } from "vue-i18n";
 
-defineProps<{
-  loading: boolean;
-  error?: string | null;
-  empty?: boolean;
-  emptyMessage: string;
-  title: string;
-}>();
+withDefaults(
+  defineProps<{
+    loading: boolean;
+    error?: string | null;
+    empty?: boolean;
+    emptyMessage: string;
+    title: string;
+    /** False when asking again cannot help (a refusal, a missing object). */
+    canRetry?: boolean;
+  }>(),
+  { canRetry: true },
+);
 const emit = defineEmits<{ retry: [] }>();
 const { t } = useI18n();
 </script>
@@ -21,7 +26,7 @@ const { t } = useI18n();
   <div v-else-if="error" role="alert" class="border border-accent p-4">
     <p class="font-bold">{{ title }}</p>
     <p class="text-ink-dim">{{ error }}</p>
-    <button type="button" class="mt-2 border border-rule px-3 py-1" @click="emit('retry')">
+    <button v-if="canRetry" type="button" class="mt-2 border border-rule px-3 py-1" @click="emit('retry')">
       {{ t("state.retry") }}
     </button>
   </div>

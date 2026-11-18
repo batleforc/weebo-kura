@@ -164,9 +164,16 @@ async fn connect(
                 .clone()
                 .or_else(|| config.oidc.discovery.clone()),
         )
-        .ok_or_else(|| {
-            anyhow::anyhow!("oidc.discovery: not usable in a Content-Security-Policy")
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("oidc.discovery: not usable in a Content-Security-Policy"))?
+        .with_plugin(app::ui::PluginClient {
+            client_id: ui.plugin.client_id.clone(),
+            issuer: ui
+                .plugin
+                .discovery
+                .clone()
+                .or_else(|| config.oidc.discovery.clone())
+                .unwrap_or_else(|| config.oidc.issuer.clone()),
+        });
         state = state.with_ui(settings);
     }
     if let Some(v) = &vault {

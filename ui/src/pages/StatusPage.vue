@@ -7,8 +7,11 @@ import { withDevice } from "@/api/client";
 import { adminStatus } from "@/api/generated/sdk.gen";
 import type { AdminStatus } from "@/api/generated/types.gen";
 import AsyncState from "@/components/ui/AsyncState.vue";
+import BreadCrumbs from "@/components/ui/BreadCrumbs.vue";
 import ForbiddenState from "@/components/ui/ForbiddenState.vue";
+import StateMark from "@/components/ui/StateMark.vue";
 import { useLoad } from "@/manage/useLoad";
+import { when } from "@/reader/time";
 
 interface Row {
   kind: string;
@@ -17,13 +20,14 @@ interface Row {
   reasons: string;
 }
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const {
   data: status,
   loading,
   error,
   forbidden,
   forbiddenDetail,
+  canRetry,
   load,
 } = useLoad<AdminStatus | null>(
   () =>
@@ -68,16 +72,18 @@ onMounted(load);
 
 <template>
   <section>
+    <BreadCrumbs :items="[{ label: t('home.title'), to: '/vaults' }]" />
     <h1 class="mb-4">{{ t("manage.status") }}</h1>
     <ForbiddenState v-if="forbidden" :detail="forbiddenDetail" />
-    <AsyncState v-else :loading="loading" :error="error" :empty="false" empty-message="" :title="t('manage.failed')" @retry="load">
+    <AsyncState v-else :loading="loading" :error="error" :empty="false" empty-message="" :title="t('manage.failed')" :can-retry="canRetry" @retry="load">
       <div v-if="status?.rejection.length" role="alert" class="mb-4 border border-accent p-3" data-test="rejection">
         <p class="font-bold">{{ t("status.rejected") }}</p>
         <p v-for="r in status.rejection" :key="r"><code>{{ r }}</code></p>
       </div>
       <p class="mb-2 text-ink-dim">
-        {{ t("status.generation", { generation: (status?.generation ?? "").slice(0, 8), at: status?.writtenAt ?? "" }) }}
+        {{ t("status.generation", { generation: (status?.generation ?? "").slice(0, 8), at: status?.writtenAt ? when(status.writtenAt, locale) : "" }) }}
       </p>
+      <div class="relative overflow-x-auto" tabindex="0">
       <table class="w-full text-left">
         <thead>
           <tr>
@@ -91,11 +97,12 @@ onMounted(load);
           <tr v-for="r in rows" :key="`${r.kind}/${r.name}`" class="border-t border-rule-soft">
             <td>{{ r.kind }}</td>
             <td>{{ r.name }}</td>
-            <td :class="r.ready === 'True' ? '' : 'font-bold text-accent'">{{ r.ready }}</td>
+            <td><StateMark :kind="r.ready === 'True' ? 'live' : r.ready === 'False' ? 'refused' : 'off'" :word="r.ready === 'True' ? t('status.isReady') : r.ready === 'False' ? t('status.notReady') : t('status.unknown')" /></td>
             <td>{{ r.reasons }}</td>
           </tr>
         </tbody>
       </table>
+      </div>
     </AsyncState>
   </section>
 </template>

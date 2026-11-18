@@ -9,6 +9,8 @@ import { createVault, deleteVault, listVaults } from "@/api/generated/sdk.gen";
 import type { Vault } from "@/api/generated/types.gen";
 import { messageOf } from "@/api/problem";
 import AsyncState from "@/components/ui/AsyncState.vue";
+import BreadCrumbs from "@/components/ui/BreadCrumbs.vue";
+import ConfirmRow from "@/components/ui/ConfirmRow.vue";
 import { useLoad } from "@/manage/useLoad";
 
 const { t } = useI18n();
@@ -18,6 +20,7 @@ const {
   data: all,
   loading,
   error,
+  canRetry,
   load,
 } = useLoad<Vault[]>(
   () =>
@@ -67,15 +70,17 @@ onMounted(load);
 
 <template>
   <section>
-    <h1 class="mb-4">{{ t("manage.tenantVaults") }} ({{ tenant }})</h1>
+    <BreadCrumbs :items="[{ label: t('home.title'), to: '/vaults' }, { label: tenant }]" />
+    <h1 class="mb-4">{{ t("manage.tenantVaults") }}</h1>
     <AsyncState
       :loading="loading"
       :error="error"
       :empty="vaults.length === 0"
       :empty-message="t('vaults.empty')"
       :title="t('manage.failed')"
-      @retry="load"
+      :can-retry="canRetry" @retry="load"
     >
+      <div class="relative overflow-x-auto" tabindex="0">
       <table class="w-full text-left">
         <thead>
           <tr>
@@ -85,7 +90,8 @@ onMounted(load);
           </tr>
         </thead>
         <tbody>
-          <tr v-for="v in vaults" :key="v.id" class="border-t border-rule-soft">
+          <template v-for="v in vaults" :key="v.id">
+          <tr class="border-t border-rule-soft">
             <td>{{ v.namespace }}/{{ v.name }}</td>
             <td>{{ v.managedBy === "api" ? "API" : t("access.configuration") }}</td>
             <td>
@@ -94,15 +100,20 @@ onMounted(load);
               </button>
             </td>
           </tr>
+          <ConfirmRow
+            v-if="confirming?.id === v.id"
+            :colspan="3"
+            :question="t('tenantVaults.confirmDelete', { name: v.name })"
+            :action="t('tenantVaults.delete')"
+            @confirm="remove(v)"
+            @cancel="confirming = null"
+          />
+          </template>
         </tbody>
       </table>
+      </div>
     </AsyncState>
-    <div v-if="confirming" role="alertdialog" class="mt-4 border border-accent p-4">
-      <p>{{ t("tenantVaults.confirmDelete", { name: confirming.name }) }}</p>
-      <button type="button" class="mr-2 bg-accent px-3 text-accent-ink" @click="remove(confirming)">{{ t("tenantVaults.delete") }}</button>
-      <button type="button" class="border border-rule px-3" @click="confirming = null">{{ t("devices.cancel") }}</button>
-    </div>
-    <p v-if="refusal" role="alert" class="mt-2 border border-accent p-2">{{ refusal }}</p>
+    <p v-if="refusal" role="alert" class="mt-2 border-l border-rule pl-3">{{ refusal }}</p>
     <form class="mt-4 flex gap-2" @submit.prevent="create">
       <label>{{ t("tenantVaults.newName") }}
         <input v-model="name" required pattern="[a-z0-9]([-a-z0-9]*[a-z0-9])?" maxlength="63" class="ml-2 border border-rule bg-ground px-1" />

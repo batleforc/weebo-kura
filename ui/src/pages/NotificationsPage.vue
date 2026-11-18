@@ -22,9 +22,13 @@ import {
 import type { RuleView, Vault } from "@/api/generated/types.gen";
 import { messageOf, problemType } from "@/api/problem";
 import AsyncState from "@/components/ui/AsyncState.vue";
+import BreadCrumbs from "@/components/ui/BreadCrumbs.vue";
+import ConfirmRow from "@/components/ui/ConfirmRow.vue";
 import ForbiddenState from "@/components/ui/ForbiddenState.vue";
+import StateMark from "@/components/ui/StateMark.vue";
 import { useLoad } from "@/manage/useLoad";
 import { useMe } from "@/me";
+import { ago, when } from "@/reader/time";
 
 /** The closed list of §4.2; tenant events are a tenant admin's. */
 const EVENTS = [
@@ -50,10 +54,19 @@ const TENANT_EVENTS = [
   "quota.high",
 ];
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const route = useRoute();
 const meStore = useMe();
-const tenant = computed(() => String(route.params.t));
+/** Under a vault's tab: that vault's rules, in its tenant; else a whole tenant's. */
+const inVault = computed(() =>
+  route.params.v ? String(route.params.v) : null,
+);
+const vaults = ref<Vault[]>([]);
+const tenant = computed(() =>
+  inVault.value
+    ? (vaults.value.find((v) => v.id === inVault.value)?.tenant ?? "")
+    : String(route.params.t),
+);
 const disabled = ref(false);
 const {
   data: rules,
@@ -61,6 +74,7 @@ const {
   error,
   forbidden,
   forbiddenDetail,
+  canRetry,
   load,
 } = useLoad<RuleView[]>(async () => {
   try {
@@ -82,7 +96,11 @@ const {
     throw e;
   }
 }, []);
-const vaults = ref<Vault[]>([]);
+const shown = computed(() =>
+  inVault.value
+    ? rules.value.filter((r) => r.vault === inVault.value)
+    : rules.value,
+);
 const admin = computed(
   () =>
     meStore.me?.tenants.some(
@@ -98,7 +116,7 @@ const offered = computed(() =>
   admin.value ? EVENTS : EVENTS.filter((e) => !TENANT_EVENTS.includes(e)),
 );
 const switchedOff = computed(() =>
-  rules.value.filter((r) => !r.enabled && r.disabledReason),
+  shown.value.filter((r) => !r.enabled && r.disabledReason),
 );
 
 const creating = ref(false);
@@ -309,7 +327,11 @@ async function enable(r: RuleView, on: boolean): Promise<void> {
   }
 }
 
+/** The rule a removal waits to be confirmed for. */
+const removing = ref<RuleView | null>(null);
+
 async function remove(r: RuleView): Promise<void> {
+  removing.value = null;
   try {
     await withDevice((headers) =>
       deleteRule({
@@ -329,18 +351,22 @@ onMounted(async () => {
   vaults.value = await withDevice(
     async (headers) => (await listVaults({ headers, throwOnError: true })).data,
   ).catch(() => []);
-  if (!admin.value) scope.value = mine.value[0]?.id ?? "";
+  scope.value = inVault.value ?? (admin.value ? "" : (mine.value[0]?.id ?? ""));
   await load();
 });
 </script>
 
 <template>
   <section>
-    <h1 class="mb-4">{{ t("notifications.title", { tenant }) }}</h1>
+    <template v-if="!inVault">
+      <BreadCrumbs :items="[{ label: t('home.title'), to: '/vaults' }, { label: tenant }]" />
+      <h1 class="mb-4">{{ t("manage.notifications") }}</h1>
+    </template>
+    <h2 v-else class="sr-only">{{ t("manage.notifications") }}</h2>
     <p v-if="disabled" role="status" data-test="disabled">{{ t("notifications.off") }}</p>
     <ForbiddenState v-else-if="forbidden" :detail="forbiddenDetail" />
-    <AsyncState v-else :loading="loading" :error="error" :empty="false" empty-message="" :title="t('manage.failed')" @retry="load">
-      <p v-for="r in switchedOff" :key="`off-${r.id}`" role="alert" class="mb-2 border border-accent p-2" data-test="switched-off">
+    <AsyncState v-else :loading="loading" :error="error" :empty="false" empty-message="" :title="t('manage.failed')" :can-retry="canRetry" @retry="load">
+      <p v-for="r in switchedOff" :key="`off-${r.id}`" role="alert" class="mb-2 border-l border-rule pl-3" data-test="switched-off">
         {{ t("notifications.switchedOff", { name: r.name, reason: r.disabledReason }) }}
       </p>
       <div v-if="secret" ref="secretBox" role="dialog" tabindex="-1" aria-labelledby="rule-created" aria-describedby="rule-once" class="mb-4 border border-accent p-4" data-test="created">
@@ -356,9 +382,10 @@ onMounted(async () => {
         <button type="button" class="border border-rule px-3" @click="cancelRotate">{{ t("devices.cancel") }}</button>
       </div>
       <p v-if="tested" role="status" class="mb-2" data-test="tested">{{ t("notifications.tested", tested) }}</p>
-      <p v-if="refusal" role="alert" class="mb-2 border border-accent p-2">{{ refusal }}</p>
-      <p v-if="rules.length === 0" class="text-ink-dim">{{ t("notifications.empty") }}</p>
-      <table v-else class="w-full text-left">
+      <p v-if="refusal" role="alert" class="mb-2 border-l border-rule pl-3">{{ refusal }}</p>
+      <p v-if="shown.length === 0" class="text-ink-dim">{{ t("notifications.empty") }}</p>
+      <div v-else class="relative overflow-x-auto" tabindex="0">
+      <table class="w-full text-left">
         <thead>
           <tr>
             <th scope="col">{{ t("keys.name") }}</th>
@@ -371,32 +398,49 @@ onMounted(async () => {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="r in rules" :key="r.id" class="border-t border-rule-soft" :data-rule="r.name">
+          <template v-for="r in shown" :key="r.id">
+          <tr class="border-t border-rule-soft" :data-rule="r.name">
             <th scope="row" class="font-normal">{{ r.name }}</th>
             <td>{{ r.events.join(", ") }}</td>
             <td>{{ vaultName(r.vault) }}</td>
             <td>{{ r.host }}</td>
-            <td>{{ r.last ? `${r.last.result} · ${r.last.at.slice(0, 16).replace("T", " ")}` : "" }}</td>
-            <td>{{ r.enabled ? t("notifications.on") : t("notifications.offState") }}</td>
+            <td><template v-if="r.last">{{ r.last.result }} · <time :datetime="r.last.at" :title="when(r.last.at, locale)">{{ ago(r.last.at, locale) }}</time></template></td>
+            <td><StateMark :kind="r.enabled ? 'live' : r.disabledReason ? 'waiting' : 'off'" :word="r.enabled ? t('notifications.on') : t('notifications.offState')" /></td>
             <!-- Not `flex` on the cell itself: it drops the cell from the table for some screen readers. -->
             <td>
               <div class="flex flex-wrap gap-1">
                 <button type="button" class="border border-rule px-2" data-test="test" @click="test(r)">{{ t("notifications.test") }}</button>
                 <button v-if="!r.enabled" type="button" class="border border-rule px-2" @click="enable(r, true)">{{ t("notifications.reEnable") }}</button>
-                <button v-else type="button" class="border border-rule px-2" @click="enable(r, false)">{{ t("notifications.disable") }}</button>
                 <button type="button" class="border border-rule px-2" data-test="edit" @click="openForm(r)">{{ t("notifications.edit") }}</button>
-                <button type="button" class="border border-rule px-2" data-test="rotate" @click="askRotate(r)">{{ t("notifications.rotate") }}</button>
                 <RouterLink :to="`/manage/tenants/${tenant}/notifications/${r.id}`" class="underline">{{ t("notifications.deliveries") }}</RouterLink>
-                <button type="button" class="border border-accent px-2" @click="remove(r)">{{ t("access.remove") }}</button>
+                <!-- The rarer actions, one step away: the row keeps three choices. -->
+                <details>
+                  <summary class="cursor-pointer border border-rule px-2">{{ t("notifications.more") }}</summary>
+                  <div class="mt-1 flex flex-wrap gap-1">
+                    <button v-if="r.enabled" type="button" class="border border-rule px-2" @click="enable(r, false)">{{ t("notifications.disable") }}</button>
+                    <button type="button" class="border border-rule px-2" data-test="rotate" @click="askRotate(r)">{{ t("notifications.rotate") }}</button>
+                    <button type="button" class="border border-accent px-2" data-test="remove" @click="removing = r">{{ t("access.remove") }}</button>
+                  </div>
+                </details>
               </div>
             </td>
           </tr>
+          <ConfirmRow
+            v-if="removing?.id === r.id"
+            :colspan="7"
+            :question="t('notifications.confirmRemove', { name: r.name })"
+            :action="t('access.remove')"
+            @confirm="remove(r)"
+            @cancel="removing = null"
+          />
+          </template>
         </tbody>
       </table>
+      </div>
       <button v-if="!creating" ref="newRule" type="button" class="mt-4 border border-rule px-3" data-test="new-rule" @click="openForm(null)">
         {{ t("notifications.new") }}
       </button>
-      <form v-else class="mt-4 grid max-w-2xl gap-2 border border-rule p-4" aria-labelledby="rule-form" @submit.prevent="submit">
+      <form v-else class="mt-4 grid max-w-2xl gap-2 border-t border-dashed border-rule-soft pt-4" aria-labelledby="rule-form" @submit.prevent="submit">
         <h2 id="rule-form" class="font-bold">{{ editing ? t("notifications.editTitle", { name: editing.name }) : t("notifications.new") }}</h2>
         <label>{{ t("keys.name") }} <input ref="firstField" v-model="name" required maxlength="64" class="ml-2 border border-rule bg-ground px-1" data-test="name" /></label>
         <label v-if="!editing">{{ t("notifications.scope") }}

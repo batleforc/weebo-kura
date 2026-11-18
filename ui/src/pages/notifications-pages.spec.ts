@@ -102,7 +102,9 @@ describe("notifications page", () => {
       path: { t: "jdr", n: "r2" },
       body: { enabled: true },
     });
-    await w.find("[data-rule=hub] button.border-accent").trigger("click");
+    await w.find("[data-rule=hub] [data-test=remove]").trigger("click");
+    expect(sdk.deleteRule).not.toHaveBeenCalled();
+    await w.find("[data-test=confirm]").trigger("click");
     await flushPromises();
     expect(vi.mocked(sdk.deleteRule).mock.calls[0]?.[0]?.path).toEqual({
       t: "jdr",
@@ -356,7 +358,9 @@ describe("deliveries page", () => {
       "/manage/tenants/:t/notifications/:n",
     );
     const rows = w.findAll("tbody tr").map((r) => r.text());
-    expect(rows[0]).toContain("2026-11-15 12:33:21");
+    expect(w.find("tbody time").attributes("datetime")).toBe(
+      "2026-11-15T12:33:21Z",
+    );
     expect(rows[1]).toContain("failed: status_5xx");
   });
 
