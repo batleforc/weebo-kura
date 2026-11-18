@@ -49,9 +49,20 @@ export function buildChecks(): Plugin {
             `${f.fileName} has inline script, refused by the CSP (T8): ${found.join(", ")}`,
           );
       }
-      // shortcut: counts the reader's chunks too, so it is stricter than
-      // §10.3 ("without the reader"); split them out if the total nears the budget.
-      const size = gzippedBytes(files);
+      // §10.3 budgets what loads up front: the entries and their static
+      // imports. Lazy chunks (the reader's routes, Mermaid) are left out.
+      const initial = new Set<string>();
+      const visit = (name: string): void => {
+        const chunk = bundle[name];
+        if (initial.has(name) || chunk?.type !== "chunk") return;
+        initial.add(name);
+        for (const css of chunk.viteMetadata?.importedCss ?? [])
+          initial.add(css);
+        chunk.imports.forEach(visit);
+      };
+      for (const f of Object.values(bundle))
+        if (f.type === "chunk" && f.isEntry) visit(f.fileName);
+      const size = gzippedBytes(files.filter((f) => initial.has(f.fileName)));
       const line = `bundle: ${(size / 1000).toFixed(1)} kB gzipped (JS + CSS), budget ${BUDGET_BYTES / 1000} kB`;
       if (size > BUDGET_BYTES) this.error(`${line}: over budget (§10.3)`);
       this.info(line);

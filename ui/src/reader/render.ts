@@ -21,8 +21,10 @@ import { resolver } from "./tree";
 export const ENTRY_LINK = "#entry:";
 /** The largest note rendered; larger notes are offered as a download. */
 export const MAX_RENDER = 1 << 20;
-/** The largest image inlined; larger images become a download link. */
-export const MAX_IMAGE = 2 << 20;
+/** The largest image inlined; larger images become a link to the file. */
+export const MAX_IMAGE = 8 << 20;
+/** The largest Mermaid source drawn; a larger one stays a code block. */
+export const MAX_DIAGRAM = 50_000;
 
 const IMAGE = /\.(png|jpe?g|gif|webp|avif|svg)$/i;
 
@@ -146,17 +148,67 @@ export async function frameDocument(
     const bytes = e && e.size <= MAX_IMAGE ? await load(e) : null;
     if (e && bytes) {
       img.src = await dataUrl(bytes, mimeOf(e.path));
+    } else if (e) {
+      // Too large or unreadable: a link that opens the file (its download).
+      const a = doc.createElement("a");
+      a.href = `${ENTRY_LINK}${e.entry}`;
+      a.textContent = img.alt || e.path;
+      img.replaceWith(a);
     } else {
       img.replaceWith(doc.createTextNode(img.alt));
     }
     img.removeAttribute("data-entry");
   }
+  await diagrams(doc);
   return (
     // The theme it opens in; NoteFrame sends it the next one.
     `<!doctype html><html data-theme="${document.documentElement.dataset.theme === "light" ? "light" : "dark"}"><head><meta charset="utf-8">` +
     '<link rel="stylesheet" href="/app/frame.css"></head>' +
     `<body>${doc.body.innerHTML}<script>${BRIDGE}</script></body></html>`
   );
+}
+
+let diagramId = 0;
+
+/**
+ * Mermaid blocks drawn as SVG and shown as an `<img>`: an image runs no
+ * script and calls no host, so the frame's policy stays as it is. Mermaid
+ * parses in the application (decision of 2026-11-18), loaded only when a
+ * note has a diagram, in its `strict` mode (its own DOMPurify, no click
+ * handlers). A diagram it cannot draw stays a code block.
+ */
+async function diagrams(doc: Document): Promise<void> {
+  const blocks = Array.from(
+    doc.querySelectorAll<HTMLElement>("pre > code.language-mermaid"),
+  ).filter((c) => (c.textContent ?? "").length <= MAX_DIAGRAM);
+  if (blocks.length === 0) return;
+  const { default: mermaid } = await import("mermaid");
+  // shortcut: drawn in the theme the note opens in, a theme switch keeps it
+  // until the note is opened again; redraw on the switch if that shows.
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: "strict",
+    htmlLabels: false,
+    theme:
+      document.documentElement.dataset.theme === "light" ? "default" : "dark",
+  });
+  for (const code of blocks) {
+    const id = `kura-diagram-${++diagramId}`;
+    try {
+      const { svg } = await mermaid.render(id, code.textContent ?? "");
+      const img = doc.createElement("img");
+      img.alt = "diagram";
+      img.className = "diagram";
+      // The SVG says width="100%": its natural width is the viewBox's.
+      const width = Number(/viewBox="[\d.-]+ [\d.-]+ ([\d.]+)/.exec(svg)?.[1]);
+      if (width > 0) img.width = Math.ceil(width);
+      img.src = await dataUrl(new TextEncoder().encode(svg), "image/svg+xml");
+      code.parentElement?.replaceWith(img);
+    } catch {
+      // Mermaid leaves its error drawing in the page on a failure.
+      document.getElementById(`d${id}`)?.remove();
+    }
+  }
 }
 
 function mimeOf(path: string): string {

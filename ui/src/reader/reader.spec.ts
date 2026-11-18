@@ -184,10 +184,34 @@ describe("caps (T9)", () => {
     );
     expect(load).not.toHaveBeenCalled();
     expect(doc).not.toContain("<img");
-    expect(doc).toContain("the map");
+    expect(doc).toContain(`<a href="${ENTRY_LINK}huge">the map</a>`);
     const atCap = [entry("Sessions/huge.png", "huge", MAX_IMAGE)];
     await frameDocument(renderNote("![[huge.png]]", atCap), load);
     expect(load).toHaveBeenCalledOnce();
+  });
+});
+
+describe("diagrams", () => {
+  it("draws a Mermaid block as an image, and keeps one it cannot draw as code", async () => {
+    const render = vi
+      .fn()
+      .mockResolvedValueOnce({ svg: '<svg viewBox="0 0 120.5 80"></svg>' })
+      .mockRejectedValueOnce(new Error("parse"));
+    vi.doMock("mermaid", () => ({ default: { initialize: vi.fn(), render } }));
+    const doc = await frameDocument(
+      renderNote(
+        "```mermaid\ngraph TD; A-->B\n```\n\n```mermaid\nnot a graph\n```",
+        listed,
+      ),
+      async () => null,
+    );
+    expect(render).toHaveBeenCalledTimes(2);
+    expect(doc).toMatch(
+      /class="diagram" width="121" src="data:image\/svg\+xml;base64,/,
+    );
+    expect(doc).toContain("not a graph");
+    expect(doc).not.toContain("A--&gt;B");
+    vi.doUnmock("mermaid");
   });
 });
 

@@ -431,8 +431,16 @@ fails on a handler that reads vault content without `ReadAccess` (§14).
   caller was listed, or an external URL opened with
   `rel="noreferrer noopener"`.
 - Images are fetched through the API by the application and inlined as
-  `data:` URLs, at most 2 MiB each (larger: a download link). A remote image
-  URL in a note is not loaded, so opening a note never calls a third party.
+  `data:` URLs, at most 8 MiB each (larger: a link to the file, which opens as
+  a download). A remote image URL in a note is not loaded, so opening a note
+  never calls a third party.
+- Mermaid blocks (amendment of 2026-11-18): the application loads Mermaid
+  only when a note has one, draws it in `strict` mode (Mermaid's own
+  DOMPurify, no click handlers, no HTML labels) and inlines the SVG as a
+  `data:` image, so it runs no script in the frame and loads nothing. This
+  parses note text in the application's origin, a trade the owner accepted
+  over a dedicated diagram frame; a source over 50,000 characters, or one
+  Mermaid cannot draw, stays a code block.
   The policy directives the frame needs are RFC 0003 §6.1's.
 - Search sends the query in the body [R4] and shows the server's snippets as
   text, never as HTML.
@@ -894,7 +902,7 @@ All seven `ok` on the dev stack on 2026-11-17 [R20].
 | T6 | `ui/src/reader/reader.spec.ts`: "leaves nothing that runs or calls out from %s" (the XSS corpus), "is sandboxed without same-origin, and trusts only its own frame's messages", "has the hash the build writes"; `ui/e2e/reader.spec.ts`: "a restricted viewer reads the shared folders, and a hostile note runs nothing" (observation 6) | Holds as written |
 | T7 | `ui/src/reader/reader.spec.ts`: "keeps external links, embeds listed images and drops remote ones"; observation 6 (no request to `example.org`) | Holds as written |
 | T8 | `ui/src/pages/reader-pages.spec.ts`: "shows the shared folders and renders a note in the sandboxed frame" (every content call `cache: "no-store"`) | Holds as written |
-| T9 | `ui/src/pages/reader-pages.spec.ts`: "offers a file that is not Markdown as a download, and follows only listed links" | The download of a non-Markdown file is tested; the 1 MiB render cap (`MAX_RENDER`) and the 2 MiB image cap (`MAX_IMAGE`) have no test of their own. The entries cap of §18.2 bounds the tree |
+| T9 | `ui/src/pages/reader-pages.spec.ts`: "offers a file that is not Markdown as a download, and follows only listed links" | The download of a non-Markdown file is tested; the 1 MiB render cap (`MAX_RENDER`) and the 8 MiB image cap (`MAX_IMAGE`) have no test of their own. The entries cap of §18.2 bounds the tree |
 | T10 | `reader.sh` observation 7 | No in-process `anonymous_is_401`; `crates/kura-server/tests/console.rs` `me_shows_only_own_tenants` covers an invalid token on `GET /v1/me` |
 
 ### 18.5 Supply chain

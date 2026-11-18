@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "src/reader/render.ts"
+        ],
+        "createdAt": "2026-11-18T22:00:33.053Z",
+        "reason": "Claude: the data-entry <img> is a placeholder filled with a data: URL by frameDocument before display (pre-existing design, RFC 0005 §6.5)"
+      }
+    ]
+  }
+}
