@@ -682,3 +682,20 @@ devices, 61.6 ms for 197. About 0.3 ms a device at the cap; a vault would
 need over 1,500 devices all far behind to pass a second, and the list stops
 at 1,000 rows.
 
+### 18.8 Owners by name, and the browser proof (supersedes D13)
+
+Migration `0029` keeps the owner's `name` (else `preferred_username`) claim
+on each device, from the owner's own token: written at registration,
+refreshed with `last_seen`, cut to 128 characters
+(`Principal::display_name`, shared with `GET /me`). `GET /devices` and
+`GET /vaults/{v}/sync` return it as `ownerName` beside `owner`, in the same
+answers only: a member is never told it. The console shows the name, the
+subject in a tooltip. Test: `an_owner_is_named_by_their_name_claim`. It is
+personal data already shown on the owner's own `/me`; it now reaches the
+people who could already see the owner's subject.
+
+`tests/heavy/devices.sh` checks bob's name (`Bob`, from Authentik) in
+observation 2 and runs observation 7 in Chromium (`ui/e2e/devices.spec.ts`,
+Playwright): alice's page for `notes` shows bob's device, named, up to date,
+with "1 file cannot sync". 7 of 7 observations pass on the dev stack.
+

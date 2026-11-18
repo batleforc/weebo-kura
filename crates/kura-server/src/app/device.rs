@@ -97,9 +97,11 @@ pub async fn require_device(
             // At most one write a minute per device; the tenant links follow the
             // caller's current memberships at the same pace.
             let touched = sqlx::query(
-                "UPDATE device SET last_seen = now() WHERE id = $1 AND last_seen < now() - interval '1 minute'",
+                "UPDATE device SET last_seen = now(), owner_name = $2 WHERE id = $1
+                 AND (last_seen < now() - interval '1 minute' OR owner_name IS DISTINCT FROM $2)",
             )
             .bind(device)
+            .bind(p.display_name())
             .execute(&mut *tx)
             .await?
             .rows_affected();

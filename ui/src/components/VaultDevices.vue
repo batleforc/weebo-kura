@@ -31,7 +31,7 @@ const shown = computed(() =>
     matching(
       showRevoked.value ? rows.value : rows.value.filter((d) => !d.revoked),
       query.value,
-      (d) => [d.name, d.owner ?? ""],
+      (d) => [d.name, d.owner ?? "", d.ownerName ?? ""],
     ),
   ),
 );
@@ -110,7 +110,7 @@ onMounted(load);
         <tbody>
           <tr v-for="d in shown" :key="d.device" class="border-t border-rule-soft" :data-device="d.device">
             <td>{{ d.name }}<span v-if="d.revoked" class="ml-2 text-ink-dim">({{ t("devices.revoked") }})</span></td>
-            <td v-if="manages" :title="d.owner ?? undefined">{{ d.owner ?? t("sync.you") }}</td>
+            <td v-if="manages" :title="d.owner ?? undefined" class="break-all">{{ d.owner ? (d.ownerName ?? d.owner) : t("sync.you") }}</td>
             <td>
               <time v-if="d.caughtUpAt" :datetime="d.caughtUpAt" :title="when(d.caughtUpAt, locale)">{{ ago(d.caughtUpAt, locale) }}</time>
               <template v-else>—</template>

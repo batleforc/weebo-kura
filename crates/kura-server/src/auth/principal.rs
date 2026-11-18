@@ -55,6 +55,17 @@ impl Principal {
         })
     }
 
+    /// How the person is called: `name`, else `preferred_username`, blank
+    /// ones skipped, cut to 128 characters (RFC 0006 D13).
+    pub fn display_name(&self) -> Option<String> {
+        ["name", "preferred_username"]
+            .iter()
+            .filter_map(|c| self.claims.get(*c).and_then(Value::as_str))
+            .map(str::trim)
+            .find(|n| !n.is_empty())
+            .map(|n| n.chars().take(128).collect())
+    }
+
     /// A claim as a list of strings: `"g"` and `["g", "h"]` both work.
     pub fn claim_values(&self, claim: &str) -> Vec<&str> {
         match self.claims.get(claim) {

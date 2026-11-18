@@ -3590,6 +3590,13 @@
             ],
             "description": "The owner's subject, shown only to a tenant admin for others' devices."
           },
+          "ownerName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The owner's name as their identity provider gives it, beside `owner`\n(RFC 0006 D13); absent until the owner's device was seen with one."
+          },
           "profile": {
             "type": "string"
           },
@@ -3681,6 +3688,13 @@
               "null"
             ],
             "description": "The owner's subject: only in a manager's or tenant admin's answer."
+          },
+          "ownerName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The owner's name, beside `owner` only (RFC 0006 D13)."
           },
           "profile": {
             "type": "string"

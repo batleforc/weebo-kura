@@ -65,10 +65,7 @@ pub async fn me(State(state): State<SharedState>, caller: Caller) -> Result<Json
     let snapshot = state
         .snapshot()
         .ok_or(ApiError::of(ProblemType::Unavailable))?;
-    let name = ["name", "preferred_username"]
-        .iter()
-        .find_map(|c| p.claims.get(*c).and_then(serde_json::Value::as_str))
-        .map(str::to_owned);
+    let name = p.display_name();
     Ok(Json(Me {
         subject: p.sub.clone(),
         name,

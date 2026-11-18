@@ -163,7 +163,8 @@ describe("a vault's page", () => {
           device: "d2",
           name: "pixel",
           profile: "mobile",
-          owner: "bob",
+          owner: "f0f279fab2",
+          ownerName: "Bob",
           revoked: false,
           resync: false,
           report: {
@@ -189,7 +190,8 @@ describe("a vault's page", () => {
     const w = await open("manager");
     const rows = w.findAll("[data-test=sync] tbody tr").map((r) => r.text());
     expect(rows[0]).toContain("pixel");
-    expect(rows[0]).toContain("bob");
+    expect(rows[0]).toContain("Bob");
+    expect(rows[0]).not.toContain("f0f279fab2");
     expect(rows[0]).toContain("212 notes");
     expect(w.findAll("[data-test=last-run]").map((c) => c.text())).toEqual([
       "2 changes not sent · 1 file cannot sync",

@@ -61,6 +61,10 @@ pub struct Device {
     /// The owner's subject, shown only to a tenant admin for others' devices.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
+    /// The owner's name as their identity provider gives it, beside `owner`
+    /// (RFC 0006 D13); absent until the owner's device was seen with one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_name: Option<String>,
     /// The vaults this device caught up on (RFC 0006), for the caller's own
     /// devices only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -92,6 +96,7 @@ fn device(r: &sqlx::postgres::PgRow, owner: Option<String>) -> Result<Device, sq
             .try_get::<Option<time::OffsetDateTime>, _>("revoked_at")?
             .is_some(),
         owner,
+        owner_name: None,
         vaults: Vec::new(),
     })
 }
@@ -197,7 +202,7 @@ pub async fn register_device(
         ));
     }
     let row = sqlx::query(
-        "INSERT INTO device (user_sub, session_sid, session_auth_time, name, profile) VALUES ($1, $2, $5, $3, $4)
+        "INSERT INTO device (user_sub, session_sid, session_auth_time, name, profile, owner_name) VALUES ($1, $2, $5, $3, $4, $6)
          RETURNING id, name, profile, created_at, last_seen, revoked_at",
     )
     .bind(sub)
@@ -205,6 +210,7 @@ pub async fn register_device(
     .bind(name)
     .bind(body.profile.as_str())
     .bind(auth_time)
+    .bind(caller.principal.display_name())
     .fetch_one(&mut *tx)
     .await?;
     let created = device(&row, None)?;
@@ -261,13 +267,16 @@ pub async fn list_devices(
         .filter(|m| m.role >= TenantRole::Admin)
     {
         let mut tx = db::begin_tenant(&state.db, m.tenant, None).await?;
-        let rows = sqlx::query("SELECT id, user_sub, name, profile, created_at, last_seen, revoked_at FROM kura_tenant_devices()")
+        let rows = sqlx::query("SELECT id, user_sub, owner_name, name, profile, created_at, last_seen, revoked_at FROM kura_tenant_devices()")
             .fetch_all(&mut *tx)
             .await?;
         tx.commit().await?;
         for r in &rows {
             let owner: String = r.try_get("user_sub")?;
-            let d = device(r, (owner != sub).then_some(owner))?;
+            let mut d = device(r, (owner != sub).then_some(owner))?;
+            if d.owner.is_some() {
+                d.owner_name = r.try_get("owner_name")?;
+            }
             if seen.insert(d.id) {
                 out.push(d);
             }

@@ -223,6 +223,17 @@ pub mod tokens {
             self.token_with(sub, Some(sid), Some(auth_time), groups)
         }
 
+        /// [`Self::token`] carrying the person's `name` claim (RFC 0006 D13).
+        pub fn token_named(&self, sub: &str, groups: &[&str], name: &str) -> String {
+            self.token_extra(
+                sub,
+                Some(&format!("s-{sub}")),
+                Some(1_700_000_000),
+                groups,
+                json!({ "name": name }),
+            )
+        }
+
         /// The session of a refreshed Authentik token: maybe no `sid`.
         pub fn token_with(
             &self,
@@ -230,6 +241,17 @@ pub mod tokens {
             sid: Option<&str>,
             auth_time: Option<i64>,
             groups: &[&str],
+        ) -> String {
+            self.token_extra(sub, sid, auth_time, groups, json!({}))
+        }
+
+        fn token_extra(
+            &self,
+            sub: &str,
+            sid: Option<&str>,
+            auth_time: Option<i64>,
+            groups: &[&str],
+            extra: Value,
         ) -> String {
             let exp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -243,6 +265,9 @@ pub mod tokens {
             }
             if let Some(t) = auth_time {
                 claims["auth_time"] = json!(t);
+            }
+            for (k, v) in extra.as_object().into_iter().flatten() {
+                claims[k] = v.clone();
             }
             let mut header = Header::new(Algorithm::EdDSA);
             header.kid = Some("k1".into());

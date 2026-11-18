@@ -28,6 +28,9 @@ pub struct DeviceSync {
     /// The owner's subject: only in a manager's or tenant admin's answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
+    /// The owner's name, beside `owner` only (RFC 0006 D13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_name: Option<String>,
     pub revoked: bool,
     /// RFC 3339; absent until the device finished a pass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -244,6 +247,11 @@ pub async fn vault_sync(
             device: r.try_get("device_id")?,
             name: r.try_get("name")?,
             profile: r.try_get("profile")?,
+            owner_name: if all && owner != *sub {
+                r.try_get("owner_name")?
+            } else {
+                None
+            },
             owner: (all && owner != *sub).then_some(owner),
             revoked: r.try_get("revoked")?,
             caught_up_at: r

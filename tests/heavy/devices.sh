@@ -63,10 +63,11 @@ r=$(api alice GET "/vaults/$notes/sync"); [ "$(status "$r")" = 200 ] || fail "2:
 his=$(row "$(body "$r")" "$(device bob)")
 behind=$(jq -r .behind <<<"$his")
 [ "$behind" -ge 3 ] || fail "2: bob is $behind behind, expected at least 3: $his"
-# The owner is the OIDC subject (Authentik's hashed `sub`), as on the tenant's Devices page.
+# The owner: the OIDC subject (Authentik's hashed `sub`), and the name from bob's own token (D13).
 [ -n "$(jq -r '.owner // empty' <<<"$his")" ] || fail "2: the owner is not named to the tenant owner: $his"
+[ "$(jq -r '.ownerName // empty' <<<"$his")" = Bob ] || fail "2: bob's name is not shown: $his"
 [ "$(jq -r '.pushedAt // empty' <<<"$(row "$(body "$r")" "$(device alice)")")" != "" ] || fail "2: alice's push not recorded"
-pass "2: bob is $behind behind after alice's push, owner named to alice"
+pass "2: bob is $behind behind after alice's push, named Bob to alice"
 
 # 3. bob syncs again: up to date.
 as bob sync notes >/dev/null || true
@@ -98,3 +99,12 @@ pass "5: a scoped token is refused on both routes (403)"
 r=$(api bob PUT "/vaults/$notes/sync/report" '{"pending":0,"conflicts":0,"unsyncable":0,"failed":0,"paths":["secret.md"]}')
 [ "$(status "$r")" = 400 ] || fail "6: a report with paths answered $r"
 pass "6: a report carrying paths is refused (400)"
+
+# 7. The console in Chromium: alice's vault page shows bob's device by name,
+# up to date, with its last run (ui/e2e/devices.spec.ts).
+[ -f "$root/ui/dist/index.html" ] || fail "7: no console build: task ui:build, then restart task dev:run"
+ak=${KURA_DEV_AUTHENTIK:-https://localhost:59443}
+(cd "$root/ui" && KURA_E2E_NOTES=$notes KURA_E2E_DEVICE=$(device bob) KURA_E2E_OWNER=Bob KURA_E2E_AUTHENTIK=$ak \
+  KURA_DEV_SERVER=$server pnpm exec playwright test e2e/devices.spec.ts --reporter=line) || fail "7: the console's browser proof failed"
+pass "7: the vault page shows bob's device by name, up to date, with its last run"
+

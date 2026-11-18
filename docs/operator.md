@@ -473,6 +473,11 @@ created, files that cannot sync, files not written. Counts only, never a
 path; a body with any other field is refused. A client that does not send
 them shows "—" in the "Last run" column.
 
+Owners are shown by name: each device keeps its owner's `name` claim (else
+`preferred_username`) from the owner's own token, refreshed at most once a
+minute, and the subject stays in the tooltip. Only the people who already
+see a device's owner (the vault's managers, the tenant's admins) see it.
+
 ## 8. Signals
 
 | Signal | Where |

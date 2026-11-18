@@ -43,7 +43,7 @@ const shown = computed(() =>
   matching(
     showRevoked.value ? others.value : others.value.filter((d) => !d.revoked),
     query.value,
-    (d) => [d.owner ?? "", d.name],
+    (d) => [d.owner ?? "", d.ownerName ?? "", d.name],
   ),
 );
 const refusal = ref<string | null>(null);
@@ -92,7 +92,7 @@ onMounted(load);
         <tbody>
           <template v-for="d in shown" :key="d.id">
           <tr class="border-t border-rule-soft">
-            <td>{{ d.owner }}</td>
+            <td :title="d.owner ?? undefined" class="break-all">{{ d.ownerName ?? d.owner }}</td>
             <td>{{ d.name }}</td>
             <td>{{ d.profile }}</td>
             <td><time :datetime="d.lastSeen" :title="when(d.lastSeen, locale)">{{ ago(d.lastSeen, locale) }}</time></td>

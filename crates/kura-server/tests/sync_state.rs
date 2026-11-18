@@ -329,3 +329,40 @@ async fn a_device_reports_its_last_run_as_counts() {
         .await;
     assert_eq!(st, StatusCode::FORBIDDEN);
 }
+
+/// RFC 0006 D13: a manager reads an owner by name, taken from the owner's own
+/// token; a member is never told it.
+#[tokio::test]
+async fn an_owner_is_named_by_their_name_claim() {
+    let Some(st) = storage(module_path!()).await else {
+        return;
+    };
+    let Some(e) = env_with(module_path!(), Some(st)).await else {
+        return;
+    };
+    let v = vault_id(&e, "knowledge").await;
+    let gm = who(&e, "gm", &["maxime-admins"]).await;
+    let token = e
+        .key
+        .token_named("h4sh3d-sub", &["maxime-members"], "Bob Martin");
+    let device = e.register(&token, "laptop").await;
+    let bob = Who { token, device };
+    bob.pull(&e, &v).await;
+    let (_, list) = gm.sync(&e, &v).await;
+    let r = row(&list, &bob.device);
+    assert_eq!(
+        (&r["owner"], &r["ownerName"]),
+        (&json!("h4sh3d-sub"), &json!("Bob Martin")),
+        "{list}"
+    );
+    let (_, devices) = gm.call(&e, "GET", "/v1/devices", None).await;
+    let d = devices
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["id"] == bob.device.as_str())
+        .unwrap();
+    assert_eq!(d["ownerName"], "Bob Martin", "{devices}");
+    let (_, mine) = bob.sync(&e, &v).await;
+    assert!(row(&mine, &bob.device).get("ownerName").is_none(), "{mine}");
+}
