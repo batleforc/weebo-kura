@@ -192,8 +192,9 @@ export class Api {
       commit: (request) =>
         this.json(`${v}/commits`, { method: "POST", json: isRecord(request) && space !== undefined ? { ...request, space } : request }),
       // The notes' folders too (RFC 0007); the configuration space has none.
+      // The core's `None` arrives as `undefined` from wasm-bindgen, not `null`.
       changes: (since, epoch, start) =>
-        this.json(`${v}/changes?since=${String(since)}&start=${String(start)}${epoch === null ? "" : `&epoch=${epoch}`}${space === undefined ? "&folders=true" : inSpace}`, { method: "GET" }),
+        this.json(`${v}/changes?since=${String(since)}&start=${String(start)}${epoch == null ? "" : `&epoch=${epoch}`}${space === undefined ? "&folders=true" : inSpace}`, { method: "GET" }),
     };
   }
 }

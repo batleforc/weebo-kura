@@ -52,7 +52,7 @@ export interface KuraRemote {
   /** RFC 0002 phase 3: many manifests, all or none; false as for putChunks. */
   putBlobs(manifests: { hash: string; size: number; chunks: string[] }[]): Promise<boolean>;
   commit(request: unknown): Promise<unknown>;
-  changes(since: number, epoch: string | null, start: number): Promise<unknown>;
+  changes(since: number, epoch: string | null | undefined, start: number): Promise<unknown>;
 }
 "#;
 

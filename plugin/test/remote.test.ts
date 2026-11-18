@@ -31,6 +31,21 @@ describe("the API client", () => {
     expect(always.waits).toHaveLength(4);
   });
 
+  it("asks for changes without an epoch when the core has none, null or undefined", async () => {
+    const urls: string[] = [];
+    const { a } = api((u) => { urls.push(u); return Promise.resolve(json(200, { items: [] })); });
+    const r = a.remote("v1");
+    await r.changes(0, null, 0);
+    // What wasm-bindgen hands over for `Option::None`.
+    await r.changes(0, undefined, 0);
+    await r.changes(5, "e-1", 0);
+    expect(urls).toEqual([
+      "https://kura.test/v1/vaults/v1/changes?since=0&start=0&folders=true",
+      "https://kura.test/v1/vaults/v1/changes?since=0&start=0&folders=true",
+      "https://kura.test/v1/vaults/v1/changes?since=5&start=0&epoch=e-1&folders=true",
+    ]);
+  });
+
   it("reports a run's counts to the vault, as JSON", async () => {
     let call: { url: string; method: string | undefined; body: unknown } | null = null;
     const { a } = api((u, init) => {
