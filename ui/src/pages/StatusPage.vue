@@ -18,10 +18,19 @@ interface Row {
   kind: string;
   name: string;
   ready: string;
-  reasons: string;
+  /** Each condition that is not "ready", its code and the server's message. */
+  reasons: { code: string; message: string }[];
 }
 
-const { t, locale } = useI18n();
+const { t, te, locale } = useI18n();
+
+/** A reason code in words, else the code as it came (a newer server). */
+function reason(code: string): string {
+  return te(`status.reasons.${code}`) ? t(`status.reasons.${code}`) : code;
+}
+function kind(k: string): string {
+  return te(`status.kinds.${k}`) ? t(`status.kinds.${k}`) : k;
+}
 const {
   data: status,
   loading,
@@ -61,10 +70,7 @@ const rows = computed<Row[]>(() =>
         .filter(
           (c) => text(c, "status") !== "True" || text(c, "type") !== "Ready",
         )
-        .map((c) =>
-          [text(c, "reason"), text(c, "message")].filter(Boolean).join(": "),
-        )
-        .join("; "),
+        .map((c) => ({ code: text(c, "reason"), message: text(c, "message") })),
     };
   }),
 );
@@ -81,8 +87,8 @@ onMounted(load);
         <p class="font-bold">{{ t("status.rejected") }}</p>
         <p v-for="r in status.rejection" :key="r"><code>{{ r }}</code></p>
       </div>
-      <p class="mb-2 text-ink-dim">
-        {{ t("status.generation", { generation: (status?.generation ?? "").slice(0, 8), at: status?.writtenAt ? when(status.writtenAt, locale) : "" }) }}
+      <p class="mb-2 text-ink-dim" :title="status?.generation ?? undefined">
+        {{ t("status.applied", { at: status?.writtenAt ? when(status.writtenAt, locale) : "" }) }}
       </p>
       <TableScroll :label="t('state.tableRegion')">
       <table class="w-full text-left">
@@ -96,10 +102,14 @@ onMounted(load);
         </thead>
         <tbody>
           <tr v-for="r in rows" :key="`${r.kind}/${r.name}`" class="border-t border-rule-soft">
-            <td>{{ r.kind }}</td>
+            <td>{{ kind(r.kind) }}</td>
             <td>{{ r.name }}</td>
             <td><StateMark :kind="r.ready === 'True' ? 'live' : r.ready === 'False' ? 'refused' : 'off'" :word="r.ready === 'True' ? t('status.isReady') : r.ready === 'False' ? t('status.notReady') : t('status.unknown')" /></td>
-            <td>{{ r.reasons }}</td>
+            <td class="whitespace-normal">
+              <p v-for="x in r.reasons" :key="x.code + x.message">
+                {{ reason(x.code) }}<span v-if="x.message" class="text-ink-dim" lang="en"> — {{ x.message }}</span>
+              </p>
+            </td>
           </tr>
         </tbody>
       </table>

@@ -35,7 +35,7 @@ function toggled(path: string, event: Event): void {
         :aria-current="n.entry === current ? 'page' : undefined"
         :data-entry="n.entry"
         class="block break-words border-l py-1 pr-2 pl-[1.6875rem] no-underline"
-        :class="n.entry === current ? 'border-accent bg-raised font-bold text-accent' : 'border-transparent hover:bg-raised'"
+        :class="n.entry === current ? 'border-ink bg-raised font-bold text-ink' : 'border-transparent hover:bg-raised'"
       >{{ noteName(n.path) }}</RouterLink>
     </li>
   </ul>

@@ -476,9 +476,10 @@ describe("tenant pages", () => {
     expect(w.find("[data-test=rejection]").text()).toContain(
       "unknown variant `editr`",
     );
-    expect(w.text()).toContain("generation 3fa9c0de");
+    expect(w.text()).toContain("Configuration applied");
+    expect(w.find("[title^='3fa9c0de']").exists()).toBe(true);
     expect(w.findAll("tbody tr")[1]?.text()).toContain(
-      "DeletionScheduled: deleted after 2026-12-14",
+      "removed, deletion scheduled — deleted after 2026-12-14",
     );
     vi.mocked(sdk.adminStatus).mockRejectedValueOnce(
       refusal(403, "insufficient_role"),

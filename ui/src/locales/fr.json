@@ -239,13 +239,28 @@
   },
   "status": {
     "rejected": "Ce réplica a refusé la dernière modification :",
-    "generation": "génération {generation} · écrite {at}",
     "kind": "Type",
     "ready": "Prêt",
     "reason": "Raison",
     "isReady": "prêt",
     "notReady": "pas prêt",
-    "unknown": "inconnu"
+    "unknown": "inconnu",
+    "applied": "Configuration appliquée {at}",
+    "kinds": {
+      "KuraTenant": "tenant",
+      "KuraVault": "coffre"
+    },
+    "reasons": {
+      "Reconciled": "appliqué",
+      "InvalidDocument": "refusé : le document est invalide",
+      "Orphaned": "retiré de la configuration, données conservées",
+      "QuotaBelowUsage": "stocke plus que son quota",
+      "CidrTokensWithoutTrustedProxies": "des clés liées à des adresses, mais aucun proxy de confiance n'est déclaré",
+      "DeletionScheduled": "retiré, suppression programmée",
+      "AwaitingKeyDestruction": "purgé : un opérateur doit détruire sa clé de chiffrement",
+      "TokenWriteDisabled": "les clés ne peuvent pas écrire ici",
+      "RestrictedBindingWidened": "un accès limité à des dossiers est élargi par un autre droit"
+    }
   },
   "notifications": {
     "title": "{tenant} ▸ Notifications",

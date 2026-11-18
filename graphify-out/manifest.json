@@ -462,9 +462,9 @@
     "semantic_hash": ""
   },
   "docs/RFC/rfc0001-implementation-plan.md": {
-    "mtime": 1795032750.4177575,
-    "seen": 1795033762.2715964,
-    "ast_hash": "67db00ca4fc81ebf3dfef9e21846e4bc",
+    "mtime": 1795034968.1469088,
+    "seen": 1795035214.2511182,
+    "ast_hash": "23ae70f74558d0c9789560e1d72947e7",
     "semantic_hash": ""
   },
   "docs/RFC/rfc0001-init-project.md": {
@@ -1224,9 +1224,9 @@
     "semantic_hash": ""
   },
   "ui/src/App.vue": {
-    "mtime": 1795033462.1425838,
-    "seen": 1795033762.2686315,
-    "ast_hash": "18e61a594a4bc91833ae9e0ea1965fed",
+    "mtime": 1795035005.8500218,
+    "seen": 1795035214.248169,
+    "ast_hash": "27b3b80ed3b973ad4c91661c93eca8cb",
     "semantic_hash": ""
   },
   "ui/src/api/client.spec.ts": {
@@ -1308,15 +1308,15 @@
     "semantic_hash": ""
   },
   "ui/src/locales/en.json": {
-    "mtime": 1795033590.8532972,
-    "seen": 1795033762.2696018,
-    "ast_hash": "fad54cbfa0f898a8b82a73edb1e7f00b",
+    "mtime": 1795034997.1203418,
+    "seen": 1795035214.2490215,
+    "ast_hash": "2f6b3cef0dad1c196204450c07e3aa4f",
     "semantic_hash": ""
   },
   "ui/src/locales/fr.json": {
-    "mtime": 1795033590.8537433,
-    "seen": 1795033762.2696042,
-    "ast_hash": "45326f3b6fa7a746690544cf9993f58b",
+    "mtime": 1795034997.1207151,
+    "seen": 1795035214.2490225,
+    "ast_hash": "fb23126f6dbb6baf6d1d022f00a4c5c7",
     "semantic_hash": ""
   },
   "ui/src/main.ts": {
@@ -1452,9 +1452,9 @@
     "semantic_hash": ""
   },
   "ui/src/reader/FolderTree.vue": {
-    "mtime": 1795025302.374206,
-    "seen": 1795026880.1734397,
-    "ast_hash": "b41301527399d5494f639414dbc43e72",
+    "mtime": 1795035005.8482983,
+    "seen": 1795035214.2501276,
+    "ast_hash": "390b001293d25809ebf7a2688588fde4",
     "semantic_hash": ""
   },
   "ui/src/reader/NoteFrame.vue": {
@@ -1536,9 +1536,9 @@
     "semantic_hash": ""
   },
   "ui/src/pages/StatusPage.vue": {
-    "mtime": 1795033472.7983077,
-    "seen": 1795033762.2703338,
-    "ast_hash": "f4a7e0904b7841e66d00f3fdb63db591",
+    "mtime": 1795035023.4453342,
+    "seen": 1795035214.24965,
+    "ast_hash": "1c393b1582ddc82e8892f5ab8899ea14",
     "semantic_hash": ""
   },
   "ui/src/pages/TenantDevicesPage.vue": {
@@ -1554,9 +1554,9 @@
     "semantic_hash": ""
   },
   "ui/src/pages/manage-pages.spec.ts": {
-    "mtime": 1795033624.0697598,
-    "seen": 1795033762.2704115,
-    "ast_hash": "526818951f0beb3b517b776f47ef6891",
+    "mtime": 1795035023.4451904,
+    "seen": 1795035214.249824,
+    "ast_hash": "251a91011f0beab2c8ee03a5b65b0c4b",
     "semantic_hash": ""
   },
   "crates/kura-core/src/webhook.rs": {

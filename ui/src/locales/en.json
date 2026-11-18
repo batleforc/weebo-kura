@@ -239,13 +239,28 @@
   },
   "status": {
     "rejected": "This replica rejected the last change:",
-    "generation": "generation {generation} · written {at}",
     "kind": "Kind",
     "ready": "Ready",
     "reason": "Reason",
     "isReady": "ready",
     "notReady": "not ready",
-    "unknown": "unknown"
+    "unknown": "unknown",
+    "applied": "Configuration applied {at}",
+    "kinds": {
+      "KuraTenant": "tenant",
+      "KuraVault": "vault"
+    },
+    "reasons": {
+      "Reconciled": "applied",
+      "InvalidDocument": "refused: the document is invalid",
+      "Orphaned": "removed from the configuration, data kept",
+      "QuotaBelowUsage": "stores more than its quota",
+      "CidrTokensWithoutTrustedProxies": "keys bound to addresses, but no trusted proxy is set",
+      "DeletionScheduled": "removed, deletion scheduled",
+      "AwaitingKeyDestruction": "purged: its encryption key must be destroyed by an operator",
+      "TokenWriteDisabled": "keys may not write here",
+      "RestrictedBindingWidened": "a folder-restricted access is widened by another grant"
+    }
   },
   "notifications": {
     "title": "{tenant} ▸ Notifications",

@@ -81,7 +81,8 @@ async function leave(): Promise<void> {
 <template>
   <template v-if="shell">
     <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-2 focus:z-10 focus:bg-ground focus:px-2">{{ t("nav.skip") }}</a>
-    <div class="flex min-h-screen flex-wrap">
+    <!-- Wrapped on a phone, the lines keep their height: no band of space under the sidebar. -->
+    <div class="flex min-h-screen flex-wrap content-start md:content-stretch">
       <aside class="flex w-full flex-col gap-5 border-b border-rule-soft px-4 py-5 md:w-64 md:border-r md:border-b-0 md:py-6" :aria-label="t('nav.sidebar')">
         <RouterLink to="/vaults" class="font-display text-[length:var(--t-px-md)] font-bold tracking-[0.04em] no-underline">KURA</RouterLink>
         <nav :aria-label="t('nav.main')" class="flex flex-col">
