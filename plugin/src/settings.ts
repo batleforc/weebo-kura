@@ -41,11 +41,14 @@ export class KuraSettingTab extends PluginSettingTab {
     // ── Connection ──
     new Setting(containerEl).setName(t("s.connection")).setHeading();
     const configured = c.server !== "" && c.issuer !== "";
+    // Signed in means a session is held, not only a device registered: a
+    // device whose session is gone must be offered sign-in again.
+    const signedIn = c.device !== "" && p.signedIn();
     const account = new Setting(containerEl).setDesc(
-      !configured ? t("s.notConfigured") : c.device === "" ? t("s.notSignedIn") : t("s.connectedAs", { server: hostOf(c.server), device: c.deviceName }),
+      !configured ? t("s.notConfigured") : !signedIn ? t("s.notSignedIn") : t("s.connectedAs", { server: hostOf(c.server), device: c.deviceName }),
     );
-    if (configured && c.device === "") account.addButton((b) => b.setButtonText(t("s.signIn")).setCta().onClick(() => void p.signIn()));
-    if (c.device !== "") account.addButton((b) => b.setButtonText(t("s.signOut")).onClick(() => { p.signOut(); }));
+    if (configured && !signedIn) account.addButton((b) => b.setButtonText(t("s.signIn")).setCta().onClick(() => void p.signIn()));
+    if (signedIn) account.addButton((b) => b.setButtonText(t("s.signOut")).onClick(() => { p.signOut(); }));
 
     const manual = containerEl.createEl("details", { cls: "kura-manual" });
     // Open until something is set: then the link's values need no second look.

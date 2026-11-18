@@ -518,6 +518,11 @@ export default class KuraPlugin extends Plugin {
     }
   }
 
+  /** A session is held for the chosen vault (the settings offer sign-in otherwise). */
+  signedIn(): boolean {
+    return this.session?.signedIn() ?? false;
+  }
+
   async signIn(): Promise<void> {
     const s = this.config;
     if (!this.secretsAvailable()) {
@@ -590,13 +595,17 @@ export default class KuraPlugin extends Plugin {
     const v = this.vaults.find((x) => x.id === id);
     if (v === undefined) return false;
     if (this.config.vault !== "" && this.config.vault !== id && !(await new SwitchModal(this.app, this.config.vaultName, v.name).ask())) return false;
-    const pending = this.app.secretStorage.getSecret(secretId(this.config.server, "pending"));
+    // The session goes with the device, not the vault: carried from where it
+    // is stored now (the vault left, or "pending" before the first choice).
+    const from = secretId(this.config.server, this.config.vault === "" ? "pending" : this.config.vault);
+    const carried = this.app.secretStorage.getSecret(from);
     this.config.vault = v.id;
     this.config.vaultName = v.name;
-    if (pending !== null && pending !== "") {
-      this.app.secretStorage.setSecret(secretId(this.config.server, v.id), pending);
+    const to = secretId(this.config.server, v.id);
+    if (carried !== null && carried !== "" && from !== to) {
+      this.app.secretStorage.setSecret(to, carried);
       // Rotation makes a copy stale: never leave one behind (review 4 L4).
-      this.app.secretStorage.setSecret(secretId(this.config.server, "pending"), "");
+      this.app.secretStorage.setSecret(from, "");
     }
     await this.saveSettings();
     await this.start();
