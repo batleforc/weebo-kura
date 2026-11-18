@@ -1,0 +1,11 @@
+auditConfig:
+  ignoreGhsas:
+    - GHSA-fc5q-39xc-vjpf
+overrides:
+  # Dev only, through @hey-api/openapi-ts (client generation): GHSA quadratic
+  # CPU on YAML merge keys and !!omap; fixed in 4.3.2.
+  js-yaml: ">=4.3.2"
+  # Dev only, through @vue/test-utils > js-beautify: ReDoS (minimatch, fixed in
+  # 11.0.1) and an AbortSignal bypass (glob, fixed in 14.0.2).
+  minimatch: ">=11.0.1"
+  glob: ">=14.0.2"

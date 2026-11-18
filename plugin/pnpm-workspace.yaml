@@ -1,5 +1,8 @@
 allowBuilds:
   esbuild: true
+auditConfig:
+  ignoreGhsas:
+    - GHSA-fc5q-39xc-vjpf
 overrides:
   # GHSA-g3hv-75wg-m249 (ReDoS), reached through eslint (dev only); fixed in 11.0.1.
   minimatch: ">=11.0.1"

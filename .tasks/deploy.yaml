@@ -14,7 +14,7 @@ tasks:
         set -e
         # The defaults refuse to render without backups (§10.3).
         if helm template kura {{.CHART}} >/dev/null 2>&1; then echo "the chart rendered without backups"; exit 1; fi
-        for opts in "--set cnpg.backup.destinationPath=s3://b/p --set backup.enabled=true" "--set backupsWaived=true" "--set backupsWaived=true --set cnpg.enabled=false --set migrate.databaseUrlSecret.name=db --set ingress.enabled=false --set networkPolicy.enabled=false --set monitoring.serviceMonitor.enabled=false --set monitoring.prometheusRule.enabled=false"; do
+        for opts in "--set cnpg.backup.destinationPath=s3://b/p --set backup.enabled=true" "--set backupsWaived=true" "--set backupsWaived=true --set server.ui.enabled=true --set server.oidc.audiences={kura-cli,kura-plugin,kura-web} --set server.notifications.enabled=true --set server.notifications.webhook.allowedCidrs={10.42.7.15/32} --set webhookCa.secretName=hub-ca" "--set backupsWaived=true --set cnpg.enabled=false --set migrate.databaseUrlSecret.name=db --set ingress.enabled=false --set networkPolicy.enabled=false --set monitoring.serviceMonitor.enabled=false --set monitoring.prometheusRule.enabled=false"; do
           # shellcheck disable=SC2086
           helm template kura {{.CHART}} $opts | kubeconform -strict -summary -kubernetes-version 1.34.0 -schema-location default -schema-location '{{.CRDS}}'
         done

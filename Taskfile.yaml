@@ -11,6 +11,7 @@ includes:
   api: { taskfile: ./.tasks/api.yaml, flatten: true }
   dev: { taskfile: ./.tasks/dev.yaml, flatten: true }
   plugin: { taskfile: ./.tasks/plugin.yaml, flatten: true }
+  ui: { taskfile: ./.tasks/ui.yaml, flatten: true }
   deploy: { taskfile: ./.tasks/deploy.yaml, flatten: true }
   perf: { taskfile: ./.tasks/perf.yaml, flatten: true }
   obsidian: { taskfile: ./.tasks/obsidian.yaml, flatten: true }
@@ -70,13 +71,15 @@ tasks:
       - git add docs/api/openapi.json
 
   lint:
-    desc: "Lint the whole project: clippy, rustfmt, fuzz targets compile, the plugin shell, the Helm chart and its alerts, shell scripts (run by the pre-commit hook)"
+    desc: "Lint the whole project: clippy, rustfmt, fuzz targets compile, the plugin shell, the web console, the Helm chart and its alerts, shell scripts (run by the pre-commit hook)"
     cmds:
       - task: rust:lint
       - task: fuzz:check
       - task: openapi:lint
       - task: plugin:install
       - task: plugin:lint
+      - task: ui:install
+      - task: ui:lint
       - task: helm:lint
       - task: alerts:test
       - shellcheck .hooks/*.sh dev/*.sh tests/heavy/*.sh perf/*.sh

@@ -4,7 +4,7 @@ oidc:
   # keys come from an application's discovery document (plan D52).
   issuer: https://localhost:59443/
   discovery: https://localhost:59443/application/o/kura/
-  audiences: [kura-cli, kura-plugin]
+  audiences: [kura-cli, kura-plugin, kura-web]
   platformAdmin: { claim: groups, value: kura-platform-admins }
 listen: { api: 127.0.0.1:58080, metrics: 127.0.0.1:59090 }
 vault:
@@ -12,3 +12,18 @@ vault:
   kubernetesAuth: { mount: kubernetes, role: kura }   # unused: KURA_VAULT_TOKEN is set
   secrets: { database: mv/data/kura/database, bucket: mv/data/kura/bucket }
   transit: { mount: transit }
+# The web console (RFC 0003), from `task ui:build`, at http://127.0.0.1:58080/app/
+# (the kura-web client of dev/authentik/blueprints/kura.yaml).
+ui:
+  enabled: true
+  dir: ui/dist
+  oidc: { clientId: kura-web, discovery: "https://localhost:59443/application/o/kura-web/" }
+  # What "Open in Obsidian" hands the plugin (task obsidian:deploy prints the same).
+  plugin: { clientId: kura-plugin, discovery: "https://localhost:59443/application/o/kura-plugin/" }
+# Webhooks (RFC 0003): tests/heavy/notify.sh listens on 127.0.0.1:8443 with
+# the dev certificate, so that address and the dev CA are allowed here only.
+notifications:
+  enabled: true
+  webhook:
+    allowedCidrs: [127.0.0.1/32]
+    caFile: dev/certs/ca.pem

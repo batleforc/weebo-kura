@@ -330,3 +330,39 @@ async fn a_ticket_flood_is_limited_per_address() {
     assert!(limited, "70 attempts were not limited");
     s.stop.cancel();
 }
+
+/// RFC 0005 T5, existing behaviour pinned: a viewer restricted to
+/// `Sessions/` holds a socket, and a change under a hidden folder reaches it
+/// as a `seq` only, never a path.
+#[tokio::test]
+async fn notice_has_no_path() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    sqlx::query(
+        "INSERT INTO role_binding (tenant_id, vault_id, subject_kind, subject, role, managed_by, paths)
+         SELECT tenant_id, id, 'user', 'bob', 'viewer', 'api', ARRAY['Sessions/'] FROM vault WHERE id = $1::uuid",
+    )
+    .bind(&s.v)
+    .execute(&s.e.t.owner)
+    .await
+    .unwrap();
+    let bob = s.e.key.token("bob", "s-bob", &[]);
+    let bob_device = s.e.register(&bob, "bob").await;
+    let (st, b) =
+        s.e.call(
+            "POST",
+            &format!("/v1/vaults/{}/events/ticket", s.v),
+            &bob,
+            Some(&bob_device),
+            None,
+        )
+        .await;
+    assert_eq!(st.as_u16(), 200, "{b}");
+    let mut ws = s.open(&s.addr, &s.v, b["ticket"].as_str().unwrap()).await;
+    s.commit("MJ/secret-villain.md").await;
+    let notice = next(&mut ws).await.unwrap();
+    assert_eq!(notice, json!({ "type": "change", "seq": 1 }));
+    assert!(!notice.to_string().contains("MJ"), "{notice}");
+    s.stop.cancel();
+}

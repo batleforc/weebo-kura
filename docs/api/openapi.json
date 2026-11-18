@@ -191,6 +191,16 @@
           "required": true
         },
         "responses": {
+          "200": {
+            "description": "A web device this Authentik session already has",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Device"
+                }
+              }
+            }
+          },
           "201": {
             "description": "Registered; send its id in X-Kura-Device",
             "content": {
@@ -294,6 +304,590 @@
           },
           "404": {
             "description": "No such device you may revoke",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/devices/{d}/sign-out": {
+      "post": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Sign this browser out (RFC 0003 §6.2): the caller's own `web` device\nstops counting as live and its id is refused as unknown. Unlike a\nrevocation it bans nothing: the same Authentik session may sign in again,\nand the plugin or CLI it approved keep working (decision 24).",
+        "operationId": "sign_out_device",
+        "parameters": [
+          {
+            "name": "d",
+            "in": "path",
+            "description": "Your web device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Signed out, or already"
+          },
+          "401": {
+            "description": "Invalid token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not one of your web devices",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "The signed-in caller: subject, tenant roles, platform admin flag.",
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "The caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over 60 a minute",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/tenants/{t}/notifications": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "A tenant's rules: all of them for an admin, a manager's vaults' for a manager.",
+        "operationId": "list_rules",
+        "parameters": [
+          {
+            "name": "t",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rules, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RuleView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Neither a tenant admin nor a vault manager",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "notifications_disabled",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Create a rule; the signing secret is in this answer only.",
+        "operationId": "create_rule",
+        "parameters": [
+          {
+            "name": "t",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created, with its secret, once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A URL that cannot be used, an unknown event, more than 20 rules",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A tenant event or a rule without a vault, asked by a manager",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "notifications_disabled",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/tenants/{t}/notifications/{n}": {
+      "put": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Change a rule; a re-enabled rule forgets its failures.",
+        "operationId": "update_rule",
+        "parameters": [
+          {
+            "name": "t",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "description": "Rule id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved; `secret` only with rotateSecret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A URL that cannot be used, an unknown event",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such rule here",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "notifications_disabled",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Delete a rule and its deliveries.",
+        "operationId": "delete_rule",
+        "parameters": [
+          {
+            "name": "t",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "description": "Rule id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "No such rule here",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "notifications_disabled",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/tenants/{t}/notifications/{n}/deliveries": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "The rule's last 50 deliveries, newest first (kept 7 days).",
+        "operationId": "list_deliveries",
+        "parameters": [
+          {
+            "name": "t",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "description": "Rule id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deliveries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeliveryView"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such rule here",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "notifications_disabled",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/tenants/{t}/notifications/{n}/test": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Send `ping` to this rule now; the answer is the attempt's coarse result.",
+        "operationId": "test_rule",
+        "parameters": [
+          {
+            "name": "t",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "description": "Rule id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Attempted once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such rule here",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "notifications_disabled",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -472,6 +1066,77 @@
           },
           "403": {
             "description": "Not a tenant admin, or declared in configuration",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/bindings": {
+      "get": {
+        "tags": [
+          "vaults"
+        ],
+        "summary": "The vault's bindings, from files and from the API (RFC 0003 §4.4): vault\nmanager or tenant admin.",
+        "operationId": "list_bindings",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every binding, by subject",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BindingView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Below manager",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -715,6 +1380,87 @@
           },
           "404": {
             "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/blobs/upload": {
+      "post": {
+        "tags": [
+          "chunks"
+        ],
+        "summary": "Many manifests in one call (RFC 0002 phase 3), with the checks of\n`PUT /blobs/{hash}`: all stored, or none.",
+        "operationId": "upload_blobs",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlobUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Every manifest stored, or already present"
+          },
+          "400": {
+            "description": "No manifest, more than 1,000, or a malformed hash",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "A file over the tenant's maxFileSize",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A hash mismatch, a chunk missing, or sizes that disagree: nothing stored",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1140,6 +1886,93 @@
           },
           "404": {
             "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/chunks/upload": {
+      "post": {
+        "tags": [
+          "chunks"
+        ],
+        "summary": "Many chunks in one call (RFC 0002 phase 3): the records of `chunks/batch`,\nevery one found. Each chunk's BLAKE3 is checked before any is stored\n(T7), as `put_chunk` checks one.",
+        "operationId": "upload_chunks",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "1 to 1,000 records `hash[32] 0 length[4, big-endian] bytes`, at most 4 MiB of chunks",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Every chunk stored, or already present"
+          },
+          "400": {
+            "description": "A record cut short, missing, or no record",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Over 4 MiB of chunks",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A chunk that is not its address (nothing stored), or quota exceeded",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1934,7 +2767,7 @@
         "tags": [
           "tokens"
         ],
-        "summary": "Issues a read-only token for this vault; the secret is in this answer only.",
+        "summary": "Issues a token for this vault; the secret is in this answer only.",
         "operationId": "create_token",
         "parameters": [
           {
@@ -1980,7 +2813,7 @@
             }
           },
           "400": {
-            "description": "No address range, a /0 range, a bad prefix or expiry",
+            "description": "No address range, a /0 range, a bad prefix, rule, name or expiry",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2001,6 +2834,16 @@
           },
           "404": {
             "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "token_write_disabled: a write rule, and the tenant does not allow tokens to write",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2134,6 +2977,23 @@
           }
         }
       },
+      "Author": {
+        "type": "object",
+        "description": "The device or scoped token that wrote a revision, never the person's\nidentity provider subject.",
+        "required": [
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`device` or `key`."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "BindingView": {
         "type": "object",
         "required": [
@@ -2142,8 +3002,25 @@
           "managedBy"
         ],
         "properties": {
+          "emptyFolders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "RFC 0005 §4.3: the bound folders under which no note exists yet\n(filled by the listing only)."
+          },
           "managedBy": {
             "type": "string"
+          },
+          "paths": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The folders a restricted viewer reads; absent: the whole vault."
           },
           "role": {
             "type": "string"
@@ -2151,6 +3028,10 @@
           "subject": {
             "type": "string",
             "description": "`claim:<value>` or `user:<sub>`."
+          },
+          "widened": {
+            "type": "boolean",
+            "description": "RFC 0005 §4.3: folders listed, but the tenant maps this group to\n`owner` or `admin`, so the whole vault is open to it anyway."
           }
         }
       },
@@ -2216,6 +3097,22 @@
         },
         "additionalProperties": false
       },
+      "BlobUploadRequest": {
+        "type": "object",
+        "required": [
+          "manifests"
+        ],
+        "properties": {
+          "manifests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HashedManifest"
+            },
+            "description": "1 to 1,000 manifests, each under its address."
+          }
+        },
+        "additionalProperties": false
+      },
       "ChangesResponse": {
         "type": "object",
         "description": "`GET /vaults/{v}/changes` and `GET /vaults/{v}/entries`.",
@@ -2250,6 +3147,31 @@
             "description": "Set when more pages follow: the next `since` (changes) or `after` (entries)."
           }
         }
+      },
+      "Channel": {
+        "type": "object",
+        "required": [
+          "type",
+          "url"
+        ],
+        "properties": {
+          "authorization": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sent as the `Authorization` header; never shown again."
+          },
+          "type": {
+            "type": "string",
+            "description": "`webhook`, the only kind."
+          },
+          "url": {
+            "type": "string",
+            "description": "`https`, public or allowed by the operator; never shown again."
+          }
+        },
+        "additionalProperties": false
       },
       "ChunkBatchRequest": {
         "type": "object",
@@ -2349,6 +3271,40 @@
           }
         }
       },
+      "CreateRule": {
+        "type": "object",
+        "required": [
+          "name",
+          "events",
+          "channel"
+        ],
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "vault": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "A vault of the tenant; absent: the whole tenant (admins only)."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateToken": {
         "type": "object",
         "required": [
@@ -2369,9 +3325,29 @@
             "description": "1 to 90.",
             "minimum": 0
           },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1 to 64 bytes, shown in lists and conflict file names; absent:\n`key-` and the first 8 characters of the id."
+          },
           "prefix": {
-            "type": "string",
-            "description": "A folder the token sees, ending with `/`; absent: the whole vault."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One `read` rule, as before RFC 0004; refused together with `scopes`.\nNeither: the whole vault, read only."
+          },
+          "scopes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ScopeRule"
+            },
+            "description": "1 to 16 folder rules."
           }
         },
         "additionalProperties": false
@@ -2393,6 +3369,42 @@
           }
         },
         "additionalProperties": false
+      },
+      "DeliveryView": {
+        "type": "object",
+        "required": [
+          "id",
+          "event",
+          "at",
+          "attempts",
+          "status"
+        ],
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "attempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "event": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "result": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending`, `delivered` or `failed`."
+          }
+        }
       },
       "Device": {
         "type": "object",
@@ -2527,6 +3539,52 @@
             }
           }
         ]
+      },
+      "LastDelivery": {
+        "type": "object",
+        "required": [
+          "at",
+          "result"
+        ],
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          }
+        }
+      },
+      "Me": {
+        "type": "object",
+        "required": [
+          "subject",
+          "tenants",
+          "platformAdmin"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`name`, else `preferred_username`, as the identity provider sent it."
+          },
+          "platformAdmin": {
+            "type": "boolean"
+          },
+          "subject": {
+            "type": "string",
+            "description": "The OIDC subject."
+          },
+          "tenants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TenantMembership"
+            },
+            "description": "The tenants the caller belongs to; a binding alone makes a member."
+          }
+        }
       },
       "MissingRequest": {
         "type": "object",
@@ -2710,7 +3768,8 @@
         "type": "string",
         "enum": [
           "desktop",
-          "mobile"
+          "mobile",
+          "web"
         ]
       },
       "PutBinding": {
@@ -2719,6 +3778,16 @@
           "role"
         ],
         "properties": {
+          "paths": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "`viewer` only: 1 to 16 folders ending with `/`; absent: the whole\nvault (RFC 0005)."
+          },
           "role": {
             "type": "string",
             "description": "`viewer`, `editor` or `manager`, at most your own role.",
@@ -2770,6 +3839,17 @@
           "createdAt"
         ],
         "properties": {
+          "author": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Author",
+                "description": "Who wrote it, by the name readers may see (RFC 0005 §4.5); absent\nfrom servers before it, or when the device was purged."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "blob": {
             "type": [
               "string",
@@ -2825,6 +3905,118 @@
             "minimum": 0
           }
         }
+      },
+      "RuleView": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "events",
+          "host",
+          "hasAuthorization",
+          "enabled",
+          "consecutiveFailures",
+          "createdBy"
+        ],
+        "properties": {
+          "consecutiveFailures": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "disabledReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hasAuthorization": {
+            "type": "boolean"
+          },
+          "host": {
+            "type": "string",
+            "description": "The URL's host: all that is shown of it after creation (§4.5)."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LastDelivery"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "vault": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "SavedRule": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/RuleView"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "secret": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "`whsec_…`, on creation and rotation only."
+              }
+            }
+          }
+        ]
+      },
+      "ScopeMode": {
+        "type": "string",
+        "enum": [
+          "read",
+          "write"
+        ]
+      },
+      "ScopeRule": {
+        "type": "object",
+        "description": "One folder rule: the folder and everything under it.",
+        "required": [
+          "path",
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/ScopeMode"
+          },
+          "path": {
+            "type": "string",
+            "description": "A folder ending with `/`; `\"\"` is the whole vault, `read` only."
+          }
+        },
+        "additionalProperties": false
       },
       "SearchHit": {
         "type": "object",
@@ -2890,6 +4082,35 @@
           }
         }
       },
+      "TenantMembership": {
+        "type": "object",
+        "required": [
+          "slug",
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "`member`, `admin` or `owner`: the highest role the caller's claims map to."
+          },
+          "slug": {
+            "type": "string",
+            "description": "The tenant's slug."
+          }
+        }
+      },
+      "TestResult": {
+        "type": "object",
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "type": "string",
+            "description": "The coarse result of the one attempt: a status, or `timeout`,\n`connect`, `tls`, `address_refused`, `redirect`, `status_4xx`, `status_5xx`."
+          }
+        }
+      },
       "Ticket": {
         "type": "object",
         "required": [
@@ -2912,6 +4133,8 @@
         "type": "object",
         "required": [
           "id",
+          "name",
+          "scopes",
           "prefix",
           "mode",
           "cidrs",
@@ -2944,15 +4167,72 @@
             ]
           },
           "mode": {
+            "type": "string",
+            "description": "`write` when a rule is."
+          },
+          "name": {
             "type": "string"
           },
           "prefix": {
-            "type": "string"
+            "type": "string",
+            "description": "As before RFC 0004: the folder of a token with one `read` rule, `/`\n(which matches no path) for any other."
           },
           "revoked": {
             "type": "boolean"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScopeRule"
+            }
           }
         }
+      },
+      "UpdateRule": {
+        "type": "object",
+        "properties": {
+          "authorization": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new value; `\"\"` removes it; absent: kept."
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true` re-enables a rule and forgets its failures."
+          },
+          "events": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rotateSecret": {
+            "type": "boolean",
+            "description": "A new signing secret, returned once."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new URL; absent: kept."
+          }
+        },
+        "additionalProperties": false
       },
       "Vault": {
         "type": "object",
@@ -2985,6 +4265,16 @@
             "format": "uuid",
             "description": "Send back with `changes?since=` (§6.3)."
           },
+          "groups": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "For whoever may bind on this vault (its manager, a tenant admin): the\nclaim values the tenant maps, the only groups a binding may name\n(RFC 0003 §4.5, Add access)."
+          },
           "headSeq": {
             "type": "integer",
             "format": "int64",
@@ -3004,12 +4294,46 @@
           "namespace": {
             "type": "string"
           },
+          "paths": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "For a restricted viewer: the folders they read (RFC 0005 §4.2);\nabsent: the whole vault."
+          },
           "role": {
             "type": "string",
             "description": "Your effective role: `viewer`, `editor` or `manager`."
           },
+          "scopes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ScopeRule"
+            },
+            "description": "For a scoped token: its own folder rules (RFC 0004), so its client\nrefuses a change outside them before sending it. Absent for a device."
+          },
           "tenant": {
             "type": "string"
+          },
+          "tokenName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a scoped token: its own name, which its client shows (RFC 0004 §4.5)."
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When `headSeq` was written, RFC 3339 (RFC 0005 §4.5, \"updated\");\nabsent before the first commit or once that revision is purged."
           }
         }
       }
@@ -3043,6 +4367,14 @@
       "description": "Device registration and revocation"
     },
     {
+      "name": "me",
+      "description": "The signed-in caller"
+    },
+    {
+      "name": "notifications",
+      "description": "A tenant's webhook rules and their deliveries"
+    },
+    {
       "name": "vaults",
       "description": "Vaults and their role bindings"
     },
@@ -3060,7 +4392,7 @@
     },
     {
       "name": "tokens",
-      "description": "Scoped read-only tokens for non-interactive readers"
+      "description": "Scoped tokens for non-interactive readers and writers"
     },
     {
       "name": "search",

@@ -27,6 +27,31 @@ pub fn transit_key_name(tenant_slug: &str) -> String {
 
 type Cache = HashMap<Uuid, (Arc<DataKey>, Instant)>;
 
+/// Where a wrapped data key lives. The ids never collide: random UUIDs.
+#[derive(Clone, Copy)]
+enum Slot {
+    Vault,
+    Notifications,
+}
+
+impl Slot {
+    /// The read of the wrapped key by id, and its write-once update.
+    const fn queries(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Vault => (
+                "SELECT wrapped_dek FROM vault WHERE id = $1",
+                "UPDATE vault SET wrapped_dek = $1 WHERE id = $2 AND wrapped_dek IS NULL",
+            ),
+            Self::Notifications => (
+                "SELECT wrapped_dek FROM notification_tenant WHERE tenant_id = $1",
+                "INSERT INTO notification_tenant (tenant_id, wrapped_dek) VALUES ($2, $1)
+                 ON CONFLICT (tenant_id) DO UPDATE SET wrapped_dek = EXCLUDED.wrapped_dek
+                 WHERE notification_tenant.wrapped_dek IS NULL",
+            ),
+        }
+    }
+}
+
 pub struct DataKeys {
     vault: Arc<Vault>,
     cache: Mutex<Cache>,
@@ -69,18 +94,43 @@ impl DataKeys {
         tenant_slug: &str,
         vault: Uuid,
     ) -> Result<Arc<DataKey>, ApiError> {
-        if let Some(k) = self.cached(vault) {
+        self.get_in(pool, tenant, tenant_slug, vault, Slot::Vault)
+            .await
+    }
+
+    /// The tenant's data key for notification secrets (RFC 0003 decision 8),
+    /// wrapped by the same Transit key, created on first use.
+    pub async fn notifications(
+        &self,
+        pool: &sqlx::PgPool,
+        tenant: Uuid,
+        tenant_slug: &str,
+    ) -> Result<Arc<DataKey>, ApiError> {
+        self.get_in(pool, tenant, tenant_slug, tenant, Slot::Notifications)
+            .await
+    }
+
+    async fn get_in(
+        &self,
+        pool: &sqlx::PgPool,
+        tenant: Uuid,
+        tenant_slug: &str,
+        id: Uuid,
+        slot: Slot,
+    ) -> Result<Arc<DataKey>, ApiError> {
+        if let Some(k) = self.cached(id) {
             return Ok(k);
         }
+        let (read, write) = slot.queries();
+        let vault = id;
         let transit = transit_key_name(tenant_slug);
         let unavailable = |e: crate::vault::VaultError| ApiError::Unavailable(e.to_string());
         let mut tx = db::begin_tenant(pool, tenant, None).await?;
-        let stored: Option<String> =
-            sqlx::query_scalar("SELECT wrapped_dek FROM vault WHERE id = $1")
-                .bind(vault)
-                .fetch_optional(&mut *tx)
-                .await?
-                .flatten();
+        let stored: Option<String> = sqlx::query_scalar(read)
+            .bind(vault)
+            .fetch_optional(&mut *tx)
+            .await?
+            .flatten();
         let wrapped = match stored {
             Some(w) => w,
             None => {
@@ -89,21 +139,18 @@ impl DataKeys {
                     .new_data_key(&transit)
                     .await
                     .map_err(unavailable)?;
-                sqlx::query(
-                    "UPDATE vault SET wrapped_dek = $1 WHERE id = $2 AND wrapped_dek IS NULL",
-                )
-                .bind(&wrapped)
-                .bind(vault)
-                .execute(&mut *tx)
-                .await?;
+                sqlx::query(write)
+                    .bind(&wrapped)
+                    .bind(vault)
+                    .execute(&mut *tx)
+                    .await?;
                 // Read back: if another replica won the race, its key is the key.
-                sqlx::query_scalar::<_, Option<String>>(
-                    "SELECT wrapped_dek FROM vault WHERE id = $1",
-                )
-                .bind(vault)
-                .fetch_one(&mut *tx)
-                .await?
-                .ok_or(ApiError::Unavailable("data key not stored".into()))?
+                sqlx::query_scalar::<_, Option<String>>(read)
+                    .bind(vault)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .flatten()
+                    .ok_or(ApiError::Unavailable("data key not stored".into()))?
             }
         };
         tx.commit().await?;
@@ -115,7 +162,7 @@ impl DataKeys {
         let key = Arc::new(
             DataKey::from_bytes(&plain).map_err(|e| ApiError::Unavailable(e.to_string()))?,
         );
-        self.remember(vault, key.clone());
+        self.remember(id, key.clone());
         Ok(key)
     }
 

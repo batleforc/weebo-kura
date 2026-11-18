@@ -2,10 +2,14 @@ version: "3"
 
 tasks:
   test:heavy:
-    desc: "Run the §6.P proof against the local stack with the real kura binary (task dev:stack and task dev:run first)"
+    desc: "Run the §6.P proofs against the local stack with the real kura binary and Chromium (task dev:stack, task ui:build, then RUST_LOG=info,kura::object_read=debug task dev:run > target/dev-server.log 2>&1, the log reader.sh reads)"
     cmds:
       - tests/heavy/sync.sh
       - tests/heavy/authz.sh
+      - tests/heavy/keys.sh
+      - tests/heavy/reader.sh
+      - tests/heavy/console.sh
+      - tests/heavy/notify.sh
 
   test:
     desc: "Run every unit and integration test (tests needing PostgreSQL skip loudly unless KURA_TEST_DATABASE_URL is set, see task dev:up)"

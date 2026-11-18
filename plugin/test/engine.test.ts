@@ -42,6 +42,9 @@ describe("the WASM core through the plugin's host and remote", () => {
     expect(server.calls).toEqual([]);
     const ra = await a.run();
     expect(ra.report.pushed).toBe(1);
+    // RFC 0002 phase 3: sent in batches, nothing one by one.
+    expect(server.calls.filter((c) => c.includes("upload"))).toEqual(["POST /chunks/upload", "POST /blobs/upload"]);
+    expect(server.calls.filter((c) => c.startsWith("PUT "))).toEqual([]);
     expect(ra.report.unsyncable.map(([p]) => p)).toEqual(["Q3: budget.md"]);
     expect(server.chunks.size).toBeGreaterThan(1);
     server.calls = [];
@@ -64,6 +67,9 @@ describe("the WASM core through the plugin's host and remote", () => {
     a.adapter.put("one.md", "first\n".repeat(100));
     a.adapter.put("two.md", "second\n".repeat(100));
     await a.run();
+    // Sent one by one after one 405 per kind of upload.
+    expect(server.calls.filter((c) => c.includes("upload"))).toEqual(["POST /chunks/upload", "POST /blobs/upload"]);
+    expect(server.calls.filter((c) => c.startsWith("PUT /blobs/"))).toHaveLength(2);
     server.calls = [];
     expect((await b.run()).report.pulled).toBe(2);
     expect(b.adapter.text("two.md")).toBe("second\n".repeat(100));

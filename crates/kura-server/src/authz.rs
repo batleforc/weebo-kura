@@ -139,6 +139,11 @@ pub struct VaultAccess {
     pub head_seq: i64,
     /// The `configSync` categories; empty: `.obsidian` does not sync (§6.8).
     pub config: Vec<kura_api::spec::ConfigCategory>,
+    /// The folders a restricted viewer reads, as bound (RFC 0005 §4.2);
+    /// `None` is the whole vault, always so above `viewer` (§5.1).
+    pub paths: Option<Vec<String>>,
+    /// The same, as the read routes apply it.
+    pub scope: PathScope,
 }
 
 fn config_of(row: &sqlx::postgres::PgRow) -> Result<Vec<kura_api::spec::ConfigCategory>, ApiError> {
@@ -233,7 +238,7 @@ async fn vault_accesses(
         .map(|r| r.try_get("id"))
         .collect::<Result<_, _>>()?;
     let bindings = sqlx::query(
-        "SELECT vault_id, subject_kind, subject, role FROM role_binding WHERE vault_id = ANY($1)",
+        "SELECT vault_id, subject_kind, subject, role, paths FROM role_binding WHERE vault_id = ANY($1)",
     )
     .bind(&ids)
     .fetch_all(&mut *tx)
@@ -242,7 +247,7 @@ async fn vault_accesses(
     let mut out = Vec::new();
     for row in &rows {
         let vault: Uuid = row.try_get("id")?;
-        let mut role = tenant_role.and_then(tenant_vault_role);
+        let mut matching = Vec::new();
         for b in &bindings {
             let (v, kind, subject, r): (Uuid, String, String, String) = (
                 b.try_get("vault_id")?,
@@ -257,10 +262,23 @@ async fn vault_accesses(
                     _ => false,
                 };
             if matches {
-                role = role.max(parse_role(&r));
+                matching.push((
+                    parse_role(&r),
+                    b.try_get::<Option<Vec<String>>, _>("paths")?,
+                ));
             }
         }
-        let Some(role) = role else { continue };
+        let Some((role, paths)) = settle(tenant_role.and_then(tenant_vault_role), matching) else {
+            continue;
+        };
+        let scope = match &paths {
+            None => PathScope::whole(),
+            Some(f) => {
+                PathScope::from_rules(f.iter().map(|p| (p.as_str(), false))).ok_or_else(|| {
+                    ApiError::Unavailable("a restricted binding with no folder".into())
+                })?
+            }
+        };
         out.push(VaultAccess {
             vault,
             tenant,
@@ -276,9 +294,43 @@ async fn vault_accesses(
             epoch: row.try_get("epoch")?,
             head_seq: row.try_get("head_seq")?,
             config: config_of(row)?,
+            paths,
+            scope,
         });
     }
     Ok(out)
+}
+
+/// RFC 0005 §5.1, the widest grant wins: the tenant role's grant or one
+/// matching binding without folders opens the whole vault (`None`); otherwise
+/// the union of the folders of the matching restricted bindings, deduplicated
+/// folded. `None` overall: no grant, or a broken row (folders above viewer).
+fn settle(
+    tenant: Option<VaultRole>,
+    matching: Vec<(Option<VaultRole>, Option<Vec<String>>)>,
+) -> Option<(VaultRole, Option<Vec<String>>)> {
+    let mut role = tenant;
+    let mut whole = role.is_some();
+    let mut folders: Vec<String> = Vec::new();
+    for (r, paths) in matching {
+        role = role.max(r);
+        match paths {
+            None => whole = true,
+            Some(p) => folders.extend(p),
+        }
+    }
+    let role = role?;
+    let paths = (!whole).then(|| {
+        let mut seen = std::collections::HashSet::new();
+        folders.retain(|f| seen.insert(fold(f)));
+        folders
+    });
+    // A restricted binding is a viewer's (the database's CHECK); a role
+    // above viewer without the whole vault would be a broken row: refused.
+    if paths.is_some() && role > VaultRole::Viewer {
+        return None;
+    }
+    Some((role, paths))
 }
 
 /// `authz::require_role`: checked on the vault before any work. A vault the
@@ -408,31 +460,9 @@ pub async fn check_binding(
     Ok(())
 }
 
-/// Full Unicode case folding then NFC: the one comparison form of paths and
-/// token prefixes (§6.3), so a prefix check and a uniqueness check agree.
-pub fn fold(s: &str) -> String {
-    use unicode_normalization::UnicodeNormalization as _;
-    caseless::default_case_fold_str(s).nfc().collect()
-}
-
-/// `authz::visible_under_prefix` (§6.2, T16): whether a path is under a
-/// token's folded prefix; an empty prefix sees everything.
-pub fn visible_under_prefix(path: &str, prefix_key: &str) -> bool {
-    prefix_key.is_empty() || fold(path).starts_with(prefix_key)
-}
-
-/// A folded prefix as a SQL `LIKE` pattern on `path_key`, wildcards escaped.
-pub fn like_prefix(prefix_key: &str) -> String {
-    let mut out = String::with_capacity(prefix_key.len().saturating_add(1));
-    for c in prefix_key.chars() {
-        if matches!(c, '\\' | '%' | '_') {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out.push('%');
-    out
-}
+/// Full Unicode case folding then NFC: one form for paths and folders, in
+/// `kura_core::scope` so the CLI and the fuzz build compare alike.
+pub use kura_core::scope::{PathScope, fold};
 
 /// A claim value of the caller that the tenant maps to `owner` or `admin`:
 /// what a token issued through the tenant role depends on.
@@ -474,12 +504,26 @@ pub fn claim_grants_manager(snapshot: &Snapshot, tenant: Uuid, value: &str) -> b
         })
 }
 
-/// A scoped token's access to its vault: always `viewer` (read only, §6.2).
+/// Whether the tenant lets its tokens write (RFC 0004 §4.1); an unknown
+/// tenant does not.
+pub fn token_write_allowed(snapshot: &Snapshot, tenant: Uuid) -> bool {
+    snapshot
+        .tenant_ids
+        .iter()
+        .find(|(_, id)| **id == tenant)
+        .and_then(|(slug, _)| snapshot.config.tenants.get(slug.as_str()))
+        .is_some_and(|t| t.doc.spec.scoped_tokens.write)
+}
+
+/// A scoped token's access to its vault, at the role its caller settled:
+/// `Viewer` from `Reader`; `Editor` from `Writer` alone, once the token's
+/// write rules and the tenant's switch were checked (RFC 0004 §6.3).
 pub async fn key_access(
     pool: &sqlx::PgPool,
     snapshot: &Snapshot,
     tenant: Uuid,
     vault: Uuid,
+    role: VaultRole,
 ) -> Result<Option<VaultAccess>, ApiError> {
     let Some((slug, _)) = snapshot.tenant_ids.iter().find(|(_, id)| **id == tenant) else {
         return Ok(None);
@@ -502,11 +546,92 @@ pub async fn key_access(
         name: row.try_get("name")?,
         managed_by: row.try_get("managed_by")?,
         tenant_role: None,
-        role: VaultRole::Viewer,
+        role,
         chunking: serde_json::from_value(row.try_get("chunking_params")?)
             .map_err(|e| ApiError::Unavailable(format!("stored chunking refused: {e}")))?,
         epoch: row.try_get("epoch")?,
         head_seq: row.try_get("head_seq")?,
         config: config_of(&row)?,
+        // A token's own folders are applied by `ReadAccess` (RFC 0004).
+        paths: None,
+        scope: PathScope::whole(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn folders(f: &[&str]) -> Option<Vec<String>> {
+        Some(f.iter().map(|s| (*s).to_owned()).collect())
+    }
+
+    const V: Option<VaultRole> = Some(VaultRole::Viewer);
+
+    #[test]
+    fn no_grant_is_no_access() {
+        assert_eq!(settle(None, vec![]), None);
+    }
+
+    #[test]
+    fn a_tenant_role_grant_overrides_folders() {
+        assert_eq!(
+            settle(V, vec![(V, folders(&["Sessions/"]))]),
+            Some((VaultRole::Viewer, None))
+        );
+    }
+
+    #[test]
+    fn a_binding_without_folders_overrides_folders() {
+        // A claim binding restricted, a user binding unrestricted, either order.
+        for m in [
+            vec![(V, folders(&["Sessions/"])), (V, None)],
+            vec![(V, None), (V, folders(&["Sessions/"]))],
+        ] {
+            assert_eq!(settle(None, m), Some((VaultRole::Viewer, None)));
+        }
+    }
+
+    #[test]
+    fn restricted_bindings_union_their_folders_once() {
+        let got = settle(
+            None,
+            vec![
+                (V, folders(&["Sessions/", "Resumes/"])),
+                (V, folders(&["sessions/", "Cartes/"])),
+            ],
+        );
+        assert_eq!(
+            got,
+            Some((
+                VaultRole::Viewer,
+                folders(&["Sessions/", "Resumes/", "Cartes/"])
+            ))
+        );
+    }
+
+    #[test]
+    fn the_highest_role_wins_with_the_whole_vault() {
+        assert_eq!(
+            settle(
+                None,
+                vec![
+                    (V, folders(&["Sessions/"])),
+                    (Some(VaultRole::Editor), None)
+                ]
+            ),
+            Some((VaultRole::Editor, None))
+        );
+    }
+
+    #[test]
+    fn folders_above_viewer_are_a_broken_row() {
+        assert_eq!(
+            settle(
+                None,
+                vec![(Some(VaultRole::Editor), folders(&["Sessions/"]))]
+            ),
+            None
+        );
+    }
 }

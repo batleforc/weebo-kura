@@ -57,6 +57,17 @@ entries:
     identifiers: { name: kura-platform-admins }
     attrs: { name: kura-platform-admins }
 
+  # RFC 0005 §6.P: the tabletop tenant `jdr` of dev/config/tenants.yaml.
+  - model: authentik_core.group
+    id: group-jdr-mj
+    identifiers: { name: jdr-mj }
+    attrs: { name: jdr-mj }
+
+  - model: authentik_core.group
+    id: group-jdr-players
+    identifiers: { name: jdr-players }
+    attrs: { name: jdr-players }
+
   - model: authentik_core.user
     identifiers: { username: alice }
     attrs:
@@ -65,7 +76,7 @@ entries:
       email: alice@kura.local
       password: kura-dev
       is_active: true
-      groups: [!KeyOf group-owners, !KeyOf group-platform-admins]
+      groups: [!KeyOf group-owners, !KeyOf group-platform-admins, !KeyOf group-jdr-mj]
 
   - model: authentik_core.user
     identifiers: { username: bob }
@@ -75,7 +86,7 @@ entries:
       email: bob@kura.local
       password: kura-dev
       is_active: true
-      groups: [!KeyOf group-members]
+      groups: [!KeyOf group-members, !KeyOf group-jdr-players]
 
   - model: authentik_core.user
     identifiers: { username: carol }
@@ -153,3 +164,36 @@ entries:
       name: Kura Sync
       slug: kura-plugin
       provider: !KeyOf provider-kura-plugin
+
+  # The web console's client (RFC 0003 §6.2): code flow with PKCE from the
+  # browser, no device code. Its strict redirect URI is also what Authentik
+  # derives the token endpoint's CORS origin from.
+  - model: authentik_providers_oauth2.oauth2provider
+    id: provider-kura-web
+    identifiers: { name: kura-web }
+    attrs:
+      name: kura-web
+      client_type: public
+      client_id: kura-web
+      issuer_mode: global
+      grant_types: [authorization_code, refresh_token]
+      include_claims_in_id_token: true
+      access_token_validity: minutes=15
+      refresh_token_validity: days=14
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-explicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, offline_access]]
+      redirect_uris:
+        - matching_mode: strict
+          url: "http://127.0.0.1:58080/app/callback"
+
+  - model: authentik_core.application
+    identifiers: { slug: kura-web }
+    attrs:
+      name: Kura Console
+      slug: kura-web
+      provider: !KeyOf provider-kura-web

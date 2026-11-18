@@ -10,6 +10,7 @@ pub mod limits;
 pub mod maintenance;
 pub mod metrics;
 pub mod net;
+pub mod notifier;
 pub mod notify;
 pub mod problem;
 pub mod reconcile;
@@ -56,6 +57,8 @@ pub fn background(
             state.clone(),
             shutdown.clone(),
         )),
+        // Returns at once when notifications are off.
+        Box::pin(notifier::run(state.clone(), shutdown.clone())),
     ]
 }
 

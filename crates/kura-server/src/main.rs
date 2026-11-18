@@ -126,6 +126,56 @@ async fn connect(
         trusted_proxies: config.trusted_proxies.clone(),
     };
     let mut state = app::AppState::new(metrics, pool, verifier).with_http(http);
+    if config.notifications.enabled {
+        let webhook = &config.notifications.webhook;
+        // A caFile that cannot be read, or holds no certificate, stops the
+        // start: deliveries would fail one by one later (§4.3).
+        let ca = match &webhook.ca_file {
+            Some(path) => {
+                let pem = std::fs::read(path).map_err(|e| {
+                    anyhow::anyhow!("notifications.webhook.caFile {}: {e}", path.display())
+                })?;
+                let certs = reqwest::Certificate::from_pem_bundle(&pem)?;
+                anyhow::ensure!(
+                    !certs.is_empty(),
+                    "notifications.webhook.caFile {}: no certificate",
+                    path.display()
+                );
+                certs
+            }
+            None => Vec::new(),
+        };
+        let client = kura_server::net::webhook_client(webhook.allowed_cidrs.clone(), &ca)?;
+        state = state.with_notifier(kura_server::notifier::Notifier::new(
+            client,
+            webhook.allowed_cidrs.clone(),
+        ));
+    }
+    if let Some(ui) = config.ui.as_ref().filter(|u| u.enabled) {
+        app::ui::check_dir(&ui.dir).map_err(anyhow::Error::msg)?;
+        let settings = app::ui::UiSettings::new(
+            ui.dir.clone(),
+            ui.oidc.client_id.clone(),
+            config.oidc.issuer.clone(),
+            // The console's own discovery document first (Authentik's CORS
+            // follows the application, not the issuer).
+            ui.oidc
+                .discovery
+                .clone()
+                .or_else(|| config.oidc.discovery.clone()),
+        )
+        .ok_or_else(|| anyhow::anyhow!("oidc.discovery: not usable in a Content-Security-Policy"))?
+        .with_plugin(app::ui::PluginClient {
+            client_id: ui.plugin.client_id.clone(),
+            issuer: ui
+                .plugin
+                .discovery
+                .clone()
+                .or_else(|| config.oidc.discovery.clone())
+                .unwrap_or_else(|| config.oidc.issuer.clone()),
+        });
+        state = state.with_ui(settings);
+    }
     if let Some(v) = &vault {
         // Object storage and data keys need Vault: the bucket secret and Transit (§6.6).
         let objects = kura_server::store::s3(&v.bucket().await?)?;
@@ -214,6 +264,12 @@ async fn run(config_path: PathBuf) -> anyhow::Result<()> {
         .with_context(|| format!("{CONFIG_DIR_ENV} is not set"))?;
     let persisted = state.verifier.keys.load_persisted().await?;
     tracing::info!(keys = persisted, "persisted signing keys loaded");
+    if !config.notifications.enabled
+        && let Err(e) = kura_server::notifier::warn_rules_while_off(&state.db).await
+    {
+        // Only a warning is lost; the server works the same.
+        tracing::warn!(error = %e, "stored notification rules not counted");
+    }
     let state = std::sync::Arc::new(state);
     let shutdown = CancellationToken::new();
     tokio::spawn(stop_on_signal(shutdown.clone()));

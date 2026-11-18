@@ -1,0 +1,26 @@
+# RFC 0005 — implementation plan
+
+The phases of [RFC 0005](rfc0005-folder-restricted-viewers.md) §16, kept up to
+date as they land. Commits are made by the maintainer (signed), so "done"
+means green in the working tree.
+
+## Progress
+
+| Item | Status | Date | Notes |
+| --- | --- | --- | --- |
+| Phase 1 | done | 2026-11-17 | Migration `0021` (`role_binding.paths` with its `CHECK`, `schema_floor` raised to 21, `kura_bindings_replace` carrying `paths` and keeping ids), `VaultAccess.paths` and `scope` computed in `vault_accesses` (widest grant wins), `Reader::access` copying a person's scope into `ReadAccess`, `GET /vaults` with `paths` |
+| Phase 2 | done | 2026-11-17 | `spec::Binding.paths`, `validate::check_paths` (§4.3), `put_binding` and `list_bindings` with `paths` (a role raised clears them), the `RestrictedBindingWidened` warning, counted by `kura_config_warnings`. Tests: `tests/viewers.rs` (`a_restricted_viewer_reads_its_folders_only`: changes, entries, blob, chunk, blob batch, revisions, hidden answering as missing, no write, a note moved out, the widest grant; `folders_are_a_viewers_only`: the `CHECK`, files, API, id kept, the warning), unit `binding_paths_are_checked` |
+| Phase 3 | done | 2026-11-17 | Reader pages in `ui/`: vaults with their reach, browse and read (folder tree, sandboxed `srcdoc` frame, `markdown-it` with `html: false`, DOMPurify, wikilinks and links resolved only against listed entries, images inlined as `data:` from the vault, downloads above 1 MiB or for non-Markdown), search, history; the bridge script allowed by its hash (`dist/frame-csp.txt`, read strictly by the server), `img-src data:`; content fetched with `cache: "no-store"`; French and English. Tests: console 64 (XSS corpus, link resolution, frame message filtering, pages), 93% of lines. **§6.P**: `tests/heavy/reader.sh` with Playwright 1.64.1 and Chromium, observations 1, 2, 4, 5, 6 and 7 all `ok` on the dev stack on 2026-11-17 |
+
+## Divergences
+
+| # | Phase | RFC section | Divergence | Reason |
+| --- | --- | --- | --- | --- |
+| D1 | 2 | §4.3 ("two folders whose folded forms are equal") | In files, folders compare lowercased; the server compares them folded (full case folding, NFC) | `kura-api` depends on the kit only (RFC 0001 decision 49), not on `caseless`; two folders that differ only beyond lowercasing are a harmless duplicate in a union |
+| D2 | 2 | §4.3 (the warning, "or bound twice") | Warned for a restricted claim value the tenant maps to `owner` or `admin`; the "bound twice" case cannot happen in one vault (one row per subject), and a user who is also in an unrestricted group is only known at request time | The reconciler sees the files, not the people |
+| D3 | 1 | §14 (a gate test over the route list for people) | Not added; every read site takes `ReadAccess`, and `tests/viewers.rs` walks each read route as a restricted viewer | The routes a token reaches are already gated by `only_writer_routes_accept_tokens`; a person's reads go through the same `ReadAccess` **Closed 2026-11-17**: `no_route_shows_a_restricted_viewer_a_hidden_note` in `tests/viewers.rs` walks every vault route of `limits::LIMITS` as a restricted viewer with the hidden note's ids; none returns its content or path. |
+| D4 | 3 | §6.P observation 3 (search) | Not observed: the dev tenant has search off; the search query takes the same `LIKE ANY(scope.like_patterns())` as tokens, proved in RFC 0004's tests | Enabling search on the dev tenant indexes every note of the dev vaults **Closed 2026-11-17**: tenant `jdr` has `search: { enabled: true }`; `reader.sh` observes alice finding the word once indexed and bob getting 200 with no hit, and the page shows the "No note matches … shared with you" text. |
+| D5 | 3 | §4.5 (history: "alice (laptop)", "key discord-recap") | History shows the date, path and state; not who wrote it | `RevisionInfo` carries no author, and this RFC adds no route field for it **Closed 2026-11-17**: migration `0025` (`kura_revision_authors`) and `RevisionInfo.author`: a key's name or the device's name, never a subject; History shows it. |
+| D6 | 3 | §6.P setup (vault `campaign` of tenant `jdr`, group `jdr-players`) | Vault `campaign` in the dev tenant, bound to `kura-dev` (bob's group) with `paths: [Sessions/, Resumes/]`; alice owns the tenant | The dev Authentik and tenant already have those people **Closed 2026-11-17**: tenant `jdr` (groups `jdr-mj` for alice, `jdr-players` for bob) in `dev/config/tenants.yaml` and the Authentik blueprint, with its Transit key seeded by `task dev:stack`. |
+| D7 | 3 | §6.P observation 6 ("a second document … logs a policy violation") | The injected document's `script-src` violation is read from the browser console; the test also checks that no request left for `/x` or `example.org` | Playwright exposes CSP reports through the console in headless Chromium |
+| D8 | 3 | RFC 0003 §4.4 (`config.json`: the issuer's discovery) | `ui.oidc.discovery` in `server.yaml`: the console reads its own application's discovery document | Found by the proof: Authentik answers a browser's cross-origin request to a discovery document with that application's redirect URIs only, so the console could not read the CLI's |

@@ -28,6 +28,29 @@ server:
     transit: { mount: transit }
   maintenance:
     window: "01:00-05:00"
+  # The web console (RFC 0003), served by kura-server under /app from the
+  # image's /usr/share/kura/ui. Off by default. Its client id must also be
+  # in `oidc.audiences`; with Authentik, `discovery` is the console's own
+  # application (its CORS follows the application).
+  ui:
+    enabled: false
+    oidc:
+      clientId: kura-web
+      # discovery: https://auth.example.org/application/o/kura-web/
+  # Webhooks (RFC 0003). Off by default. `allowedCidrs` opens private
+  # ranges (a hub inside the cluster), never 0.0.0.0/0; `caFile` is set by
+  # the chart from `webhookCa` below.
+  notifications:
+    enabled: false
+    webhook:
+      allowedCidrs: []
+
+# An extra trust root for webhooks only (a hub behind a private CA): a
+# Secret holding the PEM bundle. Mounted read-only; sets
+# `server.notifications.webhook.caFile`.
+webhookCa:
+  secretName: ""
+  key: ca.pem
 
 # The resource documents (KuraTenant, KuraVault), one key per file. They are
 # re-read live: no restart on change (§6.10).

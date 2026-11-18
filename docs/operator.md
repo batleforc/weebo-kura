@@ -71,7 +71,79 @@ vault:            # accepted now, read from phase 2 on
   secrets: { database: mv/data/kura/database, bucket: mv/data/kura/bucket }
 maintenance:
   window: "01:00-05:00"   # UTC, the default; equal ends mean all day (§12)
+ui:               # the web console (RFC 0003); absent or enabled: false: /app is 404
+  enabled: true
+  dir: /usr/share/kura/ui        # the default, where the image puts it
+  oidc:
+    clientId: kura-web           # must also be in oidc.audiences
+    discovery: https://auth.example.org/application/o/kura-web/   # with Authentik: the console's own application
+  plugin:                        # what the console's "Open in Obsidian" link gives the plugin
+    clientId: kura-plugin        # the default; must also be in oidc.audiences
+    discovery: https://auth.example.org/application/o/kura-plugin/   # absent: oidc.discovery, else the issuer
+notifications:    # webhooks (RFC 0003); absent or enabled: false: rule routes are 409, nothing is sent
+  enabled: true
+  webhook:
+    allowedCidrs: []                  # private ranges a webhook may reach; never 0.0.0.0/0 or ::/0
+    caFile: /etc/kura/hub-ca.pem      # an extra trust root, for webhooks only
 ```
+
+With notifications on, a tenant admin (or a vault manager, for vault events
+of their vaults) subscribes rules to a closed list of events: `token.created`,
+`token.revoked`, `token.expiring` (7 days before, once), `token.denied` (a
+valid key from a refused address, once an hour), `binding.changed`,
+`binding.removed`, `device.registered`, `device.revoked`, `vault.created`,
+`vault.deleted`, `vault.changed` (once a minute), `vault.conflict`,
+`quota.high` (crossing 90%), and `ping` (Test). A fact nobody subscribes to
+records nothing. The server only connects to public addresses, or to ranges
+of `allowedCidrs`, checked on every address it connects to, at every attempt
+(a name that later points inside is refused); `https` only, no redirect, 5 s
+per attempt. The URL, the signing secret and an optional `authorization`
+value are sealed with a per-tenant data key under the tenant's Transit key;
+only the host is shown again. Rule creation needs object storage keys
+(`503` without). Deliveries retry after 1 min, 5 min, 30 min, 2 h and 6 h;
+`410 Gone` and 20 failures in a row switch a rule off
+(`kura_notification_rules_disabled`, `KuraNotificationRuleDisabled`).
+Events and deliveries are kept 7 days. `KuraNotificationsStalled` fires when
+a delivery has waited 15 minutes.
+
+#### The receiver's contract
+
+Each delivery is one `POST` of JSON to the rule's URL, `https` only:
+
+```text
+Content-Type: application/json
+Authorization: <the rule's value>      only when the rule has one
+User-Agent: kura-server/<version>
+X-Kura-Event: token.expiring
+X-Kura-Delivery: <uuid>                the same on every retry of this delivery
+X-Kura-Timestamp: <unix seconds>
+X-Kura-Signature: v1=<hex HMAC-SHA256(secret, timestamp + "." + body)>
+
+{"id":"…","type":"token.expiring","time":"2026-11-15T12:33:20Z",
+ "tenant":"jdr","vault":{"id":"…","name":"campaign"},
+ "title":"Token discord-recap expires in 7 days or less",
+ "message":"Vault campaign, tenant jdr: renew or replace it.",
+ "data":{"token":{"id":"…","name":"discord-recap"},"expiresAt":"…"}}
+```
+
+- **Verify** the signature with the rule's secret (`whsec_<base64url>`, the
+  bytes after the prefix, base64url-decoded) over the timestamp, a dot and
+  the raw body, and refuse a timestamp more than 5 minutes away from now.
+- **Deduplicate** on `X-Kura-Delivery`: delivery is at least once (a worker
+  that dies mid-request, a database restored from backup), and unordered.
+- **Answer** `2xx` within 5 seconds. Any other status, a timeout or a
+  redirect is a failure, retried after 1 min, 5 min, 30 min, 2 h and 6 h.
+  `410 Gone` switches the rule off at once. The response body is never read.
+- **Display** `title` and `message` as they are, or build your own text from
+  `type` and `data`. A payload names objects by id and name; it never holds
+  a note path or content, an OIDC subject, a device name or a secret.
+- A receiver that authenticates its senders by a key (as `weebo-notify-v2`
+  does with a `wnk_…` bearer) gets it in `Authorization`; the signature is
+  sent as well.
+
+Test a rule from the console's Notifications page, or with
+`POST /v1/tenants/{t}/notifications/{n}/test`: it sends `ping` at once and
+answers the attempt's result.
 
 Unknown fields are refused, so a typo stops the server instead of being
 ignored. Platform admins (the `platformAdmin` claim) may read
@@ -95,6 +167,7 @@ spec:
   retention: { maxRevisionAge: 180d, maxRevisionsPerEntry: 200, deletedEntryTtl: 90d }
   quota: { storage: 20Gi, maxFileSize: 500Mi }
   search: { enabled: true }
+  scopedTokens: { write: true }  # tokens of this tenant may carry write rules (RFC 0004)
   deletionPolicy: Orphan         # or Delete
 ---
 apiVersion: kura.weebo.io/v1alpha1
@@ -106,26 +179,80 @@ spec:
   configSync: { categories: [plugins, snippets, themes, hotkeys] }
   bindings:
     - { role: editor, claimValue: kura-maxime }  # or `subject: <OIDC sub>`, exactly one
+    - { role: viewer, claimValue: kura-players, paths: [Sessions/, Resumes/] }   # RFC 0005
   deletionPolicy: Orphan
 ```
 
 Defaults are closed: no `claimMappings`, no members; no `bindings`, only the
 tenant's `owner` and `admin` (who open every vault as `manager`); search off;
-`.obsidian` not synced; `Orphan`.
+scoped tokens read only; `.obsidian` not synced; `Orphan`.
 
 Refused changes (§4.3): an unknown kind, field or role; duplicate names; a
 vault outside its tenant's `vaultNamespaces` or naming an unknown tenant;
 chunking not `min < avg < max` or above 4 MiB, or changed after creation; one
 claim value mapped by two tenants; a file declaring a vault created through
-the API; removing two tenants at once, or all of them. Each rejection is
+the API; removing two tenants at once, or all of them; `paths` on a binding
+above `viewer`, an empty `paths`, more than 16 folders, a folder not ending
+with `/` or listed twice. Each rejection is
 logged at `warn` with `file#index field.path: message`, counted in
 `kura_config_rejected_total`, and listed in `GET /v1/admin/status`.
 
 Removing a document: `Orphan` disables the object and keeps its data;
 `Delete` disables it and schedules its deletion 30 days later, cancelled if
 the document comes back. The annotation `kura.weebo.io/force-orphan: "true"`
-cancels the `Delete` cleanup. Objects not `Ready` are counted in
-`kura_config_warnings`.
+cancels the `Delete` cleanup. Objects not `Ready`, or carrying an advisory
+condition, are counted in `kura_config_warnings`.
+
+### Viewers restricted to folders (RFC 0005)
+
+A `viewer` binding may list `paths`, 1 to 16 folders: its holder lists,
+reads, downloads, searches and sees the history of the notes under them,
+and nothing else, on every client (Obsidian, `kura`, the console). A hidden
+note answers `404`, exactly as a missing one, and is absent from listings,
+the change feed and search. A note moved out of the folders disappears with
+its history. `paths` absent is the whole vault, as before; above `viewer`
+`paths` is refused, in files, in the API and by the database.
+
+**The widest grant wins**: the tenant role `owner` or `admin`, or any other
+matching binding without `paths`, opens the whole vault whatever the
+restricted binding says. `GET /v1/admin/status` warns with
+`RestrictedBindingWidened` on a vault whose restricted binding names a claim
+value the tenant maps to `owner` or `admin`. `GET /v1/vaults` shows each
+caller the folders they read (`paths`).
+
+The schema of this release (migration `0021`) may not be served by an older
+binary, which would read a restricted binding as the whole vault: such a
+binary refuses to start against it. Roll forward, never back.
+
+The one exception is a binary from before RFC 0004 (scoped tokens), which
+has no schema floor check: it would start, and show every restricted viewer
+the whole vault. Before rolling back that far, list the restricted bindings
+as the database owner (row-level security does not apply to it), then
+delete them or turn them into what the old binary should grant:
+
+```sql
+SELECT t.slug AS tenant, v.namespace, v.name AS vault,
+       b.subject_kind, b.subject, b.managed_by, cardinality(b.paths) AS folders
+FROM role_binding b
+JOIN vault v ON v.id = b.vault_id
+JOIN tenant t ON t.id = b.tenant_id
+WHERE b.paths IS NOT NULL
+ORDER BY 1, 2, 3, 4, 5;
+```
+
+The query must return no row before the old binary starts. A binding
+declared in files (`managed_by = config`) comes back at the next reconcile:
+remove its `paths` from the files too.
+
+The Access page of a vault marks a restricted binding that the tenant role
+widens "effective: whole vault", and a bound folder under which no note
+exists yet "0 notes" (the folder may be created later).
+
+In the console (`/app`), a member opens a vault, browses its shared folders,
+reads notes, searches and opens past revisions. A note is rendered with raw
+HTML off, sanitised, in a sandboxed frame that may run only the console's
+own bridge script (allowed by its hash from `ui.dir/frame-csp.txt`); images
+come from the vault only, remote ones are never loaded.
 
 Objects declared in files are read-only through the API. A tenant `admin` may
 create vaults (`POST /v1/vaults`, in the namespace named after the tenant)
@@ -135,16 +262,64 @@ claim values or known members.
 
 ### Scoped tokens
 
-For agents and scripts that read a vault without signing in (§6.2): issued by
-a vault manager or tenant admin, `Authorization: Bearer kura_…`, read only,
-one vault, an optional folder prefix, at most 90 days, from listed address
-ranges only (never `0.0.0.0/0` or `::/0`). The client address is read
+For agents and scripts that use a vault without signing in (§6.2, RFC 0004):
+issued by a vault manager or tenant admin, `Authorization: Bearer kura_…`,
+one vault, 1 to 16 folder rules each `read` or `write`, at most 90 days, from
+listed address ranges only (never `0.0.0.0/0` or `::/0`). The client address is read
 through `trustedProxies`: behind a proxy, a request that does not name its
 client in a well-formed `X-Forwarded-For` is refused. A token dies with the
 grant that let its creator issue it (the binding, or the claim value mapped
 to `owner`/`admin`), when revoked, or at expiry; rows are purged 30 days
 after expiry. Each use is an audit event `scoped_token_used`; a refused
 address is an `authz_denied` event with `address_not_allowed`.
+
+A rule covers a folder and everything under it, compared without case.
+`write` also reads that folder, and nothing else; no rule at all is the whole
+vault, read only; a token never writes the whole vault. With no `write`
+rule a token behaves as before RFC 0004.
+
+**Writing is off until the tenant sets `scopedTokens: { write: true }`.**
+Roll the release out everywhere first: an older binary refuses the unknown
+field. Set back to `false`, every token write stops at the next request
+(`403`), reads go on, and nothing is deleted: this is the kill switch.
+`GET /v1/admin/status` then shows `TokenWriteDisabled` on the tenant while
+write tokens exist.
+
+A write token reaches four routes (`chunks/missing`, `PUT chunks`,
+`PUT blobs`, `commits`) and no other write: it never restores, manages
+tokens or bindings, opens the event socket or touches `.obsidian`. Under its
+`write` folders it creates, edits, renames and deletes; a commit with one
+operation outside is refused whole (`403 insufficient_role`,
+`operations[i]: outside the token's write folders`). It may only name
+content it can read or uploaded itself in the last 24 hours, so knowing the
+hash of a note elsewhere in the vault gives nothing (`422`,
+`content not uploaded by this token`, the same answer whether that content
+exists or not). What it writes is ordinary history, attributed to
+`key:<token id>`; an `editor` restores over it. `kura_token_writes_total`
+counts its writes by `outcome`: `applied`, `refused`, `disabled`.
+
+A rollback to a binary from before RFC 0004 keeps single-folder read tokens
+working; a token with several rules or a `write` rule sees nothing and
+writes nothing until the roll-forward.
+
+#### A bot that writes into one folder
+
+```bash
+# A manager, once: the secret is shown once.
+kura token create campaign --name discord-recap \
+    --read Sessions/ --read PNJ/ --write Resumes/ --expires 30d --cidr 10.42.0.0/16
+
+# The bot: no `kura login`, the token from a mounted secret.
+export KURA_SERVER=https://kura.example.org KURA_CLI_HOME=/var/lib/bot/kura
+kura --token-file /run/secrets/kura-token attach campaign /var/lib/bot/campaign --yes
+kura --token-file /run/secrets/kura-token sync
+```
+
+`--token-file` is preferred to the `KURA_TOKEN` variable, which other
+processes of the same user can read; the token is never written to the
+CLI's files. The bot downloads its readable folders only. A change outside
+its `write` folders is refused by the CLI before anything is sent (exit 3,
+naming the file and the folders that would work).
 
 ### Obsidian configuration
 
@@ -224,6 +399,18 @@ Per §13 and §6.2:
 - The provider's *access code validity* of at least 10 minutes: Authentik
   gives a device code that same lifetime, 1 minute by default, too short to
   type the code on another device.
+- For the web console (RFC 0003), a third public provider `kura-web`, code
+  flow and refresh token only, with the redirect URI
+  `https://<host>/app/callback` in **strict** mode (Authentik takes the
+  origin its token endpoint allows from it), the `profile` and
+  `offline_access` scope mappings, and its client id in `oidc.audiences`
+  and `ui.oidc.clientId`. Set `ui.oidc.discovery` to that application's
+  discovery URL: Authentik answers a browser's cross-origin request to a
+  discovery document with the origins of that application's redirect URIs
+  only, so the console cannot read the CLI's. A refresh token validity of 14 days is advised,
+  never checked: each refresh starts a new validity, so an active browser
+  stays signed in. Verified against Authentik 2026.8.3;
+  `tests/heavy/console.sh` replays those facts against another version.
 
 The server reads discovery, the JWKS and userinfo from the issuer (5 s
 timeout, no redirects). Keys are cached and stored in PostgreSQL, so a replica
@@ -243,6 +430,25 @@ owner's `auth_time`, the time that session signed in. End the session in
 Authentik to invalidate the refresh token itself. A token with neither claim
 is refused. Two sessions of one user signing in in the same second share a
 revocation. Devices idle 180 days are purged daily; revoked ones are kept.
+
+The web console registers one device with profile `web` per Authentik
+session: signing in again in the same session gets the same device back. Its
+"Sign out" (`POST /v1/devices/{d}/sign-out`) signs that device out without
+banning anything: its id is refused as unknown, and the same Authentik
+session may sign in again; it also asks Authentik to revoke the refresh
+token, whose answer the browser cannot read. "Revoke" stays the hard cut
+above, the one to use for a lost or stolen device. A refresh token stolen
+from the browser and already refreshed by the thief survives the user's
+sign-out; only "Revoke" stops it, and the console says so when a session
+ends unexpectedly. Web devices idle 30 days are purged. A web device never
+reads or writes an Obsidian configuration.
+
+The console keeps its access token in memory and its refresh token in the
+tab's `sessionStorage`, or in `localStorage` when the user ticks "Stay signed
+in on this device" (ticked by default in the installed application). Kura
+sets no cookie. `/app` is served with a Content-Security-Policy that allows
+scripts from Kura's origin only and connections to Kura and the identity
+provider, and with `frame-ancestors 'none'`.
 
 ## 8. Signals
 
@@ -267,7 +473,7 @@ revocation. Devices idle 180 days are purged daily; revoked ones are kept.
 | `kura_backup_last_success_timestamp_seconds`, `kura_storage_refreshed_timestamp_seconds` | the last bucket copy; the last storage refresh |
 | `kura_index_queue_depth`, `kura_index_failed` | search index jobs waiting; given up after 5 attempts |
 | `kura_index_round_timestamp_seconds` | the indexer's last finished round |
-| `kura_batch_items_total{route,outcome}`, `kura_batch_response_bytes` | items asked of `blobs/batch` and `chunks/batch` (RFC 0002): `found` were fetched and sent, `missing` were unknown or not visible; the size of each chunk answer. A `chunks/batch` past the 8 a replica builds at once answers `429` with `Retry-After: 1`, so a busy replica never trips the dependency alert |
+| `kura_batch_items_total{route,outcome}`, `kura_batch_response_bytes` | items asked of `blobs/batch` and `chunks/batch` (RFC 0002): `found` were fetched and sent, `missing` were unknown or not visible; `{route="upload", outcome="stored"}` counts the chunks `chunks/upload` stored (phase 3); the size of each chunk answer. A `chunks/batch` past the 8 a replica builds at once answers `429` with `Retry-After: 1`, so a busy replica never trips the dependency alert |
 | Log target `audit`, `scoped_token_used`, `scoped_token_created`, `scoped_token_revoked` | every use of a scoped token (id, route, client), its issue and revocation |
 | `kura_maintenance_failures_total` | vaults whose maintenance failed in a pass (the others went on), and whole passes failed: alert on a rise |
 | `kura_maintenance_gc_timestamp_seconds` | the last pass that ran garbage collection (skipped while a backup holds the lock) |
@@ -297,8 +503,9 @@ kura devices [revoke <name>]
 kura watch [notes]             # stays in sync: pulls on every notification, pushes edits once quiet
 kura sync notes --yes          # a full resync may move many files to .trash without asking
 kura search notes "budget 2026" # notes and file names, best first (tenant search on)
-kura token create notes --prefix agents/ --expires 30d --cidr 10.42.0.0/16
-kura token list notes          # never shows a secret
+kura token create notes --read agents/ --expires 30d --cidr 10.42.0.0/16
+kura token create notes --name bot --read in/ --write out/ --expires 30d --cidr 10.42.0.0/16
+kura token list notes          # name, r:/w: folders, last use; never a secret
 kura token revoke notes <id>
 kura history notes a.md        # the file's revisions, newest first
 kura restore notes a.md <rev>  # that revision's content becomes a new revision, then syncs
@@ -356,9 +563,9 @@ Rootless podman, one container at a time, every port on loopback:
 
 | Task | What |
 |---|---|
-| `task dev:stack` | PostgreSQL 18 (55433), OpenBao 2.7 dev mode (58200, token `kura-dev`), RustFS (59000), Authentik 2026.8 (https://localhost:59443), then `dev:seed` |
+| `task dev:stack` | PostgreSQL 18 (55433), OpenBao 2.7 persistent (58200, token `kura-dev`, Raft in the volume `kura-dev-vault-data`, unseal key in `dev/openbao-keys.json`), RustFS (59000), Authentik 2026.8 (https://localhost:59443), then `dev:seed` |
 | `task dev:seed` | OpenBao KV `mv/kura/{database,bucket}`, Transit key `kura-dev`, database `kura`, `kura_app`, migrations |
-| `task dev:run [RELEASE=1]` | `kura-server` with `dev/server.yaml` and `dev/config/` (API 58080, metrics 59090); `RELEASE=1` for the perf tasks |
+| `task dev:run [RELEASE=1]` | `kura-server` with `dev/server.yaml` and `dev/config/` (API 58080, metrics 59090); `RELEASE=1` for the perf tasks. Run `task ui:build` first: `ui.dir` is checked at startup |
 | `task dev:maintain` | One maintenance pass now |
 | `task dev:drill` | The restore drill of §12 on the local stack |
 | `task perf:run:commit`, `:pull`, `:resync`, `perf:attach`, `perf:soak` | k6 load (§10.3), decision 42's first attach of 10,000 notes, the memory soak |

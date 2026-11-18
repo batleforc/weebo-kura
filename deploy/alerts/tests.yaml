@@ -152,6 +152,24 @@ tests:
         exp_alerts:
           - exp_labels: { severity: warning }
             exp_annotations: { summary: "2 notes could not be indexed after five attempts and are missing from search until edited; see the warn logs." }
+  - interval: 1m
+    input_series:
+      # Deliveries keep up for 10m, then the oldest one ages; a rule switches off at 20m.
+      - { series: 'kura_notification_oldest_pending_seconds{pod="a"}', values: '0x10 60+60x30' }
+      - { series: 'kura_notification_rules_disabled{pod="a"}', values: '0x20 1x10' }
+    alert_rule_test:
+      - { eval_time: 24m, alertname: KuraNotificationsStalled, exp_alerts: [] }
+      - eval_time: 36m
+        alertname: KuraNotificationsStalled
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations: { summary: "A notification delivery has waited more than 15 minutes; the worker is behind or stuck." }
+      - { eval_time: 15m, alertname: KuraNotificationRuleDisabled, exp_alerts: [] }
+      - eval_time: 25m
+        alertname: KuraNotificationRuleDisabled
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations: { summary: "1 notification rules switched themselves off after 20 failed deliveries; a tenant admin re-enables them." }
   - interval: 1h
     input_series:
       # Collected at 1h, then skipped: stale past 49h. Never set: no alert.

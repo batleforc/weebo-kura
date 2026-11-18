@@ -14,7 +14,7 @@ name = "kura"
 path = "src/main.rs"
 
 [dependencies]
-kura-core = { workspace = true }
+kura-core = { workspace = true, features = ["scope"] }
 clap = { workspace = true }
 reqwest = { workspace = true, features = ["form", "query"] }
 serde = { workspace = true }

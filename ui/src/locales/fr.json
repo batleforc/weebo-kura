@@ -1,0 +1,431 @@
+{
+  "app": {
+    "name": "Kura",
+    "tagline": "Vos coffres, depuis un navigateur."
+  },
+  "nav": {
+    "vaults": "Mes coffres",
+    "devices": "Mes appareils",
+    "signOut": "Se déconnecter",
+    "main": "Principal",
+    "skip": "Aller au contenu",
+    "help": "Aide",
+    "home": "Accueil",
+    "findVault": "Rechercher un coffre",
+    "findVaultHint": "notes, campaign…",
+    "noVault": "Aucun coffre ne correspond."
+  },
+  "signIn": {
+    "action": "Se connecter avec Authentik",
+    "stay": "Rester connecté sur cet appareil",
+    "stayHelp": "Laisser décoché sur un ordinateur partagé.",
+    "ended": "Votre session a pris fin. Si vous ne vous êtes pas déconnecté vous-même, connectez-vous et révoquez ce navigateur dans « Mes appareils ».",
+    "failed": "La connexion n'a pas pu démarrer : {message}",
+    "unreachable": "Le service de connexion est injoignable depuis cette adresse. Ouvrez la console à l'adresse qui vous a été donnée, ou réessayez plus tard."
+  },
+  "callback": {
+    "working": "Connexion…",
+    "failed": "La connexion n'a pas abouti : {message}",
+    "again": "Réessayer"
+  },
+  "noTenant": {
+    "text": "Vous êtes connecté en tant que {name}, mais vous n'êtes membre d'aucun tenant Kura.",
+    "hint": "Demandez à un administrateur d'ajouter votre compte à un groupe, puis reconnectez-vous."
+  },
+  "vaults": {
+    "title": "Mes coffres",
+    "empty": "Aucun coffre ne vous est encore ouvert. Demandez à un gestionnaire du coffre de vous ajouter, puis rechargez.",
+    "failed": "Vos coffres n'ont pas pu être chargés.",
+    "name": "Nom",
+    "tenant": "Tenant",
+    "role": "Votre rôle",
+    "source": "Déclaré dans",
+    "reach": "Portée",
+    "updated": "Modifié",
+    "obsidian": "Ouvrir dans Obsidian",
+    "obsidianFor": "Ouvrir {name} dans Obsidian",
+    "getPlugin": "Synchroniser ces coffres dans Obsidian : obtenir le plugin"
+  },
+  "devices": {
+    "title": "Mes appareils",
+    "empty": "Aucun appareil pour l'instant.",
+    "failed": "Vos appareils n'ont pas pu être chargés.",
+    "name": "Nom",
+    "kind": "Type",
+    "lastSeen": "Vu",
+    "state": "État",
+    "owner": "Propriétaire",
+    "thisBrowser": "ce navigateur",
+    "active": "actif",
+    "revoked": "révoqué",
+    "signOutHere": "Se déconnecter ici",
+    "revoke": "Révoquer",
+    "confirmRevoke": "Révoquer {name} ? Tous les appareils connectés avec la même session Authentik sont refusés jusqu'à leur prochaine connexion.",
+    "confirm": "Révoquer",
+    "cancel": "Annuler"
+  },
+  "state": {
+    "loading": "Chargement…",
+    "retry": "Réessayer",
+    "showRevoked": "Afficher le révoqué | Afficher les {n} révoqués",
+    "hideRevoked": "Masquer les révoqués"
+  },
+  "problem": {
+    "network": "Le serveur est injoignable.",
+    "insufficient_role": "Votre rôle ne le permet pas.",
+    "not_found": "Introuvable, ou invisible pour vous.",
+    "quota_exceeded": "20 appareils actifs au plus : révoquez-en un d'abord.",
+    "device_revoked": "La session de ce navigateur a été révoquée : reconnectez-vous.",
+    "rate_limited": "Trop de requêtes : patientez un instant.",
+    "unavailable": "Le serveur est indisponible pour l'instant.",
+    "status": "Le serveur a répondu {status}.",
+    "unexpected": "Une erreur inattendue est survenue.",
+    "invalid_request": "Cette adresse ou cette requête n'est pas valide : vérifiez le lien."
+  },
+  "reader": {
+    "breadcrumb": "Où vous êtes",
+    "search": "Rechercher",
+    "folders": "Dossiers partagés",
+    "emptyVault": "Aucune note de ce coffre ne vous est encore partagée.",
+    "failed": "Ce coffre n'a pas pu être chargé.",
+    "pick": "Choisissez une note dans les dossiers.",
+    "notFound": "Cette note n'existe pas, ou ne vous est pas partagée.",
+    "back": "Retour à {name}",
+    "backToVault": "Retour au coffre",
+    "backToNote": "Retour à la note",
+    "download": "Télécharger {name}",
+    "history": "Historique",
+    "searchOff": "La recherche n'est pas activée pour ce coffre. Parcourez plutôt les dossiers.",
+    "noHit": "Aucune note ne correspond à « {query} » dans les dossiers qui vous sont partagés.",
+    "hits": "{n} résultats",
+    "noRevision": "Aucune révision.",
+    "current": "actuelle",
+    "deleted": "supprimée",
+    "view": "Voir",
+    "reach": "{n} dossiers",
+    "whole": "coffre entier",
+    "open": "Ouvrir",
+    "byKey": "clé {name}",
+    "lastEdited": "Modifiée le {date}",
+    "lastEditedBy": "Modifiée le {date} par {who}",
+    "cut": "Ce coffre compte plus de {n} entrées : les dossiers n'affichent que les {n} premières. La recherche trouve les autres.",
+    "unavailable": "Kura ne répond pas (503). Nouvel essai dans 30 s…"
+  },
+  "manage": {
+    "title": "Gérer",
+    "nav": "Gérer",
+    "nothing": "Rien à gérer avec vos rôles.",
+    "vaults": "Coffres que vous gérez",
+    "access": "Accès",
+    "keys": "Clés",
+    "tenants": "Tenants que vous administrez",
+    "tenantVaults": "Coffres",
+    "devices": "Appareils des membres",
+    "platform": "Plateforme",
+    "status": "État",
+    "forbidden": "Votre rôle ne donne pas accès à cette page.",
+    "failed": "Cette page n'a pas pu être chargée.",
+    "notifications": "Notifications",
+    "intro": "Ce que vos rôles vous permettent de gérer, tenant par tenant.",
+    "vault": "Coffre",
+    "whoReads": "Qui peut l'ouvrir",
+    "keysFor": "Clés d'accès",
+    "accessAction": "Gérer l'accès",
+    "keysAction": "Gérer les clés",
+    "everywhere": "Tous vos tenants",
+    "tenantVaultsWhat": "Créer un coffre, ou supprimer un coffre créé ici.",
+    "notificationsWhat": "Envoyer les événements de ce tenant à un webhook.",
+    "devicesWhat": "Voir et révoquer les appareils de vos membres.",
+    "statusWhat": "La configuration chargée, et si chaque objet est prêt.",
+    "role": {
+      "owner": "vous en êtes propriétaire",
+      "admin": "vous l'administrez",
+      "manager": "vous y gérez des coffres",
+      "member": "membre"
+    }
+  },
+  "access": {
+    "subject": "Sujet",
+    "role": "Rôle",
+    "reach": "Portée",
+    "source": "Source",
+    "actions": "Actions",
+    "group": "groupe",
+    "user": "utilisateur",
+    "userSubject": "utilisateur (sujet OIDC)",
+    "tenantAdmins": "les propriétaires et administrateurs du tenant",
+    "tenantRole": "rôle de tenant",
+    "configuration": "configuration",
+    "readOnly": "lecture seule",
+    "remove": "Retirer",
+    "changeRole": "Rôle de {who}",
+    "empty": "Seuls les propriétaires et administrateurs du tenant peuvent ouvrir ce coffre.",
+    "add": "Ajouter un accès",
+    "addAction": "Ajouter",
+    "who": "Qui",
+    "folders": "Dossiers (lecteur seulement)",
+    "foldersHint": "Sessions/, Resumes/ (vide : coffre entier)",
+    "noNotes": "0 note",
+    "widened": "effectif : coffre entier",
+    "widenedWhy": "le tenant associe ce groupe à owner ou admin",
+    "confirmRemove": "Retirer l'accès de {who} ? Ce coffre lui est fermé dès sa prochaine requête.",
+    "confirmRole": "Changer le rôle de {who} de {from} à {to} ?",
+    "changeAction": "Changer le rôle",
+    "pickGroup": "Choisir un groupe"
+  },
+  "keys": {
+    "created": "Clé créée",
+    "copy": "Copier",
+    "copied": "Copiée",
+    "once": "Ce secret n'est montré qu'une fois. Conservez-le maintenant : personne, vous compris, ne pourra le réafficher. Les autres gestionnaires voient et peuvent révoquer cette clé, pas son secret.",
+    "stored": "Je l'ai conservé, fermer",
+    "empty": "Aucune clé pour l'instant. Une clé permet à un script ou un bot de lire ce coffre.",
+    "name": "Nom",
+    "scopes": "Dossiers",
+    "from": "Depuis",
+    "expires": "Expire",
+    "lastUsed": "Dernière utilisation",
+    "by": "Par",
+    "never": "jamais",
+    "new": "Nouvelle clé",
+    "create": "Créer",
+    "folders": "Dossiers",
+    "folder": "Dossier",
+    "mode": "Accès",
+    "allVault": "vide : coffre entier",
+    "read": "lecture",
+    "write": "lecture et écriture",
+    "expiresIn": "Expire dans (jours, 1 à 90)",
+    "allowedFrom": "Autorisée depuis (plages d'adresses)",
+    "confirmRevoke": "Révoquer la clé {name} ? Tout ce qui l'utilise s'arrête aussitôt.",
+    "addFolder": "Ajouter un dossier",
+    "you": "vous"
+  },
+  "tenantDevices": {
+    "empty": "Aucun autre appareil dans vos tenants."
+  },
+  "tenantVaults": {
+    "delete": "Supprimer",
+    "confirmDelete": "Supprimer le coffre {name} ? Il est désactivé tout de suite et purgé après 30 jours.",
+    "newName": "Nouveau coffre",
+    "create": "Créer"
+  },
+  "status": {
+    "rejected": "Ce réplica a refusé la dernière modification :",
+    "generation": "génération {generation} · écrite {at}",
+    "kind": "Type",
+    "ready": "Prêt",
+    "reason": "Raison",
+    "isReady": "prêt",
+    "notReady": "pas prêt",
+    "unknown": "inconnu"
+  },
+  "notifications": {
+    "title": "{tenant} ▸ Notifications",
+    "off": "Les notifications ne sont pas activées sur ce serveur.",
+    "switchedOff": "« {name} » a été désactivée ({reason}). Réparez le receveur, puis réactivez-la.",
+    "created": "Règle créée",
+    "once": "Montré une seule fois : votre receveur vérifie X-Kura-Signature avec. L'URL ne sera plus montrée que par son hôte.",
+    "tested": "Test de {rule} : {result}",
+    "empty": "Aucune règle pour l'instant. Une règle envoie les événements de ce tenant à un webhook.",
+    "events": "Événements",
+    "vault": "Coffre",
+    "to": "Vers",
+    "last": "Dernier",
+    "on": "active",
+    "offState": "désactivée",
+    "test": "Tester",
+    "reEnable": "Réactiver",
+    "disable": "Désactiver",
+    "deliveries": "Livraisons",
+    "new": "Nouvelle règle",
+    "scope": "Portée",
+    "tenantWide": "(tout le tenant)",
+    "webhook": "URL du webhook",
+    "authorization": "Authorization (facultatif, masqué une fois enregistré)",
+    "back": "Retour aux règles",
+    "deliveriesTitle": "Livraisons (50 dernières, gardées 7 jours)",
+    "noDelivery": "Aucune livraison pour l'instant.",
+    "time": "Heure",
+    "event": "Événement",
+    "attempt": "Essai",
+    "result": "Résultat",
+    "failed": "échec : {result}",
+    "pending": "en attente ({result})",
+    "edit": "Modifier",
+    "editTitle": "Modifier la règle {name}",
+    "save": "Enregistrer",
+    "unchanged": "vide : inchangée ({host})",
+    "keptAuthorization": "vide : inchangé",
+    "removeAuthorization": "Retirer l'Authorization",
+    "rotate": "Changer le secret",
+    "rotated": "Nouveau secret de signature",
+    "confirmRotate": "Changer le secret de signature de {name} ? L'ancien cesse aussitôt : le receveur refuse les livraisons jusqu'à ce qu'il vérifie avec le nouveau.",
+    "confirmRemove": "Retirer la règle {name} ? Ses livraisons s'arrêtent.",
+    "more": "Plus"
+  },
+  "prefs": {
+    "title": "Préférences",
+    "themeLabel": "Thème",
+    "localeLabel": "Langue",
+    "theme": {
+      "system": "Système",
+      "light": "Clair",
+      "dark": "Sombre"
+    },
+    "locale": {
+      "system": "Système",
+      "en": "English",
+      "fr": "Français"
+    },
+    "systemTheme": "Système suit votre appareil : actuellement {now}.",
+    "systemLocale": "Système suit votre navigateur : actuellement {now}.",
+    "themeSet": "Thème : {name}.",
+    "localeSet": "Langue : {name}."
+  },
+  "help": {
+    "title": "Aide",
+    "intro": "Kura synchronise vos coffres Obsidian entre vos appareils, sur le serveur de votre organisation. Commencez par le plugin ; les questions plus bas couvrent le reste.",
+    "faq": "Questions",
+    "device": {
+      "label": "Installer sur",
+      "desktop": "Ordinateur",
+      "android": "Android",
+      "ios": "iPhone, iPad"
+    },
+    "obsidian": {
+      "title": "Synchroniser avec Obsidian",
+      "lead": "Kura Sync est le plugin Obsidian qui synchronise un coffre avec ce serveur. Il n'est pas dans le catalogue de plugins d'Obsidian : installez-le d'ici, une fois par appareil.",
+      "downloadAction": "Télécharger Kura Sync",
+      "build": "version {version} · {size}",
+      "notBundled": "Ce serveur a été construit sans le plugin. Demandez les fichiers de Kura Sync à votre administrateur.",
+      "open": "Ouvrir {name} dans Obsidian",
+      "noLink": "Ce serveur n'indique pas comment le plugin se connecte : réglez-le à la main, plus bas.",
+      "code": "Obsidian affiche ce que le lien règle : acceptez, puis validez le code affiché, avec le compte que vous utilisez ici.",
+      "byHand": "Le régler plutôt à la main",
+      "serverField": "Serveur",
+      "issuerField": "Fournisseur d'identité",
+      "byHandThen": "Dans Obsidian, collez les deux dans Paramètres › Kura Sync, touchez Sign in, puis choisissez le coffre."
+    },
+    "step": {
+      "download": {
+        "title": "Télécharger le plugin",
+        "body": "Sur cet appareil, téléchargez le fichier ci-dessous."
+      },
+      "unzip": {
+        "title": "Le dézipper dans votre coffre",
+        "body": "Dézippez-le dans le dossier des plugins de votre coffre Obsidian, pour obtenir ce dossier. .obsidian est caché : affichez les fichiers cachés (sur Mac, ⌘ ⇧ . dans le Finder), et créez plugins s'il n'existe pas."
+      },
+      "enable": {
+        "title": "L'activer dans Obsidian",
+        "body": "Ouvrez le coffre dans Obsidian, puis Paramètres › Plugins communautaires. Désactivez le mode restreint si on vous le demande, puis activez Kura Sync. Absent de la liste ? Touchez l'icône de rechargement à côté de Plugins installés."
+      },
+      "connect": {
+        "title": "Connecter un coffre",
+        "body": "Depuis cet appareil, Obsidian installé, choisissez le coffre à synchroniser."
+      },
+      "androidExtract": {
+        "title": "Extraire le fichier",
+        "body": "Dans Files (de Google), ouvrez Téléchargements, touchez kura-sync.zip, puis Extraire. Vous obtenez un dossier nommé weebo-kura."
+      },
+      "androidMove": {
+        "title": "Le déplacer dans votre coffre",
+        "body": "Dans les paramètres de Files, activez Afficher les fichiers cachés. Déplacez ensuite le dossier weebo-kura dans le dossier des plugins de votre coffre (les coffres sont en général dans Documents). Créez plugins s'il n'existe pas."
+      },
+      "iosIcloud": {
+        "title": "Garder le coffre dans iCloud Drive",
+        "body": "L'app Fichiers n'affiche pas le dossier caché .obsidian : le plugin se pose depuis un ordinateur. Dans Obsidian sur l'iPhone ou l'iPad, créez le coffre avec « Stocker dans iCloud » activé, ou déplacez-le là."
+      },
+      "iosCopy": {
+        "title": "Sur un ordinateur, télécharger le plugin",
+        "body": "Ouvrez cette page sur un Mac ou un PC connecté au même compte iCloud, et téléchargez le fichier là."
+      },
+      "iosPlace": {
+        "title": "Le copier dans le coffre, dans iCloud Drive",
+        "body": "Dézippez-le, puis copiez le dossier weebo-kura ici, dans iCloud Drive (sur Mac, ⌘ ⇧ . dans le Finder affiche .obsidian). Attendez qu'iCloud l'envoie au téléphone."
+      }
+    },
+    "path": {
+      "desktop": "<votre coffre>/.obsidian/plugins/weebo-kura/",
+      "android": "Documents/<votre coffre>/.obsidian/plugins/weebo-kura/",
+      "ios": "iCloud Drive/Obsidian/<votre coffre>/.obsidian/plugins/weebo-kura/"
+    },
+    "reader": {
+      "title": "Comment lire un coffre sans Obsidian ?",
+      "p1": "La barre de gauche liste les coffres partagés avec vous. Ouvrez-en un : son onglet Notes parcourt ses dossiers et lit ses notes ici ; chaque note a son historique.",
+      "p2": "La recherche est proposée quand le tenant l'active. Un gestionnaire peut ne vous ouvrir que certains dossiers d'un coffre : vous voyez alors ces dossiers, et rien d'autre."
+    },
+    "roles": {
+      "title": "Que permet mon rôle ?",
+      "viewer": "lit le coffre, dans Obsidian ou ici ; ce qui change sur ses appareils n'est pas envoyé.",
+      "editor": "lit et écrit : ses appareils synchronisent dans les deux sens.",
+      "manager": "un éditeur qui décide aussi qui ouvre le coffre et crée ses clés d'accès.",
+      "folders": "Un lecteur peut être limité à certains dossiers : il les lit alors dans le navigateur seulement."
+    },
+    "devices": {
+      "title": "J'ai perdu un appareil, ou je suis sur un ordinateur partagé",
+      "p1": "Chaque navigateur et chaque Obsidian qui se connecte est un appareil. Mes appareils liste les vôtres, avec leur dernière activité.",
+      "p2": "Un portable ou un téléphone perdu ? Révoquez-le là : il s'arrête à sa prochaine requête. Sur un ordinateur partagé, laissez « Rester connecté » décoché et déconnectez-vous en partant : la déconnexion révoque ce navigateur."
+    },
+    "trouble": {
+      "title": "Le plugin n'apparaît pas, ou le lien ne fait rien",
+      "p1": "Absent des plugins communautaires : vérifiez que le dossier est bien .obsidian/plugins/weebo-kura (et pas un dossier dedans) et qu'il contient main.js et manifest.json, puis touchez l'icône de rechargement à côté de Plugins installés.",
+      "p2": "Le lien ne fait rien : Obsidian doit être installé sur cet appareil, et Kura Sync activé dans le coffre qu'Obsidian ouvre. Avec plusieurs coffres, ouvrez d'abord le bon.",
+      "p3": "La barre d'état indique « sign in » : ouvrez Paramètres › Kura Sync et touchez Sign in."
+    },
+    "manage": {
+      "title": "Je gère un coffre ou un tenant",
+      "accessTitle": "Accès",
+      "access": "Qui ouvre un coffre : un groupe de votre fournisseur d'identité ou une personne, en lecteur, éditeur ou gestionnaire, sur tout le coffre ou certains dossiers.",
+      "keysTitle": "Clés",
+      "keys": "Des clés d'accès pour scripts et agents : limitées à des dossiers, en lecture ou écriture, à des adresses, et dans le temps. Le secret n'est affiché qu'une fois.",
+      "vaultsTitle": "Coffres",
+      "vaults": "Les propriétaires et administrateurs du tenant créent des coffres et suppriment ceux créés ici ; les coffres déclarés en configuration se changent là-bas.",
+      "notificationsTitle": "Notifications",
+      "notifications": "Envoyer les événements d'un tenant (un coffre modifié, une clé qui expire bientôt, un appareil révoqué…) à un webhook, signés par un secret que vous pouvez changer."
+    }
+  },
+  "role": {
+    "viewer": "lecteur",
+    "editor": "éditeur",
+    "manager": "gestionnaire"
+  },
+  "home": {
+    "title": "Accueil",
+    "todo": "À faire",
+    "nothing": "Rien à faire.",
+    "syncTitle": "Synchronisez un appareil",
+    "syncBody": "Aucun de vos appareils n'utilise encore Obsidian avec Kura : le plugin s'installe en 4 étapes, puis un lien connecte chaque coffre.",
+    "syncAction": "Installer le plugin",
+    "keysTitle": "Une clé d'accès de {vault} expire {when} | {n} clés d'accès de {vault} expirent à partir de {when}",
+    "keysBody": "Les scripts qui les utilisent s'arrêteront à leur expiration.",
+    "keysAction": "Voir les clés",
+    "vaults": "Vos coffres",
+    "read": "Lire",
+    "emptyVault": "encore vide",
+    "brief": "En bref",
+    "devices": "Vos appareils",
+    "active": "1 actif | {n} actifs",
+    "latest": "Le plus récent : {name}, {when}.",
+    "devicesAction": "Voir et révoquer",
+    "run": "Vous gérez",
+    "runCount": "{tenants} tenant(s), {vaults} coffre(s).",
+    "tenantVaults": "Coffres de {tenant}",
+    "tenantNotifications": "Notifications de {tenant}"
+  },
+  "vault": {
+    "overview": "Vue d'ensemble",
+    "notes": "Notes",
+    "sections": "Sections du coffre",
+    "youAre": "vous êtes {role}",
+    "read": "Lire dans le navigateur",
+    "who": "Qui peut l'ouvrir",
+    "manageAccess": "Gérer l'accès",
+    "liveKeys": "Clés d'accès actives",
+    "noKey": "Aucune clé active.",
+    "revokedHidden": "1 clé révoquée masquée | {n} clés révoquées masquées",
+    "manageKeys": "Gérer les clés",
+    "recent": "Modifié en dernier",
+    "browse": "Parcourir les notes"
+  }
+}

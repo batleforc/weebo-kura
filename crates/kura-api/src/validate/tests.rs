@@ -418,3 +418,57 @@ fn documents_round_trip_through_yaml() {
         assert_eq!(parse_file(&r.source().file, &again).unwrap(), vec![r]);
     }
 }
+
+/// RFC 0005 §4.3: folders on a viewer only, 1 to 16, valid, not repeated.
+#[test]
+fn binding_paths_are_checked() {
+    let with = |role: &str, paths: &str| {
+        VAULT.replace(
+            "{ role: editor, claimValue: kura-maxime }",
+            &format!("{{ role: {role}, claimValue: kura-maxime, paths: {paths} }}"),
+        )
+    };
+    let ok = with("viewer", "[Sessions/, Resumes/]");
+    let config = validate(
+        parse(&[("a.yaml", TENANT), ("v.yaml", &ok)]),
+        &PreviousState::default(),
+    )
+    .unwrap();
+    let b = &config.vaults.values().next().unwrap().doc.spec.bindings[0];
+    assert_eq!(
+        b.paths.as_deref(),
+        Some(&["Sessions/".to_owned(), "Resumes/".to_owned()][..])
+    );
+    for (role, paths, why) in [
+        ("editor", "[Sessions/]", "only a viewer"),
+        ("viewer", "[]", "1 to 16"),
+        ("viewer", "[Sessions]", "ending with /"),
+        ("viewer", "['../x/']", "not a folder"),
+        ("viewer", "['/x/']", "not a folder"),
+        ("viewer", "[.obsidian/]", "not a folder"),
+        ("viewer", "[a/, A/]", "twice"),
+    ] {
+        let e = errors(
+            &[("a.yaml", TENANT), ("v.yaml", &with(role, paths))],
+            &PreviousState::default(),
+        );
+        assert!(
+            e[0].contains("spec.bindings[0].paths") && e[0].contains(why),
+            "{role} {paths}: {e:?}"
+        );
+    }
+    let many = format!(
+        "[{}]",
+        (0..17)
+            .map(|i| format!("f{i}/"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    assert!(
+        errors(
+            &[("a.yaml", TENANT), ("v.yaml", &with("viewer", &many))],
+            &PreviousState::default()
+        )[0]
+        .contains("1 to 16")
+    );
+}

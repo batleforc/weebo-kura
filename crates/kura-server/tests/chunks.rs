@@ -584,3 +584,128 @@ async fn a_failed_commit_leaves_the_object_for_the_sweep() {
         .await
         .unwrap();
 }
+
+/// RFC 0002 phase 3, T7: `chunks/upload` checks every record against its
+/// address before storing any; `blobs/upload` stores every manifest or none.
+#[tokio::test]
+async fn upload_batch_rejects_a_wrong_hash() {
+    let Some((e, s, tok, d, v)) = setup(module_path!()).await else {
+        return;
+    };
+    let uri = |route: &str| format!("/v1/vaults/{v}/{route}");
+    let (a, b) = (b"first chunk".to_vec(), b"second chunk".to_vec());
+    let (ha, hb) = (ChunkHash::of(&a), ChunkHash::of(&b));
+    let body = |list: &[(ChunkHash, Option<&[u8]>)]| {
+        let mut out = Vec::new();
+        for (h, data) in list {
+            kura_core::wire::write_record(&mut out, h, *data);
+        }
+        out
+    };
+
+    // One record under another's address: refused, nothing stored.
+    let wrong = body(&[(ha, Some(&a)), (hb, Some(&a))]);
+    let (st, err) = post_raw(&e, &tok, &d, &uri("chunks/upload"), wrong).await;
+    let err: serde_json::Value = serde_json::from_slice(&err).unwrap();
+    assert_eq!(
+        (st, problem(&err)),
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "/v1/problems/hash_mismatch"
+        )
+    );
+    assert!(
+        objects(&s, &v).await.is_empty(),
+        "a refused batch stored nothing"
+    );
+
+    // Malformed: no record, a missing-status record, a record cut short.
+    for bad in [
+        Vec::new(),
+        body(&[(ha, None)]),
+        body(&[(ha, Some(&a))])[..40].to_vec(),
+    ] {
+        let (st, _) = post_raw(&e, &tok, &d, &uri("chunks/upload"), bad).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+    }
+
+    // Both right, one twice: stored once each, and no longer missing.
+    let good = body(&[(ha, Some(&a)), (hb, Some(&b)), (ha, Some(&a))]);
+    let (st, _) = post_raw(&e, &tok, &d, &uri("chunks/upload"), good).await;
+    assert_eq!(st, StatusCode::NO_CONTENT);
+    assert_eq!(objects(&s, &v).await.len(), 2);
+    let (_, m) = e
+        .call(
+            "POST",
+            &uri("chunks/missing"),
+            &tok,
+            Some(&d),
+            Some(json!({ "hashes": [ha, hb] })),
+        )
+        .await;
+    assert_eq!(m["missing"], json!([]));
+
+    // Manifests: one names a chunk never stored, so neither is kept.
+    let size = |d: &[u8]| d.len() as u64;
+    let ghost = ChunkHash::of(b"never uploaded");
+    let fine = json!({ "hash": blob_hash(size(&a), &[ha]), "size": size(&a), "chunks": [ha] });
+    let broken = json!({ "hash": blob_hash(14, &[ghost]), "size": 14, "chunks": [ghost] });
+    let blobs = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM blob WHERE vault_id = $1::uuid")
+            .bind(&v)
+            .fetch_one(&e.t.owner)
+            .await
+            .unwrap()
+    };
+    let (st, _) = e
+        .call(
+            "POST",
+            &uri("blobs/upload"),
+            &tok,
+            Some(&d),
+            Some(json!({ "manifests": [fine, broken] })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(blobs().await, 0, "all or nothing");
+    let lying = json!({ "hash": blob_hash(99, &[ha]), "size": 1, "chunks": [ha] });
+    let (st, _) = e
+        .call(
+            "POST",
+            &uri("blobs/upload"),
+            &tok,
+            Some(&d),
+            Some(json!({ "manifests": [lying] })),
+        )
+        .await;
+    assert_eq!(
+        st,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a manifest not at its address"
+    );
+    let both = json!({ "hash": blob_hash(size(&b), &[hb]), "size": size(&b), "chunks": [hb] });
+    let (st, _) = e
+        .call(
+            "POST",
+            &uri("blobs/upload"),
+            &tok,
+            Some(&d),
+            Some(json!({ "manifests": [fine, both] })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::NO_CONTENT);
+    assert_eq!(blobs().await, 2);
+
+    // A stranger to the vault sees no upload route either.
+    let other = e.key.token("o1", "so", &["other-members"]);
+    let od = e.register(&other, "x").await;
+    let (st, _) = post_raw(
+        &e,
+        &other,
+        &od,
+        &uri("chunks/upload"),
+        body(&[(ha, Some(&a))]),
+    )
+    .await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+}

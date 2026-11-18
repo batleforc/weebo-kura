@@ -2,7 +2,7 @@
 # The restore drill of RFC 0001 §10.3 on the dev stack (task dev:drill):
 # back up PostgreSQL then the bucket, lose the objects, restore both into a
 # separate database, regenerate the epochs, decrypt a sample of chunks.
-# OpenBao's Transit keys stay in memory here: their Raft snapshot is the
+# OpenBao's Transit keys are not restored here: their Raft snapshot is the
 # cluster drill's part (docs/operator.md §12).
 set -euo pipefail
 

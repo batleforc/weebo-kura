@@ -124,6 +124,15 @@ pub async fn env_with(
     test: &str,
     storage: Option<Arc<kura_server::store::Storage>>,
 ) -> Option<Env> {
+    env_custom(test, storage, |s| s).await
+}
+
+/// [`env_with`], with a last change to the state (a notifier, RFC 0003).
+pub async fn env_custom(
+    test: &str,
+    storage: Option<Arc<kura_server::store::Storage>>,
+    custom: impl FnOnce(AppState) -> AppState,
+) -> Option<Env> {
     let t = test_db(test).await?;
     let dir = std::env::temp_dir().join(format!("kura-http-{}", t.name));
     std::fs::create_dir_all(&dir).unwrap();
@@ -141,7 +150,7 @@ pub async fn env_with(
     if let Some(s) = storage {
         state = state.with_storage(s);
     }
-    let state = Arc::new(state);
+    let state = Arc::new(custom(state));
     state.set_snapshot(
         kura_server::reconcile::snapshot::load_if_changed(&t.app, None)
             .await

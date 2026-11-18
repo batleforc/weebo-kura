@@ -1,0 +1,30 @@
+/* The note frame's only style (RFC 0005 §6.5): no inline style is allowed in it. */
+body {
+  margin: 0;
+  padding: 0;
+  font: 15px/1.6 "JetBrains Mono", ui-monospace, monospace;
+  /* The page's own ground and ink (tokens.css): the note sits on the sheet, not in a box. */
+  color: oklch(0.93 0.018 25);
+  background: oklch(0.07 0.018 18);
+  overflow-wrap: anywhere;
+}
+a {
+  color: oklch(0.65 0.235 25);
+}
+html[data-theme="light"] body {
+  color: oklch(0.2 0.022 20);
+  background: oklch(0.97 0.008 18);
+}
+html[data-theme="light"] a {
+  color: oklch(0.52 0.21 25);
+}
+img {
+  max-width: 100%;
+}
+pre {
+  overflow-x: auto;
+}
+.unshared,
+.remote {
+  text-decoration: underline dotted;
+}

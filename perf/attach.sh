@@ -2,7 +2,8 @@
 # Decision 42 (RFC 0001 §10.3): how long a new device takes to attach a
 # 10,000-note vault, with the real `kura` CLI against the dev stack. Device A
 # pushes the notes into a new vault, device B attaches it from nothing; above
-# 5 minutes for B fails: RFC 0002's batch routes must keep it under that. The vault is deleted
+# 5 minutes for either fails: RFC 0002's batch routes must keep both under
+# that (observations 1 and 5). The vault is deleted
 # afterwards (purged after its 30 days) and the devices revoked.
 # usage: perf/attach.sh [notes]   (default 10000)
 set -euo pipefail
@@ -70,8 +71,29 @@ mkdir -p "$root/perf/results"
 printf '{"notes":%d,"bytes":%d,"pushSeconds":%d,"attachSeconds":%d}\n' "$count" "$bytes" "$push" "$attach" | tee "$root/perf/results/attach.json"
 # RFC 0002 observation 1: what came through the batch routes.
 curl -sf "${KURA_DEV_METRICS:-http://127.0.0.1:59090}/metrics" | grep '^kura_batch_items_total' || true
+# RFC 0005 decision 5: the reader's first load, the vault list then every page
+# of GET …/entries, as ui/src/reader/vault.ts does; above 2 s the reader needs
+# a `prefix` query.
+r0=$(date +%s%N); pages=0; after=""
+curl -sf "$server/v1/vaults" -H "authorization: Bearer $token" -H "x-kura-device: $device" >/dev/null
+while :; do
+  body=$(curl -sf --get "$server/v1/vaults/$vault/entries" ${after:+--data-urlencode "after=$after"} \
+    -H "authorization: Bearer $token" -H "x-kura-device: $device")
+  pages=$((pages + 1)); after=$(jq -r '.next // empty' <<<"$body")
+  [ -n "$after" ] || break
+done
+reader=$((($(date +%s%N) - r0) / 1000000))
+echo "RFC 0005 decision 5: the reader's first load of $count notes took ${reader} ms in $pages pages"
+if [ "$reader" -gt 2000 ]; then
+  echo "FAIL: above decision 5's 2 s: add the prefix query on GET …/entries"
+  exit 1
+fi
+if [ "$push" -gt 300 ]; then
+  echo "FAIL: the first push took ${push}s, above RFC 0002's 5 minutes (observation 5)"
+  exit 1
+fi
 if [ "$attach" -gt 300 ]; then
   echo "FAIL: the first attach took ${attach}s, above decision 42's 5 minutes (RFC 0002 aims at 60 s)"
   exit 1
 fi
-echo "decision 42: the first attach took ${attach}s, under 5 minutes (RFC 0002 aims at 60 s)"
+echo "decision 42: the first push took ${push}s and the first attach ${attach}s, both under 5 minutes (RFC 0002 aims at 60 s)"

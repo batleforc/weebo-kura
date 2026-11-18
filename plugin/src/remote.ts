@@ -165,6 +165,25 @@ export class Api {
           throw e;
         }
       },
+      // RFC 0002 phase 3: false (a 405) makes the core send one by one.
+      putChunks: async (records) => {
+        try {
+          await this.send(`${v}/chunks/upload`, { method: "POST", body: new Uint8Array(records) });
+          return true;
+        } catch (e) {
+          if (isProblem(e) && e.status === 405) return false;
+          throw e;
+        }
+      },
+      putBlobs: async (manifests) => {
+        try {
+          await this.send(`${v}/blobs/upload`, { method: "POST", json: { manifests } });
+          return true;
+        } catch (e) {
+          if (isProblem(e) && e.status === 405) return false;
+          throw e;
+        }
+      },
       commit: (request) =>
         this.json(`${v}/commits`, { method: "POST", json: isRecord(request) && space !== undefined ? { ...request, space } : request }),
       changes: (since, epoch, start) =>

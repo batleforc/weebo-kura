@@ -160,8 +160,8 @@ struct AppRemote<'a> {
     tok: String,
     device: String,
     vault: String,
-    /// Reads through the batch routes (RFC 0002); one by one otherwise, as
-    /// against an older server.
+    /// Reads and writes through the batch routes (RFC 0002); one by one
+    /// otherwise, as against an older server.
     batch: bool,
 }
 
@@ -300,6 +300,34 @@ impl Remote for AppRemote<'_> {
             .await
             .map(Some)
     }
+    async fn put_chunks(&self, records: &[u8]) -> Result<bool, RemoteError> {
+        if !self.batch {
+            return Ok(false);
+        }
+        self.send(
+            "POST",
+            "/chunks/upload",
+            Some((records.to_vec(), "application/octet-stream")),
+        )
+        .await
+        .map(|_| true)
+    }
+    async fn put_blobs(
+        &self,
+        manifests: &[kura_core::sync::Manifest],
+    ) -> Result<bool, RemoteError> {
+        if !self.batch {
+            return Ok(false);
+        }
+        let list: Vec<Value> = manifests
+            .iter()
+            .map(|(h, size, chunks)| json!({ "hash": h, "size": size, "chunks": chunks }))
+            .collect();
+        let b = json!({ "manifests": list }).to_string().into_bytes();
+        self.send("POST", "/blobs/upload", Some((b, "application/json")))
+            .await
+            .map(|_| true)
+    }
     async fn commit(&self, req: &CommitRequest) -> Result<CommitResponse, RemoteError> {
         self.json("POST", "/commits", Some(serde_json::to_value(req).unwrap()))
             .await
@@ -361,6 +389,7 @@ async fn run(seed: u64) -> (usize, u64) {
         dry_run: false,
         allow_deletions: false,
         prefer_remote: false,
+        writable: None,
     };
     let mut devices = Vec::new();
     for i in 0..4u64 {
@@ -505,5 +534,12 @@ async fn run(seed: u64) -> (usize, u64) {
         .with_label_values(&["chunks", "found"])
         .get();
     assert!(batched > 0, "no chunk came through chunks/batch");
+    let uploaded = e
+        .state
+        .metrics
+        .batch_items_total
+        .with_label_values(&["upload", "stored"])
+        .get();
+    assert!(uploaded > 0, "no chunk came through chunks/upload");
     (conflicts, merged)
 }

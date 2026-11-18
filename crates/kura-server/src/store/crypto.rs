@@ -151,9 +151,80 @@ pub fn open(
     Ok(buf)
 }
 
+/// A short secret sealed at rest (RFC 0003 §7.4: a webhook's URL, signing
+/// secret and `authorization` value): the nonce, then the AES-256-GCM
+/// ciphertext, with `context` (the rule and the field) as associated data,
+/// so a value cannot be moved to another rule or field.
+pub fn seal_value(key: &DataKey, context: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    let mut nonce = [0u8; NONCE_LEN];
+    SystemRandom::new()
+        .fill(&mut nonce)
+        .map_err(|_| CryptoError::Random)?;
+    let mut out = Vec::with_capacity(
+        NONCE_LEN
+            .saturating_add(plaintext.len())
+            .saturating_add(TAG),
+    );
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(plaintext);
+    let body = out.get_mut(NONCE_LEN..).ok_or(CryptoError::Malformed)?;
+    let tag = key
+        .aead()?
+        .seal_in_place_separate_tag(
+            Nonce::assume_unique_for_key(nonce),
+            Aad::from(context),
+            body,
+        )
+        .map_err(|_| CryptoError::Corrupt)?;
+    out.extend_from_slice(tag.as_ref());
+    Ok(out)
+}
+
+/// The plaintext of [`seal_value`], refused under another context.
+pub fn open_value(
+    key: &DataKey,
+    context: &[u8],
+    stored: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    let (nonce, body) = stored
+        .split_at_checked(NONCE_LEN)
+        .ok_or(CryptoError::Malformed)?;
+    if body.len() < TAG {
+        return Err(CryptoError::Malformed);
+    }
+    let nonce = Nonce::try_assume_unique_for_key(nonce).map_err(|_| CryptoError::Malformed)?;
+    let mut buf = Zeroizing::new(body.to_vec());
+    let len = key
+        .aead()?
+        .open_in_place(nonce, Aad::from(context), &mut buf)
+        .map_err(|_| CryptoError::Corrupt)?
+        .len();
+    buf.truncate(len);
+    Ok(buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn values_open_only_under_their_context() {
+        let k = key(3);
+        let sealed = seal_value(&k, b"rule-1/url", b"https://hub.example.org/x").unwrap();
+        assert_eq!(
+            open_value(&k, b"rule-1/url", &sealed).unwrap().as_slice(),
+            b"https://hub.example.org/x"
+        );
+        assert_eq!(
+            open_value(&k, b"rule-2/url", &sealed).unwrap_err(),
+            CryptoError::Corrupt
+        );
+        assert_eq!(
+            open_value(&key(4), b"rule-1/url", &sealed).unwrap_err(),
+            CryptoError::Corrupt
+        );
+        assert!(!sealed.windows(7).any(|w| w == b"example"));
+    }
 
     fn key(b: u8) -> DataKey {
         DataKey::from_bytes(&[b; 32]).unwrap()

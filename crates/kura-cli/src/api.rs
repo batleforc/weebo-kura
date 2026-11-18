@@ -103,12 +103,25 @@ async fn exchange(r: reqwest::RequestBuilder) -> Result<reqwest::Response, Remot
 #[serde(rename_all = "camelCase")]
 pub struct TokenView {
     pub id: Uuid,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub scopes: Vec<ScopeRule>,
+    #[serde(default)]
+    pub last_used_at: Option<String>,
     pub prefix: String,
     pub cidrs: Vec<String>,
     pub expires_at: String,
     pub revoked: bool,
     #[serde(default)]
     pub token: Option<String>,
+}
+
+/// One folder rule of a scoped token (RFC 0004): `mode` is `read` or `write`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, Deserialize)]
+pub struct ScopeRule {
+    pub path: String,
+    pub mode: String,
 }
 
 /// One search result.
@@ -173,6 +186,12 @@ pub struct VaultView {
     /// The `.obsidian` categories that sync (§6.8); empty: none.
     #[serde(default)]
     pub config_sync: Vec<String>,
+    /// Present when the caller is a scoped token: its own folder rules.
+    #[serde(default)]
+    pub scopes: Option<Vec<ScopeRule>>,
+    /// Present when the caller is a scoped token: its name.
+    #[serde(default)]
+    pub token_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -349,13 +368,18 @@ impl Api {
     pub async fn create_token(
         &self,
         vault: Uuid,
-        prefix: &str,
+        name: Option<&str>,
+        scopes: &[ScopeRule],
         days: u32,
         cidrs: &[String],
     ) -> Result<TokenView, RemoteError> {
+        let mut body = json!({ "scopes": scopes, "expiresInDays": days, "cidrs": cidrs });
+        if let (Some(name), Some(o)) = (name, body.as_object_mut()) {
+            o.insert("name".into(), json!(name));
+        }
         let r = self
             .req(reqwest::Method::POST, &format!("/vaults/{vault}/tokens"))
-            .json(&json!({ "prefix": prefix, "expiresInDays": days, "cidrs": cidrs }));
+            .json(&body);
         self.json(r).await
     }
 
@@ -538,6 +562,36 @@ impl Remote for VaultRemote<'_> {
         match self.api.exchange(r).await {
             Ok(r) => body(r, MAX_RECORDS).await.map(Some),
             Err(e) if older_server(&e) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn put_chunks(&self, records: &[u8]) -> Result<bool, RemoteError> {
+        let r = self
+            .req(reqwest::Method::POST, "/chunks/upload")
+            .header("content-type", "application/octet-stream")
+            .body(records.to_vec());
+        match self.api.exchange(r).await {
+            Ok(_) => Ok(true),
+            Err(e) if older_server(&e) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn put_blobs(
+        &self,
+        manifests: &[kura_core::sync::Manifest],
+    ) -> Result<bool, RemoteError> {
+        let manifests: Vec<_> = manifests
+            .iter()
+            .map(|(hash, size, chunks)| json!({ "hash": hash, "size": size, "chunks": chunks }))
+            .collect();
+        let r = self
+            .req(reqwest::Method::POST, "/blobs/upload")
+            .json(&json!({ "manifests": manifests }));
+        match self.api.exchange(r).await {
+            Ok(_) => Ok(true),
+            Err(e) if older_server(&e) => Ok(false),
             Err(e) => Err(e),
         }
     }

@@ -29,9 +29,13 @@ pub enum DbError {
     #[error(transparent)]
     Migrate(#[from] sqlx::migrate::MigrateError),
     #[error(
-        "the database schema is at migration {database}, this binary needs {binary}: run `kura-server migrate` first"
+        "the database schema lacks migration {missing} (this binary goes to {binary}): run `kura-server migrate` first"
     )]
-    SchemaTooOld { database: i64, binary: i64 },
+    SchemaTooOld { missing: i64, binary: i64 },
+    #[error(
+        "the database schema needs a binary at migration {floor} or newer, this one stops at {binary}: roll forward"
+    )]
+    BinaryTooOld { floor: i64, binary: i64 },
 }
 
 impl From<DbError> for crate::problem::ApiError {
@@ -118,7 +122,8 @@ pub async fn migrate(pool: &PgPool) -> Result<(), DbError> {
 }
 
 /// Refuses to serve against a schema older than this binary; a newer one is
-/// fine (expand and contract, §13).
+/// fine (expand and contract, §13), unless a migration that is not safe to
+/// roll back raised the schema floor above this binary (RFC 0004 decision 11).
 pub async fn check_schema(pool: &PgPool) -> Result<(), DbError> {
     let binary = MIGRATOR
         .migrations
@@ -126,13 +131,26 @@ pub async fn check_schema(pool: &PgPool) -> Result<(), DbError> {
         .map(|m| m.version)
         .max()
         .unwrap_or(0);
-    let database: Option<i64> =
-        sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success")
-            .fetch_one(pool)
+    // Every migration of this binary, not only the newest: a lower number
+    // added after a higher one was applied (RFC 0005's 0021 after 0022)
+    // would pass a comparison of maxima (code review of 2026-11-17).
+    let applied: Vec<i64> =
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success")
+            .fetch_all(pool)
             .await?;
-    let database = database.unwrap_or(0);
-    if database < binary {
-        return Err(DbError::SchemaTooOld { database, binary });
+    if let Some(missing) = MIGRATOR
+        .migrations
+        .iter()
+        .map(|m| m.version)
+        .find(|v| !applied.contains(v))
+    {
+        return Err(DbError::SchemaTooOld { missing, binary });
+    }
+    let floor: i64 = sqlx::query_scalar("SELECT min_binary_migration FROM schema_floor")
+        .fetch_one(pool)
+        .await?;
+    if binary < floor {
+        return Err(DbError::BinaryTooOld { floor, binary });
     }
     Ok(())
 }

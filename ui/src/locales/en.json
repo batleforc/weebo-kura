@@ -1,0 +1,431 @@
+{
+  "app": {
+    "name": "Kura",
+    "tagline": "Your vaults, from a browser."
+  },
+  "nav": {
+    "vaults": "My vaults",
+    "devices": "My devices",
+    "signOut": "Sign out",
+    "main": "Main",
+    "skip": "Skip to the content",
+    "help": "Help",
+    "home": "Home",
+    "findVault": "Find a vault",
+    "findVaultHint": "notes, campaign…",
+    "noVault": "No vault matches."
+  },
+  "signIn": {
+    "action": "Sign in with Authentik",
+    "stay": "Stay signed in on this device",
+    "stayHelp": "Leave unticked on a shared computer.",
+    "ended": "Your session ended. If you did not sign out yourself, sign in and revoke this browser in \"My devices\".",
+    "failed": "The sign-in could not start: {message}",
+    "unreachable": "The sign-in service could not be reached from this address. Open the console at the address you were given, or try again later."
+  },
+  "callback": {
+    "working": "Signing in…",
+    "failed": "The sign-in did not complete: {message}",
+    "again": "Try again"
+  },
+  "noTenant": {
+    "text": "You are signed in as {name}, but you are not a member of any Kura tenant.",
+    "hint": "Ask an administrator to add your account to a group, then sign in again."
+  },
+  "vaults": {
+    "title": "My vaults",
+    "empty": "No vault is open to you yet. Ask a vault manager to add you, then reload.",
+    "failed": "Your vaults could not be loaded.",
+    "name": "Name",
+    "tenant": "Tenant",
+    "role": "Your role",
+    "source": "Declared in",
+    "reach": "Reach",
+    "updated": "Updated",
+    "obsidian": "Open in Obsidian",
+    "obsidianFor": "Open {name} in Obsidian",
+    "getPlugin": "Sync these vaults in Obsidian: get the plugin"
+  },
+  "devices": {
+    "title": "My devices",
+    "empty": "No device yet.",
+    "failed": "Your devices could not be loaded.",
+    "name": "Name",
+    "kind": "Kind",
+    "lastSeen": "Last seen",
+    "state": "State",
+    "owner": "Owner",
+    "thisBrowser": "this browser",
+    "active": "active",
+    "revoked": "revoked",
+    "signOutHere": "Sign out here",
+    "revoke": "Revoke",
+    "confirmRevoke": "Revoke {name}? Every device signed in with the same Authentik session is refused until it signs in again.",
+    "confirm": "Revoke",
+    "cancel": "Cancel"
+  },
+  "state": {
+    "loading": "Loading…",
+    "retry": "Retry",
+    "showRevoked": "Show the revoked one | Show the {n} revoked",
+    "hideRevoked": "Hide the revoked"
+  },
+  "problem": {
+    "network": "The server could not be reached.",
+    "insufficient_role": "Your role does not allow this.",
+    "not_found": "Not found, or not visible to you.",
+    "quota_exceeded": "At most 20 live devices: revoke one first.",
+    "device_revoked": "This browser's session was revoked: sign in again.",
+    "rate_limited": "Too many requests: wait a moment.",
+    "unavailable": "The server is unavailable for now.",
+    "status": "The server answered {status}.",
+    "unexpected": "Something unexpected happened.",
+    "invalid_request": "This address or request is not valid: check the link."
+  },
+  "reader": {
+    "breadcrumb": "Where you are",
+    "search": "Search",
+    "folders": "Shared folders",
+    "emptyVault": "No note is shared with you in this vault yet.",
+    "failed": "This vault could not be loaded.",
+    "pick": "Pick a note in the folders.",
+    "notFound": "This note does not exist, or is not shared with you.",
+    "back": "Back to {name}",
+    "backToVault": "Back to the vault",
+    "backToNote": "Back to the note",
+    "download": "Download {name}",
+    "history": "History",
+    "searchOff": "Search is not enabled for this vault. Browse the folders instead.",
+    "noHit": "No note matches \"{query}\" in the folders shared with you.",
+    "hits": "{n} results",
+    "noRevision": "No revision.",
+    "current": "current",
+    "deleted": "deleted",
+    "view": "View",
+    "reach": "{n} folders",
+    "whole": "whole vault",
+    "open": "Open",
+    "byKey": "key {name}",
+    "lastEdited": "Last edited {date}",
+    "lastEditedBy": "Last edited {date} by {who}",
+    "cut": "This vault lists more than {n} entries: the folders show the first {n} only. Search finds the others.",
+    "unavailable": "Kura is not answering (503). Retrying in 30 s…"
+  },
+  "manage": {
+    "title": "Manage",
+    "nav": "Manage",
+    "nothing": "Nothing to manage with your roles.",
+    "vaults": "Vaults you manage",
+    "access": "Access",
+    "keys": "Keys",
+    "tenants": "Tenants you administer",
+    "tenantVaults": "Vaults",
+    "devices": "Members' devices",
+    "platform": "Platform",
+    "status": "Status",
+    "forbidden": "Your role does not allow this page.",
+    "failed": "This page could not be loaded.",
+    "notifications": "Notifications",
+    "intro": "What your roles let you run, tenant by tenant.",
+    "vault": "Vault",
+    "whoReads": "Who can open it",
+    "keysFor": "Access keys",
+    "accessAction": "Manage access",
+    "keysAction": "Manage keys",
+    "everywhere": "Across your tenants",
+    "tenantVaultsWhat": "Create a vault, or delete one made here.",
+    "notificationsWhat": "Send this tenant's events to a webhook.",
+    "devicesWhat": "See and revoke your members' devices.",
+    "statusWhat": "The loaded configuration, and whether each object is ready.",
+    "role": {
+      "owner": "you own it",
+      "admin": "you administer it",
+      "manager": "you manage vaults here",
+      "member": "member"
+    }
+  },
+  "access": {
+    "subject": "Subject",
+    "role": "Role",
+    "reach": "Reach",
+    "source": "Source",
+    "actions": "Actions",
+    "group": "group",
+    "user": "user",
+    "userSubject": "user (OIDC subject)",
+    "tenantAdmins": "the tenant's owners and admins",
+    "tenantRole": "tenant role",
+    "configuration": "configuration",
+    "readOnly": "read only",
+    "remove": "Remove",
+    "changeRole": "Role of {who}",
+    "empty": "Only the tenant's owners and admins can open this vault.",
+    "add": "Add access",
+    "addAction": "Add",
+    "who": "Who",
+    "folders": "Folders (viewer only)",
+    "foldersHint": "Sessions/, Resumes/ (empty: whole vault)",
+    "noNotes": "0 notes",
+    "widened": "effective: whole vault",
+    "widenedWhy": "the tenant maps this group to owner or admin",
+    "confirmRemove": "Remove the access of {who}? The vault closes to them at their next request.",
+    "confirmRole": "Change the role of {who} from {from} to {to}?",
+    "changeAction": "Change the role",
+    "pickGroup": "Pick a group"
+  },
+  "keys": {
+    "created": "Key created",
+    "copy": "Copy",
+    "copied": "Copied",
+    "once": "This secret is shown once. Store it now: nobody, including you, can display it again. Other managers can see and revoke this key, not its secret.",
+    "stored": "I stored it, close",
+    "empty": "No key yet. A key lets a script or a bot read this vault.",
+    "name": "Name",
+    "scopes": "Folders",
+    "from": "From",
+    "expires": "Expires",
+    "lastUsed": "Last used",
+    "by": "By",
+    "never": "never",
+    "new": "New key",
+    "create": "Create",
+    "folders": "Folders",
+    "folder": "Folder",
+    "mode": "Access",
+    "allVault": "empty: whole vault",
+    "read": "read",
+    "write": "read and write",
+    "expiresIn": "Expires in (days, 1 to 90)",
+    "allowedFrom": "Allowed from (address ranges)",
+    "confirmRevoke": "Revoke the key {name}? Anything using it stops at once.",
+    "addFolder": "Add a folder",
+    "you": "you"
+  },
+  "tenantDevices": {
+    "empty": "No other device in your tenants."
+  },
+  "tenantVaults": {
+    "delete": "Delete",
+    "confirmDelete": "Delete the vault {name}? It is disabled now and purged after 30 days.",
+    "newName": "New vault",
+    "create": "Create"
+  },
+  "status": {
+    "rejected": "This replica rejected the last change:",
+    "generation": "generation {generation} · written {at}",
+    "kind": "Kind",
+    "ready": "Ready",
+    "reason": "Reason",
+    "isReady": "ready",
+    "notReady": "not ready",
+    "unknown": "unknown"
+  },
+  "notifications": {
+    "title": "{tenant} ▸ Notifications",
+    "off": "Notifications are not enabled on this server.",
+    "switchedOff": "\"{name}\" was switched off ({reason}). Fix the receiver, then re-enable it.",
+    "created": "Rule created",
+    "once": "Shown once: your receiver checks X-Kura-Signature with it. The URL will be shown as its host only from now on.",
+    "tested": "Test of {rule}: {result}",
+    "empty": "No rule yet. A rule sends events of this tenant to a webhook.",
+    "events": "Events",
+    "vault": "Vault",
+    "to": "To",
+    "last": "Last",
+    "on": "on",
+    "offState": "off",
+    "test": "Test",
+    "reEnable": "Re-enable",
+    "disable": "Switch off",
+    "deliveries": "Deliveries",
+    "new": "New rule",
+    "scope": "Scope",
+    "tenantWide": "(whole tenant)",
+    "webhook": "Webhook URL",
+    "authorization": "Authorization (optional, hidden once saved)",
+    "back": "Back to the rules",
+    "deliveriesTitle": "Deliveries (last 50, kept 7 days)",
+    "noDelivery": "No delivery yet.",
+    "time": "Time",
+    "event": "Event",
+    "attempt": "Attempt",
+    "result": "Result",
+    "failed": "failed: {result}",
+    "pending": "pending ({result})",
+    "edit": "Edit",
+    "editTitle": "Edit the rule {name}",
+    "save": "Save",
+    "unchanged": "empty: unchanged ({host})",
+    "keptAuthorization": "empty: unchanged",
+    "removeAuthorization": "Remove the authorization",
+    "rotate": "Rotate secret",
+    "rotated": "New signing secret",
+    "confirmRotate": "Rotate the signing secret of {name}? The old one stops at once: the receiver refuses deliveries until it checks with the new one.",
+    "confirmRemove": "Remove the rule {name}? Its deliveries stop.",
+    "more": "More"
+  },
+  "prefs": {
+    "title": "Preferences",
+    "themeLabel": "Theme",
+    "localeLabel": "Language",
+    "theme": {
+      "system": "System",
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "locale": {
+      "system": "System",
+      "en": "English",
+      "fr": "Français"
+    },
+    "systemTheme": "System follows your device: currently {now}.",
+    "systemLocale": "System follows your browser: currently {now}.",
+    "themeSet": "Theme: {name}.",
+    "localeSet": "Language: {name}."
+  },
+  "help": {
+    "title": "Help",
+    "intro": "Kura keeps your Obsidian vaults in sync across your devices, on your organisation's server. Start with the plugin; the questions below cover the rest.",
+    "faq": "Questions",
+    "device": {
+      "label": "Install on",
+      "desktop": "Computer",
+      "android": "Android",
+      "ios": "iPhone, iPad"
+    },
+    "obsidian": {
+      "title": "Sync with Obsidian",
+      "lead": "Kura Sync is the Obsidian plugin that syncs a vault with this server. It is not in Obsidian's plugin catalogue: install it from here, once per device.",
+      "downloadAction": "Download Kura Sync",
+      "build": "version {version} · {size}",
+      "notBundled": "This server was built without the plugin. Ask your administrator for the Kura Sync files.",
+      "open": "Open {name} in Obsidian",
+      "noLink": "This server does not say how the plugin signs in: set it up by hand, below.",
+      "code": "Obsidian shows what the link sets: accept, then approve the code it shows, with the account you use here.",
+      "byHand": "Set it up by hand instead",
+      "serverField": "Server",
+      "issuerField": "Identity provider",
+      "byHandThen": "In Obsidian, paste both in Settings › Kura Sync, select Sign in, then choose the vault."
+    },
+    "step": {
+      "download": {
+        "title": "Download the plugin",
+        "body": "On this device, download the file below."
+      },
+      "unzip": {
+        "title": "Unzip it into your vault",
+        "body": "Unzip it into the plugins folder of your Obsidian vault, so that you get this folder. .obsidian is hidden: show hidden files (on a Mac, ⌘ ⇧ . in Finder), and create plugins if it is not there."
+      },
+      "enable": {
+        "title": "Turn it on in Obsidian",
+        "body": "Open the vault in Obsidian, then Settings › Community plugins. Turn off Restricted mode if asked, then turn on Kura Sync. Not listed? Select the reload icon next to Installed plugins."
+      },
+      "connect": {
+        "title": "Connect a vault",
+        "body": "From this device, with Obsidian installed, select the vault to sync."
+      },
+      "androidExtract": {
+        "title": "Extract the file",
+        "body": "In Files (by Google), open Downloads, touch kura-sync.zip, then Extract. You get a folder named weebo-kura."
+      },
+      "androidMove": {
+        "title": "Move it into your vault",
+        "body": "In the Files settings, turn on Show hidden files. Then move the weebo-kura folder into your vault's plugins folder (vaults are usually under Documents). Create plugins if it is not there."
+      },
+      "iosIcloud": {
+        "title": "Keep the vault in iCloud Drive",
+        "body": "The Files app does not show the hidden .obsidian folder, so the plugin goes in from a computer. In Obsidian on the iPhone or iPad, create the vault with \"Store in iCloud\" on, or move it there."
+      },
+      "iosCopy": {
+        "title": "On a computer, download the plugin",
+        "body": "Open this page on a Mac or PC signed in to the same iCloud account, and download the file there."
+      },
+      "iosPlace": {
+        "title": "Copy it into the vault, in iCloud Drive",
+        "body": "Unzip it, then copy the weebo-kura folder here, in iCloud Drive (on a Mac, ⌘ ⇧ . in Finder shows .obsidian). Wait for iCloud to send it to the phone."
+      }
+    },
+    "path": {
+      "desktop": "<your vault>/.obsidian/plugins/weebo-kura/",
+      "android": "Documents/<your vault>/.obsidian/plugins/weebo-kura/",
+      "ios": "iCloud Drive/Obsidian/<your vault>/.obsidian/plugins/weebo-kura/"
+    },
+    "reader": {
+      "title": "How do I read a vault without Obsidian?",
+      "p1": "The sidebar lists the vaults shared with you. Open one: its Notes tab browses its folders and reads its notes here; each note has its history.",
+      "p2": "Search is offered when the tenant turns it on. A manager can open only some folders of a vault to you: you then see those folders and nothing else."
+    },
+    "roles": {
+      "title": "What can my role do?",
+      "viewer": "reads the vault, in Obsidian or here; changes made on its devices are not uploaded.",
+      "editor": "reads and writes: its devices sync both ways.",
+      "manager": "an editor who also decides who opens the vault and creates its access keys.",
+      "folders": "A viewer can be limited to some folders: they read those in the browser only."
+    },
+    "devices": {
+      "title": "I lost a device, or I am on a shared computer",
+      "p1": "Each browser and each Obsidian that signs in is a device. My devices lists yours, with when each was last seen.",
+      "p2": "Lost a laptop or a phone? Revoke it there: it stops at its next request. On a shared computer, leave \"Stay signed in\" unchecked, and sign out when done: signing out revokes this browser."
+    },
+    "trouble": {
+      "title": "The plugin does not appear, or the link does nothing",
+      "p1": "Not in Community plugins: check that the folder is .obsidian/plugins/weebo-kura (not a folder inside it) and holds main.js and manifest.json, then select the reload icon next to Installed plugins.",
+      "p2": "The link does nothing: Obsidian must be installed on this device, and Kura Sync turned on in the vault Obsidian opens. With several vaults, open the right one first.",
+      "p3": "The status bar says \"sign in\": open Settings › Kura Sync and select Sign in."
+    },
+    "manage": {
+      "title": "I manage a vault or a tenant",
+      "accessTitle": "Access",
+      "access": "Who opens a vault: a group of your identity provider or one person, as viewer, editor or manager, on the whole vault or some folders.",
+      "keysTitle": "Keys",
+      "keys": "Access keys for scripts and agents: limited to folders, read or write, to addresses, and to a lifetime. The secret is shown once.",
+      "vaultsTitle": "Vaults",
+      "vaults": "Tenant owners and admins create vaults and delete the ones made here; vaults declared in configuration change there.",
+      "notificationsTitle": "Notifications",
+      "notifications": "Send a tenant's events (a vault changed, a key about to expire, a device revoked…) to a webhook, signed with a secret you can rotate."
+    }
+  },
+  "role": {
+    "viewer": "viewer",
+    "editor": "editor",
+    "manager": "manager"
+  },
+  "home": {
+    "title": "Home",
+    "todo": "To do",
+    "nothing": "Nothing to do.",
+    "syncTitle": "Sync a device",
+    "syncBody": "None of your devices runs Obsidian with Kura yet: the plugin installs in four steps, then a link connects each vault.",
+    "syncAction": "Install the plugin",
+    "keysTitle": "One access key of {vault} expires {when} | {n} access keys of {vault} expire from {when}",
+    "keysBody": "Scripts using them stop when they expire.",
+    "keysAction": "See the keys",
+    "vaults": "Your vaults",
+    "read": "Read",
+    "emptyVault": "empty so far",
+    "brief": "In brief",
+    "devices": "Your devices",
+    "active": "1 active | {n} active",
+    "latest": "Latest: {name}, {when}.",
+    "devicesAction": "See and revoke",
+    "run": "You run",
+    "runCount": "{tenants} tenant(s), {vaults} vault(s).",
+    "tenantVaults": "Vaults of {tenant}",
+    "tenantNotifications": "Notifications of {tenant}"
+  },
+  "vault": {
+    "overview": "Overview",
+    "notes": "Notes",
+    "sections": "Vault sections",
+    "youAre": "you are {role}",
+    "read": "Read in the browser",
+    "who": "Who can open it",
+    "manageAccess": "Manage access",
+    "liveKeys": "Live access keys",
+    "noKey": "No live key.",
+    "revokedHidden": "1 revoked key hidden | {n} revoked keys hidden",
+    "manageKeys": "Manage keys",
+    "recent": "Changed last",
+    "browse": "Browse the notes"
+  }
+}

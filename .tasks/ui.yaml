@@ -1,0 +1,45 @@
+# The web console (RFC 0003): a Vue application under ui/, served by
+# kura-server under /app. Its API client is generated from docs/api/openapi.json.
+version: "3"
+
+tasks:
+  ui:install:
+    desc: Install the console's pinned JavaScript dependencies (pnpm, frozen lockfile)
+    dir: ui
+    cmds:
+      - pnpm install --frozen-lockfile
+
+  ui:client:
+    desc: Regenerate the console's HeyApi client from docs/api/openapi.json (gitignored, also done by every ui script)
+    dir: ui
+    cmds:
+      - pnpm run generate:client
+
+  ui:lint:
+    desc: "Type-check (strict, noUncheckedIndexedAccess) and lint the console with Biome: no any, no non-null assertion"
+    dir: ui
+    cmds:
+      - pnpm run lint
+
+  ui:test:
+    desc: Run the console's tests with coverage (80% line gate)
+    dir: ui
+    cmds:
+      - pnpm run test
+
+  ui:build:
+    desc: "Build the console into ui/dist; serve it with `ui: { enabled: true, dir: ui/dist }` (dev/server.yaml does). It carries the Obsidian plugin's zip (Help page) when plugin/main.js exists: task plugin:build first"
+    dir: ui
+    cmds:
+      - pnpm run build
+
+  ui:audit:
+    desc: Check the console's JavaScript dependencies for known vulnerabilities
+    dir: ui
+    cmds:
+      # GHSA-fc5q-39xc-vjpf (picomatch <=4.0.7, ReDoS on extglobs): no fixed
+      # version exists. Checked 2026-11-17: picomatch arrives through vue-router's route plugin (unplugin), a
+      # build-time glob matcher, and is in no shipped bundle
+      # (`grep -c picomatch dist/assets/*.js` is 0). Drop this ignore once
+      # `npm view picomatch versions` lists a release past 4.0.7.
+      - pnpm audit --ignore GHSA-fc5q-39xc-vjpf

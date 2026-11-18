@@ -208,6 +208,19 @@ pub trait Remote {
         let _ = hashes;
         Ok(None)
     }
+    /// Many chunks in one call (RFC 0002 phase 3): `records` is framed by
+    /// [`crate::wire::write_record`], every record found. `false` when the
+    /// server has no such route (`405`): the engine sends one by one.
+    async fn put_chunks(&self, records: &[u8]) -> Result<bool, RemoteError> {
+        let _ = records;
+        Ok(false)
+    }
+    /// Many manifests in one call, all stored or none; `false` as for
+    /// [`Self::put_chunks`].
+    async fn put_blobs(&self, manifests: &[Manifest]) -> Result<bool, RemoteError> {
+        let _ = manifests;
+        Ok(false)
+    }
     async fn commit(&self, req: &CommitRequest) -> Result<CommitResponse, RemoteError>;
     /// `start` is the cursor the pass began from (`since` for its first
     /// page): the server checks its horizon against it.
@@ -218,6 +231,15 @@ pub trait Remote {
         start: u64,
     ) -> Result<ChangesResponse, RemoteError>;
 }
+
+/// A file version's manifest under its address: `(blob, size, chunks)`.
+pub type Manifest = (ChunkHash, u64, Vec<ChunkHash>);
+
+/// Chunk bytes per `chunks/upload` call (RFC 0002 §6.1).
+pub const UPLOAD_BYTES: usize = 4 << 20;
+/// Chunk hashes across the manifests of one `blobs/upload` call: about
+/// 800 KB of JSON, under the server's 1 MiB body.
+const UPLOAD_MANIFEST_HASHES: usize = 12_000;
 
 /// What one run did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -236,12 +258,18 @@ pub struct Report {
     pub deferred: Vec<VaultPath>,
     /// The push was refused (role, quota): local changes are kept.
     pub refused: Option<RemoteError>,
+    /// Local changes outside [`Options::writable`]: nothing was pushed, the
+    /// pull ran (RFC 0004 §6.6).
+    pub not_writable: Vec<String>,
     /// Remote files this device could not write, with why; retried next run.
     pub failed: Vec<(VaultPath, String)>,
     /// A full resync ran, after this answer: `cursor_expired` or
     /// `history_rewound` (§6.3).
     pub resynced: Option<String>,
 }
+
+/// Whether a vault path may be written by this caller.
+pub type Writable = Box<dyn Fn(&str) -> bool + Send + Sync>;
 
 pub struct Options {
     pub params: ChunkParams,
@@ -256,6 +284,10 @@ pub struct Options {
     /// `.trash`), so a new device never overwrites the user's settings with
     /// its defaults (phase 8 review H1).
     pub prefer_remote: bool,
+    /// Where this caller may write, when it is not everywhere (a scoped
+    /// token, RFC 0004 §6.6): a change elsewhere stops the push before any
+    /// upload, listed in [`Report::not_writable`]; the pull still runs.
+    pub writable: Option<Writable>,
 }
 
 /// A full resync asks first above this share of the local files, or this
@@ -602,6 +634,35 @@ async fn push<H: Host, R: Remote>(
         .iter()
         .filter_map(|(_, p)| p.as_ref().map(|p| p.size))
         .fold(0u64, u64::saturating_add);
+    if let Some(writable) = &opts.writable {
+        // A put is checked where it lands and where the entry lies (a rename
+        // writes both ends); a deletion, where the entry lies.
+        let mut paths: Vec<String> = ops
+            .iter()
+            .flat_map(|(op, _)| {
+                let (entry, to) = match op {
+                    Operation::Put { entry, path, .. } => (entry, Some(path)),
+                    Operation::Delete { entry, .. } => (entry, None),
+                };
+                state
+                    .entries
+                    .get(entry)
+                    .map(|k| &k.path)
+                    .into_iter()
+                    .chain(to)
+            })
+            .map(|p| p.as_str().to_owned())
+            .filter(|p| !writable(p))
+            .collect();
+        paths.sort();
+        paths.dedup();
+        if !paths.is_empty() {
+            // Like a refused push: local changes are kept, remote ones still
+            // arrive (code review of 2026-11-17, #1).
+            report.not_writable = paths;
+            return Ok(());
+        }
+    }
     if opts.dry_run || ops.is_empty() {
         return Ok(());
     }
@@ -681,7 +742,80 @@ async fn commit<R: Remote>(remote: &R, req: &CommitRequest) -> Result<CommitResp
         .into())
 }
 
-/// Chunks the server lacks, then the manifest.
+/// Chunks gathered into `chunks/upload` calls of [`BATCH`] records and
+/// [`UPLOAD_BYTES`] at most; one by one once the server answers `405`.
+#[derive(Default)]
+struct ChunkUploads {
+    single: bool,
+    body: Vec<u8>,
+    count: usize,
+    payload: usize,
+}
+
+impl ChunkUploads {
+    async fn add<R: Remote>(
+        &mut self,
+        remote: &R,
+        hash: &ChunkHash,
+        data: &[u8],
+    ) -> Result<(), SyncError> {
+        if self.single {
+            return Ok(remote.put_chunk(hash, data).await?);
+        }
+        if self.count >= BATCH || self.payload.saturating_add(data.len()) > UPLOAD_BYTES {
+            self.flush(remote).await?;
+        }
+        crate::wire::write_record(&mut self.body, hash, Some(data));
+        self.count = self.count.saturating_add(1);
+        self.payload = self.payload.saturating_add(data.len());
+        Ok(())
+    }
+
+    async fn flush<R: Remote>(&mut self, remote: &R) -> Result<(), SyncError> {
+        if self.count == 0 {
+            return Ok(());
+        }
+        let body = std::mem::take(&mut self.body);
+        (self.count, self.payload) = (0, 0);
+        if remote.put_chunks(&body).await? {
+            return Ok(());
+        }
+        self.single = true;
+        let records = crate::wire::parse_records(&body).map_err(|_| SyncError::Corrupt)?;
+        for (hash, data) in records {
+            remote
+                .put_chunk(&hash, data.ok_or(SyncError::Corrupt)?)
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+/// Manifests in `blobs/upload` calls, after every chunk they name.
+async fn upload_manifests<R: Remote>(remote: &R, all: &[Manifest]) -> Result<(), SyncError> {
+    let mut rest = all;
+    while !rest.is_empty() {
+        let mut n = 0;
+        let mut hashes = 0usize;
+        while let Some((_, _, c)) = rest.get(n) {
+            if n >= BATCH || (n > 0 && hashes.saturating_add(c.len()) > UPLOAD_MANIFEST_HASHES) {
+                break;
+            }
+            hashes = hashes.saturating_add(c.len());
+            n = n.saturating_add(1);
+        }
+        let (part, tail) = rest.split_at(n);
+        if !remote.put_blobs(part).await? {
+            for (blob, size, chunks) in rest {
+                remote.put_blob(blob, *size, chunks).await?;
+            }
+            return Ok(());
+        }
+        rest = tail;
+    }
+    Ok(())
+}
+
 /// Uploads the chunks a batch's files need, asking the server with one call
 /// per 1,000 hashes across files, then each manifest. A file changed since
 /// the scan is left out, for the next run. Files are read twice at most, so
@@ -715,8 +849,12 @@ async fn upload_batch<'a, H: Host, R: Remote>(
     for part in wanted.chunks(BATCH) {
         missing.extend(remote.missing(part).await?);
     }
-    for (i, hashes) in &manifests {
-        let Some((_, Some(p))) = ready.get(*i) else {
+    // RFC 0002 phase 3: every chunk first, in 4 MiB calls, then the
+    // manifests, in calls of 1,000.
+    let mut uploads = ChunkUploads::default();
+    let mut blobs: Vec<Manifest> = Vec::with_capacity(manifests.len());
+    for (i, hashes) in manifests {
+        let Some((_, Some(p))) = ready.get(i) else {
             continue;
         };
         if hashes.iter().any(|h| missing.contains(h)) {
@@ -729,12 +867,14 @@ async fn upload_batch<'a, H: Host, R: Remote>(
                     if ChunkHash::of(part) != span.hash {
                         return Err(SyncError::Corrupt);
                     }
-                    remote.put_chunk(&span.hash, part).await?;
+                    uploads.add(remote, &span.hash, part).await?;
                 }
             }
         }
-        remote.put_blob(&p.blob, p.size, hashes).await?;
+        blobs.push((p.blob, p.size, hashes));
     }
+    uploads.flush(remote).await?;
+    upload_manifests(remote, &blobs).await?;
     Ok(ready)
 }
 
@@ -1240,6 +1380,12 @@ impl<R: Remote> Remote for Prefetch<'_, R> {
             Some(m) => Ok(m),
             None => self.remote.get_blob(hash).await,
         }
+    }
+    async fn put_chunks(&self, records: &[u8]) -> Result<bool, RemoteError> {
+        self.remote.put_chunks(records).await
+    }
+    async fn put_blobs(&self, manifests: &[Manifest]) -> Result<bool, RemoteError> {
+        self.remote.put_blobs(manifests).await
     }
     async fn commit(&self, req: &CommitRequest) -> Result<CommitResponse, RemoteError> {
         self.remote.commit(req).await

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RFC 0003 — console mocks</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+<h1>RFC 0003 · Console</h1>
+<p class="decides">The screens of §4.5, built from the batlehub-design tokens. Each section is one screen and its states; the line under it is what it decides.</p>
+
+<h2>Signed out, and signing in</h2>
+<div class="frame"><div class="body">
+  <h1>Kura</h1><p class="dim">Your vaults, from a browser.</p>
+  <p style="margin-top:var(--s3)"><button class="primary">Sign in with Authentik</button></p>
+  <label><input type="checkbox"> Stay signed in on this device</label>
+  <p class="dim">Leave unticked on a shared computer.</p>
+</div></div>
+<div class="frame"><div class="body">
+  <h1>Kura</h1>
+  <p class="note" role="alert"><b>Session ended.</b> If you did not sign out yourself, sign in and revoke this browser in "My devices".</p>
+  <p style="margin-top:var(--s3)"><button class="primary">Sign in with Authentik</button></p>
+  <label><input type="checkbox"> Stay signed in on this device</label>
+</div></div>
+<p class="decides">One action and no form: Kura never sees a password. The second state is the only sign of a stolen token the user ever sees, with what to do about it (decision 26).</p>
+
+<h2>Shell — member, then manager</h2>
+<div class="frame"><div class="bar"><span class="brand">Kura</span><span class="here">My vaults</span><span>My devices</span><span class="right">alice · <button>Sign out</button></span></div></div>
+<div class="frame"><div class="bar"><span class="brand">Kura</span><span>My vaults</span><span>My devices</span><span class="here">Manage</span><span class="right">alice · <button>Sign out</button></span></div>
+<div class="body"><table>
+  <tr><th>Vaults you manage</th><th></th><th></th><th></th></tr>
+  <tr><td>jdr ▸ campaign</td><td><a>Access</a></td><td><a>Keys</a></td><td><a>Notifications</a></td></tr>
+  <tr><th>Tenants you administer</th><th></th><th></th><th></th></tr>
+  <tr><td>jdr</td><td><a>Vaults</a></td><td><a>Members' devices</a></td><td><a>Notifications</a></td></tr>
+  <tr><th>Platform</th><th></th><th></th><th></th></tr>
+  <tr><td><a>Status</a></td><td></td><td></td><td></td></tr>
+</table></div></div>
+<p class="decides">The back office is one more menu, present only when <code>GET /me</code> gives a role that can use it, grouped by what it acts on.</p>
+
+<h2>No tenant</h2>
+<div class="frame"><div class="body"><p class="note"><b>No tenant.</b> You are signed in as carol, but you are not a member of any Kura tenant. Ask an administrator to add your account to a group, then sign in again.</p></div></div>
+
+<h2>My devices</h2>
+<div class="frame"><div class="body"><table>
+  <tr><th>Name</th><th>Kind</th><th>Last seen</th><th>State</th><th></th></tr>
+  <tr><td>Firefox on Linux</td><td>web</td><td>now</td><td><span class="state" data-s="ok">this browser</span></td><td><button>Sign out here</button></td></tr>
+  <tr><td>laptop</td><td>desktop</td><td>2 h ago</td><td><span class="state" data-s="ok">active</span></td><td><button class="danger">Revoke</button></td></tr>
+  <tr><td>old phone</td><td>mobile</td><td>2026-08-01</td><td><span class="state" data-s="blocked">revoked</span></td><td></td></tr>
+</table></div></div>
+<p class="decides">The browser itself is a row, named as what signing out does; revoking is the hard cut, kept apart.</p>
+
+<h2>Access — nominal and refused</h2>
+<div class="frame"><div class="body"><table>
+  <tr><th>Subject</th><th>Role</th><th>Reach</th><th>Source</th><th></th></tr>
+  <tr class="dim"><td>the tenant's owners and admins</td><td>manager</td><td>whole vault</td><td>tenant role</td><td></td></tr>
+  <tr><td>group jdr-players</td><td>viewer</td><td>Sessions/, Resumes/</td><td>configuration</td><td class="dim">read only</td></tr>
+  <tr><td>user bob</td><td><select><option>editor</option></select></td><td>whole vault</td><td>API</td><td><button class="danger">Remove</button></td></tr>
+  <tr><td colspan="5"><p class="note" id="r1"><b>Not a group of this tenant.</b> "bob-unknown" is not a group or a member of jdr.</p></td></tr>
+</table>
+<p style="margin-top:var(--s3)">Who <label style="display:inline"><input type="radio" checked> group</label> <select><option>jdr-players</option><option>jdr-mj</option></select> Role <select><option>viewer</option></select> Folders <input placeholder="Sessions/, Resumes/"> <button class="primary">Add</button></p>
+</div></div>
+<p class="decides">File-declared bindings are shown, never editable; the tenant role's grant is a row, so the page is the whole answer to "who can read this"; a refusal sits under the row it refused.</p>
+
+<h2>Keys — nominal, created, forbidden</h2>
+<div class="frame"><div class="body"><table>
+  <tr><th>Name</th><th>Folders</th><th>From</th><th>Expires</th><th>Last used</th><th>By</th><th>State</th><th></th></tr>
+  <tr><td>discord-recap</td><td>r:Sessions/ w:Resumes/</td><td>10.42.0.0/16</td><td>2026-12-15</td><td>2 min ago</td><td>alice</td><td><span class="state" data-s="ok">active</span></td><td><button class="danger">Revoke</button></td></tr>
+  <tr><td>old-agent</td><td>r:whole vault</td><td>10.42.1.7/32</td><td>2026-11-20</td><td>never</td><td>bob</td><td><span class="state" data-s="blocked">revoked</span></td><td></td></tr>
+</table>
+<div class="secret" role="dialog"><b>Key created</b><code>kura_01JD3K7Q…_v7cX…</code><button>Copy</button>
+<p class="dim">This secret is shown once. Store it now: nobody, including you, can display it again. Other managers can see and revoke this key, not its secret.</p>
+<button class="primary">I stored it, close</button></div></div></div>
+<div class="frame"><div class="body"><p class="note"><b>Your role does not allow this page.</b> Keys need the manager role on this vault.</p></div></div>
+<p class="decides">Co-management in words; BY shows who created a key another manager may revoke; the secret dialog is the only place it ever appears.</p>
+
+<h2>Notifications — nominal, switched off, empty</h2>
+<div class="frame"><div class="body"><table>
+  <tr><th>Name</th><th>Events</th><th>Vault</th><th>To</th><th>Last</th><th>State</th><th></th></tr>
+  <tr><td>hub</td><td>token.expiring, quota.high</td><td>(whole tenant)</td><td>hub.example.org</td><td>200 · 1 h ago</td><td><span class="state" data-s="ok">on</span></td><td><button>Test</button> <a>Deliveries</a></td></tr>
+  <tr><td>recap</td><td>vault.changed</td><td>campaign</td><td>10.42.7.15</td><td>failed ×20</td><td><span class="state" data-s="held">off</span></td><td><button>Re-enable</button></td></tr>
+  <tr><td colspan="7"><p class="note"><b>Switched off.</b> "recap" stopped after 20 failed deliveries (last: timeout). Fix the receiver, then re-enable it.</p></td></tr>
+</table>
+<p class="note" style="margin-top:var(--s3)"><b>Address refused.</b> This address cannot be used: a webhook must be an https address that is public, or one the platform operator allowed.</p>
+</div></div>
+<div class="frame"><div class="body"><p class="dim">No rule yet. A rule sends events of this tenant to a webhook.</p> <button>New rule</button></div></div>
+<p class="decides">Only the host of a URL is shown again; a switched-off rule is a note in its row, not a silent state; one message for every refused address, so the form is no probe.</p>
+
+<h2>Deliveries</h2>
+<div class="frame"><div class="body"><table>
+  <tr><th>Time</th><th>Event</th><th>Attempt</th><th>Result</th></tr>
+  <tr><td>2026-11-15 12:33:21</td><td>token.expiring</td><td>1</td><td><span class="state" data-s="ok">200</span></td></tr>
+  <tr><td>2026-11-15 09:02:10</td><td>quota.high</td><td>2</td><td><span class="state" data-s="pending">pending · status_5xx</span></td></tr>
+  <tr><td>2026-11-14 22:15:44</td><td>device.revoked</td><td>6</td><td><span class="state" data-s="blocked">failed · status_5xx</span></td></tr>
+</table></div></div>
+<p class="decides">Coarse results only — no response body, no header.</p>
+
+<h2>Platform status</h2>
+<div class="frame"><div class="body">
+<p class="note"><b>Rejected.</b> This replica rejected the last change: <code>vaults.yaml#2 spec.bindings[0].role: unknown variant `editr`</code></p>
+<table style="margin-top:var(--s3)">
+  <tr><th>Kind</th><th>Name</th><th>Ready</th><th>Reason</th></tr>
+  <tr><td>KuraTenant</td><td>jdr</td><td><span class="state" data-s="ok">True</span></td><td></td></tr>
+  <tr><td>KuraVault</td><td>jdr/campaign</td><td><span class="state" data-s="held">True</span></td><td>RestrictedBindingWidened</td></tr>
+  <tr><td>KuraVault</td><td>jdr/old</td><td><span class="state" data-s="blocked">False</span></td><td>DeletionScheduled (2026-12-14)</td></tr>
+</table></div></div>
+<p class="decides"><code>GET /v1/admin/status</code> as a table, rejection first.</p>
+<script src="states.js"></script>
+</body>
+</html>

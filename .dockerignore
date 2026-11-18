@@ -6,3 +6,11 @@ coverage/
 .git/
 .task/
 *.md
+ui/node_modules/
+ui/dist/
+ui/coverage/
+ui/src/api/generated/
+plugin/node_modules/
+plugin/coverage/
+plugin/main.js
+plugin/src/wasm/

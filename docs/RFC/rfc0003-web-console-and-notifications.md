@@ -2,17 +2,17 @@
 
 | Field | Value |
 | --- | --- |
-| Status | In review (2026-11-15) |
+| Status | Implemented (2026-11-17) |
 | Short | Web console, webhooks |
 | Settles | How members and managers use Kura from a browser (their vaults and devices; access, keys and notifications), and how a tenant is notified of events on a webhook |
 | Author | Maxime (batleforc) |
 | Co-author | Claude Fable 5.2 |
 | Created | 2026-11-15 |
 | Supersedes | — (revisits RFC 0001's non-goal "a web UI") |
-| Touches | `ui/` (new), `crates/kura-server` (`app/mod.rs`, `app/me.rs`, `app/vaults.rs`, `app/devices.rs`, `app/notifications.rs`, `notifier.rs`, `net.rs`, `config.rs`, `limits.rs`, `maintenance.rs`, `lib.rs`, migrations `0022`, `0023`), `Containerfile`, `Containerfile.hardened`, `deploy/helm/kura`, `.tasks/`, `tests/heavy/console.sh`, `docs/` |
+| Touches | `ui/` (new), `crates/kura-server` (`app/mod.rs`, `app/me.rs`, `app/ui.rs`, `app/vaults.rs`, `app/devices.rs`, `app/device.rs`, `app/space.rs`, `app/notifications.rs`, `app/commits.rs`, `app/tokens.rs`, `app/reader.rs`, `notifier.rs`, `net.rs`, `config.rs`, `limits.rs`, `metrics.rs`, `problem.rs`, `db.rs`, `lib.rs`, `main.rs`, `store/crypto.rs`, `store/keys.rs`, migrations `0022`, `0023`, `0024`, `tests/console.rs`, `tests/notifications.rs`), `crates/kura-core` (`webhook.rs`, feature `webhook`), `fuzz/` (`fuzz_webhook_target`), `Containerfile`, `Containerfile.hardened`, `deploy/helm/kura` (`values.yaml`, `templates/`, `files/alerts.yaml`), `deploy/alerts/tests.yaml`, `dev/`, `.tasks/`, `tests/heavy/console.sh`, `tests/heavy/notify.sh`, `docs/` (`operator.md`, `readme.md`, `api/openapi.json`, `RFC/assets/`) |
 | Risk | high |
 
-> **Reference material**, about 11,100 words. For the decision, read §1, §3,
+> **Reference material**, about 11,800 words. For the decision, read §1, §3,
 > §7.1 and §15; the rest is the design to build and review against.
 
 ---
@@ -219,7 +219,8 @@ X-Kura-Signature: v1=<hex HMAC-SHA256(secret, timestamp + "." + body)>
   installed application opens signed in. The box is off by default in a
   browser tab and on by default in the installed application.
 - Signing out clears the browser's storage, signs the web device out at
-  Kura and revokes the refresh token at Authentik. It does not end the
+  Kura and asks Authentik to revoke the refresh token, without learning
+  whether it did (decision 25). It does not end the
   Authentik session: other applications stay signed in, and signing in
   again works at once.
 - Signing out is not revoking. "Revoke", in My devices, is the hard cut of
@@ -315,9 +316,9 @@ belong to answers `404`, as vaults do.
 
 ### 4.5 Mocks
 
-`batlehub-design` is not installed in this repository, so these are
-wireframes; the HTML mocks are built with its tokens in phase 1, under
-`docs/RFC/assets/`. The reader pages are drawn in RFC 0005 §4.5.
+These are wireframes; the HTML mocks, built with the `batlehub-design`
+tokens, are [`assets/0003-console.html`](assets/0003-console.html) and
+[`assets/0005-reader.html`](assets/0005-reader.html). The reader pages are drawn in RFC 0005 §4.5.
 
 **Signed out, and signing in**
 
@@ -328,11 +329,23 @@ wireframes; the HTML mocks are built with its tokens in phase 1, under
  │  [ Sign in with Authentik ]                 │
  │  [ ] Stay signed in on this device          │
  └─────────────────────────────────────────────┘
+
+ after a session that ended without a sign-out (`invalid_grant`):
+ ┌─────────────────────────────────────────────┐
+ │  Kura                                       │
+ │  (i) Your session ended. If you did not     │
+ │      sign out yourself, sign in and revoke  │
+ │      this browser in "My devices".          │
+ │  [ Sign in with Authentik ]                 │
+ │  [ ] Stay signed in on this device          │
+ └─────────────────────────────────────────────┘
 ```
 
 Decides one action and no form: Kura never sees a password. The box is
 unticked in a browser tab and ticked in the installed application; its
-help text says "Leave unticked on a shared computer".
+help text says "Leave unticked on a shared computer". The second state
+decides that the only sign of a stolen token the user ever sees comes with
+what to do about it (decision 26).
 
 **Shell — member, then manager**
 
@@ -643,7 +656,9 @@ creation and now points inside is refused at send time.**
 - The browser is a public client using the authorization code flow with
   PKCE, written on Web Crypto after `weebo-notify-v2`'s `web/src/auth/pkce.ts`
   and its spec file [R30], with no OIDC library (decision 6). It asks for
-  `openid profile offline_access`.
+  `openid profile offline_access`. The challenge is always `S256`:
+  Authentik issues and exchanges a code asked without one [R33], so PKCE
+  protects only the flows this module starts (decision 27).
 - After the exchange the page replaces the URL (`history.replaceState`) so
   the code does not stay in history; the post-login target is an in-app path
   only.
@@ -655,9 +670,17 @@ creation and now points inside is refused at send time.**
 - Refresh follows RFC 0001 §6.2's rule for clients: one in flight, across
   tabs, under a Web Lock (`navigator.locks`), the new token stored before it
   is used, sign-out only on `invalid_grant`. Without the lock, rotation would
-  sign out the tab that lost the race.
+  sign out the tab that lost the race. An answer with no `refresh_token`
+  keeps the stored one: Authentik sends none while the provider's
+  `refresh_token_threshold` is not reached [R34] (decision 28). An
+  `invalid_grant` the user did not ask for lands on the sign-in page with
+  the hint of §4.5: it is what a token rotated by someone else looks like
+  (decision 26).
 - Sign-out: clear both storages, `POST /v1/devices/{d}/sign-out`, then
-  Authentik's revocation endpoint for the refresh token. The route accepts
+  Authentik's revocation endpoint for the refresh token: a form `POST`
+  with `client_id` and `token`, sent with `mode: "no-cors"` and
+  `keepalive`, its answer never read, because that endpoint sends no CORS
+  header [R33] (decision 25). The route accepts
   the caller's own `web` device only and marks it signed out: it stops
   counting as live and its id is refused as `device_unknown`, but the
   session is not banned, so the same Authentik session can register a web
@@ -747,7 +770,9 @@ Clients: Chromium driven by `@playwright/test` at the version `ui/` pins
 Authentik, `curl`, and a webhook receiver: an `https` listener on
 `127.0.0.1:8443` with the dev certificate that logs each request. The test
 `server.yaml` has `allowedCidrs: [127.0.0.1/32]` and `caFile` set to the dev
-CA, since the receiver's certificate is not publicly trusted.
+CA, since the receiver's certificate is not publicly trusted. The suite
+opens with the Authentik facts of decision 13, with `curl` alone; that part
+exists and passes [R33].
 
 1. Alice signs in through Authentik in Chromium and lands on "My vaults".
    The recorded requests to `/v1` all carry `Authorization: Bearer` and
@@ -828,11 +853,11 @@ flowchart LR
 | T6 | Denial of service: events or deliveries slow the commit path, flood a receiver, or grow without bound | B2, B7 | Nothing recorded without a subscribed rule; `vault.changed` at most one a minute; 4 in flight; 6 attempts; self-disable after 20 failures; 7-day purge; 20 rules per tenant | A slow receiver holds one of four slots for 5 s per attempt; `token.denied` is one an hour per token |
 | T7 | Elevation: the console lets a caller do what the API would refuse | B1 | The console holds no privilege: every action is a `/v1` call checked by `require_role`, `check_binding`, `manage` | None: a tampered console is a `curl` |
 | T8 | Elevation: script injected into the console (stored names, a compromised dependency) reads the token or acts as the user | B1 | Framework text binding only, no raw HTML outside RFC 0005's renderer; CSP `script-src 'self'`, no inline; `pnpm audit`, lockfile | A malicious package version that passes audit runs as the user; accepted, as for any bundled client |
-| T9 | Spoofing / elevation: sign-in flaws (code interception, forged callback, open redirect, token in storage) | B1 | PKCE, `state` checked, in-app redirect targets only, URL replaced after exchange, access token in memory | The refresh token is T14 |
+| T9 | Spoofing / elevation: sign-in flaws (code interception, forged callback, open redirect, token in storage) | B1 | PKCE with `S256` on every flow the application starts, `state` checked, in-app redirect targets only, URL replaced after exchange, access token in memory | Authentik does not require PKCE of the client [R33], so the protection is the application's own (decision 27). The refresh token is T14 |
 | T10 | Tampering: clickjacking or cross-site requests against the console | B1 | `frame-ancestors 'none'`; no cookie, so no ambient credential | None known |
 | T11 | Information disclosure: `GET /me`, the bindings list or the tenant routes reveal other tenants or subjects to the wrong caller | B1 | `me` returns the caller's own memberships; bindings need `manager`; an unknown or foreign tenant is `404` | Managers see the subjects bound to their vault, which is the purpose |
 | T12 | Denial of service: browsers exhaust a user's 20 devices | B1 | One web device per `sid`, 30-day purge (§6.2) | A user with 20 live sessions must revoke one; the message says so [R9] |
-| T14 | Information disclosure / elevation: the refresh token in web storage is read by injected script, or left behind on a shared computer | B1 | Notes render in a sandboxed frame with an opaque origin (RFC 0005 decision 9); CSP without inline script; text binding only; rotation; "Stay signed in" off by default in a tab; sign-out revokes the refresh token at Authentik; "Revoke" refuses the whole session at Kura [R12] | A script that does run in the application's origin takes a refresh token valid until Authentik expires or revokes it, or until someone revokes the device. Accepted by the owner on 2026-11-15, who chose web storage over a cookie session so an installed application stays signed in; Kura is the trial of this model before `weebo-notify-v2` |
+| T14 | Information disclosure / elevation: the refresh token in web storage is read by injected script, or left behind on a shared computer | B1 | Notes render in a sandboxed frame with an opaque origin (RFC 0005 decision 9); CSP without inline script; text binding only; rotation; "Stay signed in" off by default in a tab; sign-out asks Authentik to revoke the refresh token; "Revoke" refuses the whole session at Kura [R12]; an unexpected `invalid_grant` shows the hint to revoke (§4.5) | A script that does run in the application's origin takes a refresh token valid until Authentik expires or revokes it, or until someone revokes the device. Once the thief has refreshed, the user's sign-out revokes only the user's own token: Authentik refuses a rotated token but keeps the newer one of the same chain [R33], so "Revoke" is the only stop (decision 26). Accepted by the owner on 2026-11-15, who chose web storage over a cookie session so an installed application stays signed in; Kura is the trial of this model before `weebo-notify-v2` |
 | T13 | Repudiation: rule changes or deliveries leave no trace | B1 | Audit events `notification_rule_created`, `_changed`, `_deleted`, `_disabled`; deliveries kept 7 days | Deliveries older than 7 days are gone |
 
 ### 7.2 Authentication and authorisation
@@ -1044,8 +1069,13 @@ condition. Versions are the latest published on 2026-11-15 [R20].
 - **Operator prerequisites**: in Authentik, a public OAuth provider
   `kura-web` with redirect URI `https://<host>/app/callback` and the
   `profile` and `offline_access` scopes; its client id in `oidc.audiences`
-  and `ui.oidc.clientId`. A refresh token validity of 14 days is advised for
-  that provider and not required (decision 23).
+  and `ui.oidc.clientId`. The redirect URI is in strict mode: Authentik
+  takes the origin its token endpoint allows from it, read as a literal URL
+  [R34]. A refresh token validity of 14 days is advised for
+  that provider and not required (decision 23); each rotation starts a new
+  validity, so an active browser stays signed in [R34]. The sign-in was
+  verified against Authentik 2026.8.3 [R33]; no version is required, and
+  `tests/heavy/console.sh` replays the facts against another one.
   For notifications: egress from the pod to the receivers; a receiver
   certificate the default roots accept (Let's Encrypt does) or its CA in
   `caFile` (the owner's local instance uses a private CA; no existing client
@@ -1090,7 +1120,8 @@ condition. Versions are the latest published on 2026-11-15 [R20].
   `manager_cannot_read_other_vault_rule` (T5); `no_rule_no_event_row`,
   `vault_changed_is_one_per_minute` (T6); §6.P observation 3 (T7);
   `console_has_no_inline_script` (CSP header and a build check) (T8);
-  `callback_rejects_wrong_state`, `post_login_target_is_in_app` (T9);
+  `callback_rejects_wrong_state`, `post_login_target_is_in_app`,
+  `authorize_always_sends_s256` (T9);
   `app_sets_frame_ancestors_none`, `kura_sets_no_cookie` (T10);
   `me_shows_only_own_tenants`, `bindings_need_manager`,
   `foreign_tenant_is_404` (T11); `web_device_is_reused_per_sid` (T12);
@@ -1098,6 +1129,8 @@ condition. Versions are the latest published on 2026-11-15 [R20].
   `sign_out_clears_storage_and_closes_the_device`,
   `sign_in_works_after_sign_out_in_the_same_session`,
   `refresh_is_single_flight_across_tabs`,
+  `refresh_without_new_token_keeps_the_old_one`,
+  `unexpected_invalid_grant_shows_the_revoke_hint`,
   `service_worker_stores_no_api_response` (T14, with RFC 0005's frame
   test); `authorization_is_sealed_and_never_returned`,
   `authorization_rejects_control_characters` (T4);
@@ -1114,7 +1147,8 @@ condition. Versions are the latest published on 2026-11-15 [R20].
 ### Resolved
 
 Questions 4 to 16 were open in the first draft (as 1 to 13) and keep their
-order; 17 to 23 came out of the owner's review of 2026-11-15.
+order; 17 to 24 came out of the owner's review of 2026-11-15; 13 was closed
+and 25 to 28 opened by the checks of 2026-11-17.
 
 | # | Question | Decision |
 | --- | --- | --- |
@@ -1139,21 +1173,17 @@ order; 17 to 23 came out of the owner's review of 2026-11-15.
 | 20 | Which payload format? | **Kura's own JSON, with `title` and `message` added, transformed on the receiver's side; no Gotify or ntfy format now.** |
 | 21 | Who serves the application? | **`kura-server` itself, same origin, as `proxy-cache` does; no separate nginx container.** One image, no CORS setting. |
 | 22 | What does "Sign out" do? | **Clears the storage, revokes the refresh token, leaves the Authentik session.** The owner also approved "revokes the web device"; that part was reopened as question 24 and settled there. |
-| 24 | Does signing out revoke the web device, or only sign it out? | **Only signs it out: a `sign-out` state that bans nothing; "Revoke" stays the hard cut.** Chosen by the owner on 2026-11-15, reversing the revocation approved earlier that day: a revoked device bans its Authentik session [R9][R12], so signing in again, and the plugin or CLI of that session, would be refused. Cost accepted: after a sign-out a stolen refresh token is stopped by Authentik's revocation, not by Kura. |
+| 24 | Does signing out revoke the web device, or only sign it out? | **Only signs it out: a `sign-out` state that bans nothing; "Revoke" stays the hard cut.** Chosen by the owner on 2026-11-15, reversing the revocation approved earlier that day: a revoked device bans its Authentik session [R9][R12], so signing in again, and the plugin or CLI of that session, would be refused. Cost accepted: after a sign-out a stolen refresh token is stopped by Authentik's revocation, not by Kura (corrected by decision 26: only while the thief has not refreshed). |
 | 23 | How long may a browser session last? | **Whatever Authentik sets; 14 days is advised in the operator guide and never enforced.** The owner's Authentik may set anything from a day to thirty. |
+| 13 | Do the Authentik facts the sign-in stands on hold? | **Yes, all six, observed on the local Authentik 2026.8.3 on 2026-11-17 [R33].** The token endpoint allows the origin of the redirect URI and no other; access tokens carry `sid` and `auth_time` on a sign-in and after a refresh, and `auth_time` alone once the Authentik session has ended; refresh tokens rotate and a rotated one is `400 invalid_grant`; a public client revokes with `client_id` and `token`; the validity is per provider; a second sign-in in one Authentik session carries the same `sid` and `auth_time`, so decision 24 stands. Settled before acceptance, not in phase 1, at the owner's request; the checks stay in `tests/heavy/console.sh`. What they turned up is decisions 25 to 28. |
+| 25 | The revocation endpoint sends no CORS header [R33]: how does sign-out revoke? | **The browser sends the revocation and never reads the answer; sign-out succeeds whatever Authentik did.** A relay through Kura was refused: the server would see a refresh token, which it never does today. |
+| 26 | Authentik refuses a rotated refresh token but keeps the newer one of the chain [R33]: what stops a stolen token? | **Only "Revoke", which refuses the session by `sid` or `auth_time` [R12]; the sign-in page says so after an `invalid_grant` the user did not ask for.** Corrects decision 24's cost: the user's sign-out revokes the user's token, not the one a thief already rotated. |
+| 27 | Authentik exchanges a code asked without a challenge [R33]: is PKCE still a mitigation? | **Yes, for the flows the application starts: always `S256`, proved by a test; the rest is T9's residual.** Whether Authentik can require PKCE per provider was not looked up. |
+| 28 | A provider with a `refresh_token_threshold` answers a refresh without a new refresh token [R34]: require the threshold at 0? | **No: the client keeps the token it has.** As decision 23, Kura imposes nothing on the provider's settings. Read in Authentik's source, not observed: the dev provider keeps the default 0. |
 
 ### Still open
 
-13. **Authentik facts to confirm on the local instance, first step of
-    phase 1.** Not the owner's decisions, but each can change the design:
-    that a public client's code flow and token refresh are allowed from the
-    application's origin (CORS on the token endpoint); that its access
-    tokens carry `sid` or `auth_time`, which `require_session` needs [R12];
-    that refresh tokens rotate and a reused one is refused; that the
-    revocation endpoint accepts a public client; that the refresh validity
-    is set per provider; and whether a second sign-in in one Authentik
-    session carries the same `sid` and `auth_time`, the assumption behind
-    decision 24.
+None.
 
 ---
 
@@ -1208,3 +1238,287 @@ and the device binding land in phase 1 with the first page.
 | R30 | `weebo-notify-v2`: `web/package.json:21-50` (versions), `web/src/auth/pkce.ts` and `pkce.spec.ts`, `web/src/auth/session.ts:1-6` (access token in memory, refresh token in `sessionStorage`, ADR-0020) | `weebo-notify-v2` at `d29d330`, read 2026-11-15 | §6.1, §6.2, §8, §12 |
 | R31 | `proxy-cache`: `ui/src/design/tokens.css`, `ui/src/router/index.ts:160-180` (page gated on its declared verb, refused when missing), `ui/src/components/ui/` (`async-state` and siblings) | `proxy-cache` at `e5fc1376`, read 2026-11-15 | §6.1 |
 | R32 | `weebo-notify-v2`: `crates/notify-adapters/http-actix/src/routes/compat.rs:36` (key as `Bearer`, `Basic`, `X-Gotify-Key` or `?token=`), `:465-486` (`POST /compat/json/{transform}/{channel}`); `grep -rni hmac` over its routes finds no signature check | `weebo-notify-v2` at `d29d330`, read 2026-11-15 | T3, §11, §13, decision 19 |
+| R33 | `tests/heavy/console.sh` against the dev Authentik (`ghcr.io/goauthentik/server:2026.8.3`, provider `kura-web` of `dev/authentik/blueprints/kura.yaml`): every check `ok`; notes: no family revocation, no CORS header on the revocation answer, a code exchanged without PKCE, no `sid` once the Authentik session has ended | run 2026-11-17, working tree on `a4d3ddd` | §4.2, §6.2, §6.P, T9, T14, §13, decisions 13 and 25 to 27 |
+| R34 | `goauthentik/authentik`, `authentik/providers/oauth2/`: `utils.py:39-79` (`cors_allow`: scheme, host and port of each redirect URI), `views/token.py:57-63` and `:216-245` (rotation under `refresh_token_threshold`, a new `expires` at each rotation), `models.py:288-296` | tag `version/2026.8.3` (`e5a0d2f7572c`), read 2026-11-17 | §6.2, §13, decision 28 |
+| R35 | `b1854d5` feat: folder-scoped write tokens (RFC 0004) and the web console, phase 1 (RFC 0003) | 2026-11-17 | §18, phase 1 |
+| R36 | `c2449ce` feat: folder-restricted viewers and the web reader (RFC 0005): carries the phase 1 review fixes (migration `0023_signed_out_devices.sql`, `app/ui.rs`, `db.rs`, `tests/console.rs`, `tests/db.rs`) | 2026-11-17 | §18, phase 1 review |
+| R37 | `6383e66` feat(ui): the back office of the web console (RFC 0003 phase 2) | 2026-11-17 | §18, phase 2 |
+| R38 | `62cdb46` feat: webhook notifications, server side (RFC 0003 phase 3) | 2026-11-17 | §18, phase 3 |
+| R39 | `a7e8e67` feat(ui): notification rules and deliveries in the console (RFC 0003 phase 4) | 2026-11-17 | §18, phase 4 |
+| R40 | `49e1b7d` feat: close the remaining gaps of RFC 0003, 0004 and 0005 | 2026-11-17 | §18, gaps |
+| R41 | `fda4845` chore: dated audit exceptions, and a suite vault apart from obsidian (`.tasks/security.yaml`) | 2026-11-17 | §18.5 |
+| R42 | [`rfc0003-implementation-plan.md`](rfc0003-implementation-plan.md): progress table and divergences D1 to D19 | working tree on `5a01ea4`, 2026-11-17 | §18 |
+| R44 | The change closing the landing gaps (§18.7): `app/ui.rs::check_dir`, migration `0026`, `notifier::{warn_rules_while_off, purge}`, `net::webhook_client_resolving`, `tests/notification_logs.rs`, `ui/build-checks.ts`, `ForbiddenState.vue`, `NotificationsPage.vue`; `task lint`, 283 Rust tests, 96 console tests and the six heavy suites green on the dev stack | 2026-11-17, the commit after `1c22fce` | §18.7 |
+| R43 | `ui/pnpm-lock.yaml`, `ui/node_modules/*/package.json` (resolved versions and licences), `Cargo.lock` (`tower-http` 0.7.1, `reqwest` 0.13.5, `url` 2.5.8, `rcgen` 0.14.10, `tokio-rustls` 0.26.6, `aws-lc-rs` 1.19.0), `Containerfile:35` (`node:24-trixie-slim` by digest) | working tree on `5a01ea4`, read 2026-11-17 | §18.5 |
+
+---
+
+## 18. Revision against the tree (2026-11-17)
+
+Every question of §15 is settled and every phase of the implementation plan
+is done [R42]. Landing first found behaviour the text promises and the tree
+lacked (§18.2, the divergences the plan does not record); §18.7 records how
+each was closed the same day [R44], after which the maintainer moved the RFC
+to Implemented. It was never formally Accepted. The record of each
+phase, its tests and its divergences is that plan; this section summarises
+it against the text above, which stays as written.
+
+### 18.1 What shipped
+
+| Phase | Commit | What |
+| --- | --- | --- |
+| Question 13 | `b1854d5` [R35] | The Authentik facts in `tests/heavy/console.sh`, decisions 25 to 28 (§15) |
+| 1 | `b1854d5` [R35], review fixes in `c2449ce` [R36] | `GET /me`, `GET …/bindings`, `Profile::Web` (migration `0022`), one web device per `sid`, `POST /devices/{d}/sign-out`, the 30-day purge, the configuration space refused to a web device, `ui` in `server.yaml`, `/app` with its headers and `/app/config.json`; `ui/` with the session module, sign-in, shell, My vaults, My devices, manifest and service worker; the Containerfile UI stage; `task ui:*` in `lint` and `audit`. The review added migration `0023` (a signed-out web device closes its sockets and leaves the lists), a `404` for a missing hashed asset, and a schema check over every migration |
+| 2 | `6383e66` [R37] | The back office on existing routes: Manage index, Access, Keys, members' devices, a tenant's vaults, platform Status; §6.P observations 1 to 3 |
+| 3 | `62cdb46` [R38] | `notifications` in `server.yaml`, migration `0024`, `kura_core::webhook` and `fuzz_webhook_target`, `net::webhook_client`, `notifier`, the six rule routes, events at their sites, four metrics, two alerts with promtool tests |
+| 4 | `a7e8e67` [R39] | Notifications and Deliveries pages; operator guide for `notifications` and the receiver contract; §6.P observations 4, 5 and 7 in `tests/heavy/notify.sh` |
+| Gaps | `49e1b7d` [R40] | The HTML mocks of §4.5, the bundled fonts, the group list of Add access, observations 6 and 8 in the shell suite, the Helm values `server.ui`, `server.notifications` and `webhookCa` |
+
+### 18.2 Where the tree differs from the text
+
+The divergences recorded by the plan [R42], in short:
+
+- **D1** (§4.4): `/app/config.json` also carries `discovery`, and the CSP's
+  `connect-src` names its origin: in Authentik's global issuer mode a
+  browser may only read its own application's discovery document.
+- **D2** (§6.2): registering again answers `200` with the existing device,
+  `201` for a new one.
+- **D3** (§4.4): `GET /me` also returns `name`, for the shell.
+- **D4** (§6.1): the UI stage builds from the committed
+  `docs/api/openapi.json`, not from the binary; the generated client is
+  gitignored.
+- **D5** (§6.1): the route guard and `AsyncState` are written here, the
+  revoke confirmation is an inline `alertdialog`, and reka-ui is not used.
+- **D6** (§4.5): the HTML mocks, missing in phase 1, are
+  `docs/RFC/assets/0003-console.html` and `0005-reader.html` (closed).
+- **D7** (§8): `picomatch` GHSA-fc5q-39xc-vjpf, build time only, is a dated
+  exception; see §18.5 (closed).
+- **D8** (§6.1): Silkscreen and JetBrains Mono, first missing, are bundled
+  from `@fontsource` 5.3.0 (closed).
+- **D9** (§4.5): groups were free text in phase 2; `GET /v1/vaults` now
+  gives managers the tenant's mapped claim values and the form lists them
+  (closed).
+- **D10** (§4.5): a "Manage" index page instead of a drop-down, and one
+  members' devices page for every tenant the caller administers.
+- **D11** (§4.5): Keys shows NAME and RFC 0004's folder rules, not ID and
+  SCOPE.
+- **D12** (§6.4): `device.*` events are recorded per tenant just after the
+  fact, not in its transaction: a device belongs to a person, not a tenant.
+- **D13** (§6.4): `quota.high` and `token.expiring` run in the notifier's
+  loop, not in the storage refresh and the purge loop.
+- **D14** (§4.3): a name is refused when any address it resolves to now is
+  refused, or none resolves.
+- **D15** (§6.5): an `address_refused` attempt is final, not retried.
+- **D16** (§8): `url` in `kura-core` behind the `webhook` feature; `rcgen`
+  and `tokio-rustls` as test-only dependencies.
+- **D17**, **D18** (§6.P): observations 6 and 8 run in the shell suite
+  against a second and a third server on the same database (closed).
+- **D19** (§6.P): the receivers are Python's `http.server` with `ssl`, run
+  by the suite with `python3 -I`.
+
+Found in the tree on landing and not in the plan's table:
+
+- **Migration numbers** (§6.4, §13, §16): the notifications are
+  `0024_notifications.sql`; `0023` is `0023_signed_out_devices.sql`, the
+  phase 1 review fix, which shipped inside RFC 0005's commit `c2449ce`
+  [R36].
+- **§4.3, startup**: no check refuses a `ui.dir` that is missing or has no
+  `index.html`; `main.rs` and `app::ui::UiSettings::new` do not look. The
+  §10.2 row "`ui.dir` missing at startup" therefore does not hold: such a
+  server starts and `/app` answers `404`.
+- **§4.3, warnings**: no `WARN` line counts the rules at startup while
+  `notifications.enabled` is false. The Notifications page says
+  "Notifications are not enabled on this server" from the `409`, and lists
+  no rule then.
+- **§4.5 and §10.1, coarse results**: besides the six listed, a delivery
+  can end as `redirect` (a `3xx`), `410`, `unavailable` (the sealed values
+  could not be opened; retried, as §10.2 says), `disabled` or
+  `rule_disabled`; the metric's `outcome` adds `delivered` and `gone`. All
+  remain fixed words, never a body or header.
+- **§4.5, Forbidden**: the page shows the console's own "Your role does not
+  allow this page.", not the server's `insufficient_role` detail.
+- **§4.5, Notifications**: no Edit action, and no way to rotate the signing
+  secret from the console; `PUT` with `rotateSecret: true` exists in the API
+  only. The row offers Test, Switch off or Re-enable, Deliveries and
+  delete.
+- **§9**: a `device.*` payload carries the device's kind (`web`,
+  `desktop`, `mobile`) beside its id.
+- **§10.3, §11, §13**: the plan records no measurement of the 300 kB
+  bundle budget (no task measures it), no `task perf:run:commit` with a
+  `vault.changed` rule, no `accessibilite-check` review, and no rollback
+  run of the previous release against a migrated database. Not checked on
+  landing.
+
+### 18.3 What the proof observed
+
+All on the dev stack, 2026-11-17, every check `ok` [R42]:
+
+- The Authentik facts of decision 13: `tests/heavy/console.sh`, `curl`
+  alone [R33].
+- Observations 1 and 2: `tests/heavy/console.sh` driving
+  `ui/e2e/console.spec.ts` ("1 and 2: alice signs in, gets no cookie, and
+  a key's secret is shown once"), Playwright 1.64.1 in Chromium: alice
+  signs in through Authentik's own pages and lands on My vaults, every `/v1`
+  call carries the token, only `GET /me` and the registration go without a
+  device, Kura sets no cookie, and after a reload the key's secret is in no
+  page or `/v1` answer.
+- Observation 3: the same suite ("3: bob, a viewer, is refused the keys of
+  a vault, and is shown no key"): the forbidden text and a `403` with no
+  key in it.
+- Observations 4, 5 and 7: `tests/heavy/notify.sh` with
+  `ui/e2e/notify.spec.ts`: the receiver logs `ping` with `Bearer test-key`
+  and `openssl` recomputes the signature; the list shows none of the
+  secrets; a revoked device arrives as `device.revoked` within 10 s with no
+  `sub`, `path` or device name; a `500` leaves the delivery pending after
+  one attempt, next in about 60 s.
+- Observation 6: in `notify.sh`, a rule to 127.0.0.2 is `400` with the one
+  message and that listener logs nothing. The second half differs from the
+  text (D17): a rule saved while 127.0.0.1 was allowed, tested on a second
+  server started with `allowedCidrs: []`, answers `address_refused` and the
+  receiver logs nothing. The row written past the API is in
+  `tests/notifications.rs`.
+- Observation 8: in `notify.sh`, the second server runs with
+  `ui.enabled: false` (`/app/` is `404`) and a third with
+  `notifications.enabled: false` (`409 notifications_disabled`).
+- The browser tests sign out at the end, so a run leaves no live web
+  device. Console unit tests: 77, 92% of lines. `fuzz_webhook_target`: 2.0 M
+  runs in 61 s, no finding.
+
+### 18.4 §7 threats and the tests that prove them
+
+Most test names of §14 were not kept: the checks are grouped in fewer
+tests, several naming the §14 check in a comment. The tests below exist in
+the tree.
+
+| # | Proved by | Not proved |
+| --- | --- | --- |
+| T1 | `crates/kura-core/src/webhook.rs`: `private_and_special_addresses_are_refused`, `a_target_is_https_without_credentials`; `crates/kura-server/src/net.rs`: `webhooks_reach_public_addresses_and_allowed_ranges_only` (mapped IPv6 included); `crates/kura-server/tests/notifications.rs`: `no_webhook_reaches_an_address_the_operator_did_not_allow` (literal, `localhost`, metadata, mapped IPv6, unresolvable name, and a row written past the API refused at send with no connection); fuzz `fuzz_webhook_target`; observation 6 | No test has a resolver that changes its answer (`webhook_rebinding_is_refused_at_send`) or a receiver that redirects (`webhook_redirect_is_failure`); both rest on `net::webhook_client` (the guarded resolver, `Policy::none()`) and the `3xx` → `redirect` mapping in `notifier.rs` |
+| T2 | `notifier.rs`: `the_lists_are_closed_and_consistent`; `tests/notifications.rs`: `events_reach_their_rules_with_ids_only_and_retries_back_off` (`status_5xx`); `ui/src/pages/notifications-pages.spec.ts`: "lists coarse results" | That the body is never read is by construction (`notifier.rs`, no read of the response); no test |
+| T3 | `notifier.rs`: `the_signature_is_hmac_sha256_of_timestamp_dot_body` (known vector, timestamp bound); `tests/notifications.rs`: `a_rule_signs_its_deliveries_and_never_shows_its_secrets`; observation 4 (`openssl`) | No test alters the body (`signature_rejects_altered_body`) |
+| T4 | `tests/notifications.rs`: `a_rule_signs_its_deliveries_and_never_shows_its_secrets` (list, database and deliveries hold no URL path, secret or key); `store/crypto.rs`: `values_open_only_under_their_context`; observation 4 | No test reads the logs (`logs_have_no_webhook_url`) or sends a control character in `authorization` (`check_authorization` in `app/notifications.rs` is untested) |
+| T5 | `tests/notifications.rs`: `events_reach_their_rules_with_ids_only_and_retries_back_off` (no subject, path or device name), `a_manager_sees_their_vaults_only_and_off_means_409`; observation 5 | — |
+| T6 | `tests/notifications.rs`: `events_reach_their_rules_with_ids_only_and_retries_back_off` (nothing recorded without a rule, one `vault.changed` a window, backoff, the 20th failure, `410`) | — |
+| T7 | Observation 3 (`ui/e2e/console.spec.ts`); `ui/src/pages/manage-pages.spec.ts`: "is forbidden below manager, and shows a refused creation" | — |
+| T8 | `crates/kura-server/tests/console.rs`: `the_console_is_served_with_its_headers` (`script-src 'self'`); `app/ui.rs`: `the_policy_names_the_identity_provider_only` | No build check for inline script (`console_has_no_inline_script`); the CSP header is the control |
+| T9 | `ui/src/auth/session.spec.ts`: "always asks for an S256 challenge…" (`authorize_always_sends_s256`), "refuses a callback whose state is not the one it started…" (`callback_rejects_wrong_state`); `ui/src/auth/pkce.spec.ts`: the `post_login_target_is_in_app` table; `ui/src/pages/pages.spec.ts`: "lands on the in-app target, or says why it could not" | — |
+| T10 | `tests/console.rs`: `the_console_is_served_with_its_headers` (`frame-ancestors 'none'`, no `Set-Cookie`); observation 1 | — |
+| T11 | `tests/console.rs`: `me_shows_only_own_tenants`, `bindings_need_manager` (with the foreign tenant's `404`) | — |
+| T12 | `tests/console.rs`: `web_device_is_reused_per_sid` | — |
+| T13 | — | No test: the audit lines `notification_rule_created`, `_changed`, `_deleted` (`app/notifications.rs`) and `_disabled` (`notifier.rs`) exist; `rule_changes_are_audited` does not |
+| T14 | `ui/src/auth/session.spec.ts`: `refresh_token_storage_follows_the_box`, `refresh_is_single_flight_across_tabs`, `refresh_without_new_token_keeps_the_old_one`, `unexpected_invalid_grant_shows_the_revoke_hint`, `sign_out_clears_storage_and_closes_the_device` (each named in a comment over its `it`); `ui/src/sw.spec.ts`: "keeps the shell only…"; `tests/console.rs`: `web_device_is_reused_per_sid` (sign-in after sign-out in the same session); RFC 0005's `ui/e2e/reader.spec.ts` ("a hostile note runs nothing") | — |
+
+No row turned out not to hold; T1, T2, T3, T4, T8 and T13 are held partly by
+construction where the table says so.
+
+### 18.5 Supply chain as shipped
+
+| Dependency / image / tool | Shipped | Licence |
+| --- | --- | --- |
+| `vue`, `vue-router`, `pinia`, `vue-i18n` | 3.5.45, 5.5.1, 4.1.0, 11.4.20 | MIT |
+| `vite`, `typescript`, `tailwindcss` | 8.3.8, 6.0.3, 4.3.5 | MIT, Apache-2.0, MIT |
+| `reka-ui` | not used (D5) | — |
+| `vitest`, `@playwright/test`, `@biomejs/biome` (dev) | 5.1.0, 1.64.1 (exact pin), 2.6.8 | MIT, Apache-2.0, MIT OR Apache-2.0 |
+| `@hey-api/openapi-ts`, `axios` | 0.99.0, 1.21.1 | MIT, MIT |
+| `@fontsource/silkscreen`, `@fontsource/jetbrains-mono` | 5.3.0, 5.3.0 | OFL-1.1 (D8) |
+| `tower-http` feature `fs` | 0.7.1 | MIT |
+| `url` in `kura-core` (feature `webhook`) | 2.5.8, already in the tree (D16) | MIT OR Apache-2.0 |
+| `rcgen`, `tokio-rustls` (test only) | 0.14.10, 0.26.6 (D16) | — |
+| Node build stage | `node:24-trixie-slim`, pinned by digest | — |
+
+`dompurify` and `markdown-it` in `ui/package.json` are RFC 0005's. Versions
+are from the lockfiles [R43]. As of 2026-11-17 `task audit` is green [R41]:
+`pnpm audit` in `ui` passes with one dated exception, `picomatch`
+GHSA-fc5q-39xc-vjpf, build time only and absent from the bundle (D7);
+`js-yaml`, `minimatch` and `glob` (dev only) are overridden to fixed
+versions in `ui/pnpm-workspace.yaml`. The Rust exceptions in `deny.toml`
+(RUSTSEC-2026-0542 `humantime`, RUSTSEC-2026-0543 `chrono`, both through
+`object_store`, reviewed 2026-12-17) are not this RFC's.
+
+### 18.6 The mocks of §4.5 against the console as built
+
+Compared with the pages' source and `ui/src/locales/en.json`, and with the
+pages the browser suites drove; no screenshot was taken on landing.
+
+- **Signed out, and signing in**: as drawn, the hint after an unexpected
+  `invalid_grant` word for word, and the help text "Leave unticked on a
+  shared computer."
+- **Shell**: a "Manage" link to an index grouped by vault, tenant and
+  platform, shown by role, instead of "Manage: jdr ▾" (D10).
+- **No tenant**: as drawn.
+- **Access**: as drawn, with the folders of a viewer (RFC 0005) and the
+  tenant's groups as a list (D9).
+- **Keys**: NAME and FOLDERS for ID and SCOPE (D11); the empty text and the
+  created dialog as drawn.
+- **Notifications**: the columns as drawn; the banner reads "`name` was
+  switched off (`reason`). Fix the receiver, then re-enable it.", the
+  reason being `failures: status_5xx` or `gone`; no Edit action (§18.2).
+- **New rule, error**: the server's one message, "this address cannot be
+  used: a webhook must be an https address that is public, or one the
+  platform operator allowed", shown as it comes.
+- **Deliveries**: as drawn; results may also be the words of §18.2.
+- **Forbidden**: a generic text, not the server's detail (§18.2).
+- **My devices, members' devices**: My devices as drawn; one members'
+  devices page for every tenant administered (D10).
+- **Add access, New key**: as drawn; a key's folders carry RFC 0004's read
+  or read-and-write mode.
+- **New rule and its secret**: scope, events by role, webhook, optional
+  authorization hidden once saved; the secret dialog says the same in one
+  sentence fewer.
+- **Platform status**: as drawn, rejection first.
+- The HTML mocks are `docs/RFC/assets/0003-console.html` (D6).
+
+### 18.7 Gaps closed on landing (2026-11-17)
+
+Each gap of §18.2 found in the tree, and each §7 row §18.4 left without a
+test, closed the same day [R44]:
+
+- **`ui.dir` at startup** (§4.3, §10.2): `app::ui::check_dir` refuses a
+  missing directory or one without `index.html` before the server listens
+  (`ui_dir_without_index_is_refused`). `connect()` is shared, so
+  `maintain`, `backup` and `check-chunks` with the console on need it too.
+- **The startup `WARN`** (§4.3): `notifier::warn_rules_while_off` logs
+  `rules=N` once when notifications are off and rules are stored. Row-level
+  security forbids a cross-tenant count to the server's role, so migration
+  `0026` adds `kura_notification_rule_count()`, which returns a number only.
+- **Retention while off** (§9, found while closing the above): the 7-day
+  purge of events and deliveries stopped with the notifier when
+  `notifications.enabled` was false. `notifier::purge` now runs hourly
+  either way; the token-expiry check stays off, so no warning is consumed
+  unsent (`old_events_are_purged_while_notifications_are_off`).
+- **Device payloads** (§9): `device.*` carry `{"device":{"id":…}}` only;
+  the kind is gone, and `notify.sh` observation 5 asserts the keys are
+  exactly `["id"]`.
+- **Forbidden** (§4.5): `ForbiddenState` shows the server's
+  `insufficient_role` detail ("manager required, you are viewer"), the
+  generic sentence only when there is none; `console.spec.ts` asserts it.
+- **Edit and rotate** (§4.5): the Notifications page edits a rule with the
+  fields `PUT` takes (URL and authorization blank mean unchanged, a box
+  removes the authorization) and rotates the secret behind a confirmation,
+  showing the new one once. The old secret stops at once, as the server
+  has no overlap.
+- **T8 and the budget** (§7, §10.3): `ui/build-checks.ts`, a Vite plugin,
+  fails `vite build` on any built HTML with an inline script, and above
+  300 kB of gzipped JS and CSS. Measured 193.6 kB with the reader included,
+  stricter than the text, which counts the console without it.
+- **T13**: `rule_changes_are_audited` (`tests/notification_logs.rs`) sees
+  one audit line per create, change, test and delete with the rule id, and
+  no URL path, authorization or secret in any line. Testing a rule was not
+  audited at all: `notification_rule_tested` now is, beyond T13's list.
+- **T1**: `webhook_redirect_is_failure` (a `302` is `redirect`, the target
+  gets nothing) and `webhook_rebinding_is_refused_at_send` (a name that
+  resolves to a refused address at the second attempt is `address_refused`
+  and nothing connects), through the seam `net::webhook_client_resolving`;
+  the production client keeps the system resolver.
+- **T2**: `delivery_result_is_coarse_and_body_unread`: a `200` followed by
+  a 1 GiB body is settled in under 3 s and under 64 MiB leaves the receiver.
+- **T3**: `notifier::tests::signature_rejects_altered_body`.
+- **T4**: `authorization_rejects_control_characters` (CR, LF, NUL, TAB,
+  DEL, U+0085, 1,024 bytes); the logs half is in `rule_changes_are_audited`.
+- **Accessibility** (§11): the dialogs take and return focus, a rule's name
+  is its row header, Deliveries is translated and shows the forbidden state.
+  Reviewed by hand against RGAA 4; the `accessibilite-check` agent was not
+  run.
+
+Still divergences, accepted as written in §18.2: the migration numbers, the
+extra coarse result words, and the measurements §18.2 lists as not run
+(`perf:run:commit` with a `vault.changed` rule, the rollback run).

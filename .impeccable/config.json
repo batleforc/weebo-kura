@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "ui/src/reader/render.ts"
+        ],
+        "createdAt": "2026-11-17T22:01:53.017Z",
+        "reason": "agent: img[data-entry] is a placeholder that frameDocument fills with a data: URL or replaces by its alt text before display"
+      }
+    ]
+  }
+}

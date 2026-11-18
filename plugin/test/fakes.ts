@@ -166,6 +166,31 @@ export class FakeServer {
       }
       return new Response(new Uint8Array(parts), { status: 200 });
     }
+    // RFC 0002 phase 3: the upload routes, framed as chunks/batch answers.
+    if (method === "POST" && (path === "/chunks/upload" || path === "/blobs/upload")) {
+      if (this.older) return new Response(null, { status: 405 });
+      if (path === "/chunks/upload") {
+        const raw = init.body;
+        const b: Uint8Array = raw instanceof Uint8Array ? raw : new Uint8Array();
+        for (let at = 0; at < b.length; ) {
+          const hash = [...b.subarray(at, at + 32)].map((x) => x.toString(16).padStart(2, "0")).join("");
+          const len = ((b[at + 33] ?? 0) << 24) | ((b[at + 34] ?? 0) << 16) | ((b[at + 35] ?? 0) << 8) | (b[at + 36] ?? 0);
+          this.chunks.set(hash, b.slice(at + 37, at + 37 + len));
+          at += 37 + len;
+        }
+        return new Response(null, { status: 204 });
+      }
+      const req = await body();
+      const list: unknown = typeof req === "object" && req !== null && "manifests" in req ? req.manifests : [];
+      const manifests: unknown[] = Array.isArray(list) ? list : [];
+      for (const m of manifests) {
+        if (typeof m !== "object" || m === null || !("hash" in m) || !("size" in m) || !("chunks" in m)) continue;
+        if (typeof m.hash === "string" && typeof m.size === "number" && Array.isArray(m.chunks)) {
+          this.blobs.set(m.hash, { size: m.size, chunks: m.chunks.filter((x: unknown): x is string => typeof x === "string") });
+        }
+      }
+      return new Response(null, { status: 204 });
+    }
     const chunk = /^\/chunks\/([0-9a-f]{64})$/.exec(path);
     if (chunk?.[1] !== undefined) {
       if (method === "PUT") {

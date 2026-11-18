@@ -93,6 +93,18 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "{{ $value }} notes could not be indexed after five attempts and are missing from search until edited; see the warn logs."
+      # RFC 0003 §10.1: notifications are off the sync path; neither pages.
+      - alert: KuraNotificationsStalled
+        expr: max(kura_notification_oldest_pending_seconds) > 900
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: A notification delivery has waited more than 15 minutes; the worker is behind or stuck.
+      - alert: KuraNotificationRuleDisabled
+        expr: max(kura_notification_rules_disabled) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value }} notification rules switched themselves off after 20 failed deliveries; a tenant admin re-enables them."
       - alert: KuraGarbageCollectionStale
         expr: (time() - max(kura_maintenance_gc_timestamp_seconds) > 172800) and max(kura_maintenance_gc_timestamp_seconds) > 0
         labels: { severity: warning }

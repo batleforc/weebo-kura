@@ -144,6 +144,11 @@ struct Scripted {
     truncated: bool,
     /// Hashes asked of each `blobs/batch` call.
     blob_asks: std::cell::RefCell<Vec<usize>>,
+    /// `(records, chunk bytes)` of each `chunks/upload` call, manifests of
+    /// each `blobs/upload` call, and single `put_chunk` calls.
+    chunk_uploads: RefCell<Vec<(usize, usize)>>,
+    blob_uploads: RefCell<Vec<usize>>,
+    single_puts: Cell<usize>,
     /// Single `get_blob` and `get_chunk` calls, and batch calls.
     singles: Cell<usize>,
     batches: Cell<usize>,
@@ -162,7 +167,30 @@ impl Remote for Scripted {
         Ok(hashes.to_vec())
     }
     async fn put_chunk(&self, _: &ChunkHash, _: &[u8]) -> Result<(), RemoteError> {
+        self.single_puts.set(self.single_puts.get() + 1);
         Ok(())
+    }
+    async fn put_chunks(&self, records: &[u8]) -> Result<bool, RemoteError> {
+        if !self.batch {
+            return Ok(false);
+        }
+        let r = kura_core::wire::parse_records(records).unwrap();
+        let bytes = r.iter().map(|(_, d)| d.unwrap().len()).sum();
+        for (h, d) in &r {
+            assert_eq!(ChunkHash::of(d.unwrap()), *h, "a record under its address");
+        }
+        self.chunk_uploads.borrow_mut().push((r.len(), bytes));
+        Ok(true)
+    }
+    async fn put_blobs(
+        &self,
+        manifests: &[kura_core::sync::Manifest],
+    ) -> Result<bool, RemoteError> {
+        if !self.batch {
+            return Ok(false);
+        }
+        self.blob_uploads.borrow_mut().push(manifests.len());
+        Ok(true)
     }
     async fn get_chunk(&self, h: &ChunkHash) -> Result<Vec<u8>, RemoteError> {
         self.singles.set(self.singles.get() + 1);
@@ -311,6 +339,7 @@ fn opts(dry_run: bool) -> Options {
         dry_run,
         allow_deletions: false,
         prefer_remote: false,
+        writable: None,
     }
 }
 
@@ -1028,5 +1057,57 @@ async fn identical_files_share_the_window_and_a_cut_answer_falls_back() {
             if truncated { 2 } else { 0 },
             "truncated {truncated}"
         );
+    }
+}
+
+/// RFC 0002 phase 3: a push sends its chunks in calls of 4 MiB at most, then
+/// its manifests together; against an older server, one by one.
+#[tokio::test]
+async fn a_push_uploads_in_batches_of_4_mib_or_one_by_one() {
+    // Ten files of 1.5 MB that share no chunk: about 15 MB to send.
+    let noise = |seed: u64| {
+        let mut x = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+        (0..1_500_000)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x.to_le_bytes()[0]
+            })
+            .collect::<Vec<u8>>()
+    };
+    let mut o = opts(false);
+    o.max_file_size = 1 << 30;
+    for batch in [true, false] {
+        let host = Mem::default();
+        for i in 0..10u64 {
+            host.write(
+                &VaultPath::parse(&format!("f{i}.bin")).unwrap(),
+                &noise(i + 1),
+            )
+            .await
+            .unwrap();
+        }
+        let remote = Scripted {
+            batch,
+            ..Scripted::default()
+        };
+        // No commit answer: the push stops after its uploads.
+        let pushed = sync(&host, &remote, &mut state(), &o).await;
+        assert!(pushed.is_err(), "the scripted commit is unreachable");
+        let calls = remote.chunk_uploads.borrow().clone();
+        if batch {
+            assert!(calls.len() >= 4, "{calls:?}");
+            assert!(
+                calls.iter().all(|&(n, b)| n <= 1000 && b <= 4 << 20),
+                "{calls:?}"
+            );
+            assert_eq!(calls.iter().map(|&(_, b)| b).sum::<usize>(), 15_000_000);
+            assert_eq!(*remote.blob_uploads.borrow(), vec![10]);
+            assert_eq!(remote.single_puts.get(), 0);
+        } else {
+            assert!(calls.is_empty());
+            assert!(remote.single_puts.get() >= 10);
+        }
     }
 }

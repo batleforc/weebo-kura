@@ -1,0 +1,42 @@
+/* Shared by the HTML mocks of RFC 0003 and 0005: the batlehub-design tokens
+   (tokens.css, a copy of the skill's), its faces, and the few components the
+   mocks need. Ruled rows, no cards, no radius; every state in three channels. */
+@font-face{font-family:"Silkscreen";src:url("fonts/silkscreen-400.woff2") format("woff2");font-weight:400;font-display:swap}
+@font-face{font-family:"Silkscreen";src:url("fonts/silkscreen-700.woff2") format("woff2");font-weight:700;font-display:swap}
+@font-face{font-family:"JetBrains Mono";src:url("fonts/jetbrainsmono-latin.woff2") format("woff2");font-weight:100 800;font-display:swap}
+*{box-sizing:border-box;margin:0}
+body{background:var(--ground);color:var(--ink);font:var(--t-body)/1.5 var(--face-text);padding:var(--s6) var(--s5)}
+h1{font:400 var(--t-px-md)/1 var(--face-display);text-transform:uppercase;margin-bottom:var(--s4)}
+h2{font:400 var(--t-px-sm)/1 var(--face-display);text-transform:uppercase;margin:var(--s6) 0 var(--s3);padding-top:var(--s4);border-top:1px dashed var(--rule-soft)}
+.decides{color:var(--ink-dim);margin:var(--s3) 0 0;max-width:70ch}
+.frame{border:1px solid var(--rule-strong);max-width:960px;margin-top:var(--s3)}
+.bar{display:flex;flex-wrap:wrap;gap:0;border-bottom:1px solid var(--rule-strong)}
+.bar>*{padding:var(--s2) var(--s4);border-right:1px solid var(--rule-soft)}
+.bar .brand{font:400 var(--t-px-sm)/1.5 var(--face-display)}
+.bar .here{background:var(--ground-raised)}
+.bar .right{margin-left:auto;border-right:0;border-left:1px solid var(--rule-soft)}
+.body{padding:var(--s4)}
+table{width:100%;border-collapse:collapse;font-size:var(--t-row)}
+th{text-align:left;font-size:var(--t-meta);text-transform:uppercase;color:var(--ink-dim);padding:var(--s2) var(--s3);border-bottom:1px solid var(--rule-strong)}
+td{padding:var(--s2) var(--s3);border-bottom:1px dashed var(--rule-soft);vertical-align:top}
+.dim{color:var(--ink-dim)}
+button,.button{font:inherit;color:var(--ink);background:none;border:1px solid var(--rule-strong);padding:var(--s1) var(--s3);border-radius:0;cursor:pointer}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+button.danger{border-color:var(--accent);color:var(--accent)}
+input,select{font:inherit;color:var(--ink);background:var(--ground-sunk);border:1px solid var(--rule-strong);padding:var(--s1) var(--s2);border-radius:0}
+label{display:block;margin:var(--s2) 0}
+.state{display:inline-flex;align-items:center;gap:var(--s2);font-size:var(--t-meta);text-transform:uppercase}
+.m{display:inline-grid;gap:1px}
+.m.fine{grid-template-columns:repeat(3,5px)}.m.fine i{width:5px;height:5px}
+.m.coarse{grid-template-columns:repeat(2,8px)}.m.coarse i{width:8px;height:8px}
+.m i{background:currentColor;opacity:.18}.m i.on{opacity:1}
+.s-ok{color:var(--ink)}.s-held{color:var(--copper)}.s-pending{color:var(--ink-dim)}.s-blocked{color:var(--accent)}
+.note{border-left:1px solid var(--rule-strong);padding-left:var(--s3);color:var(--ink-dim)}
+.note b{color:var(--accent);font-weight:400}
+.secret{border:1px solid var(--accent);padding:var(--s4);margin:var(--s3) 0}
+.secret code{display:block;margin:var(--s2) 0;word-break:break-all}
+.split{display:grid;grid-template-columns:16rem 1fr}
+.split nav{border-right:1px solid var(--rule-soft);padding:var(--s3)}
+.split article{padding:var(--s4)}
+.unshared{text-decoration:underline dotted}
+ul.tree{list-style:none;padding-left:var(--s3)}

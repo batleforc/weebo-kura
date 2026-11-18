@@ -631,7 +631,10 @@ async fn the_cli_issues_lists_and_revokes_scoped_tokens() {
     assert_eq!(code(r), 0);
     let create = |cidr: Vec<String>| TokenAction::Create {
         vault: "knowledge".into(),
-        prefix: "agents/".into(),
+        name: Some("agent".into()),
+        read: vec!["notes/".into()],
+        write: vec![],
+        prefix: Some("agents/".into()),
         expires: "30d".into(),
         cidr,
     };
@@ -662,6 +665,38 @@ async fn the_cli_issues_lists_and_revokes_scoped_tokens() {
         vault: "knowledge".into(),
         id,
     };
+    let stored: (String, serde_json::Value) =
+        sqlx::query_as("SELECT name, scopes FROM scoped_token WHERE id = $1")
+            .bind(id)
+            .fetch_one(&e.t.owner)
+            .await
+            .unwrap();
+    assert_eq!(stored.0, "agent");
+    assert_eq!(
+        stored.1,
+        serde_json::json!([{ "path": "notes/", "mode": "read" }, { "path": "agents/", "mode": "read" }]),
+        "--prefix is one more --read"
+    );
+    // RFC 0004 §4.5: the two refusals a manager meets first, both exit 3.
+    let write = |folder: &str| TokenAction::Create {
+        vault: "knowledge".into(),
+        name: None,
+        read: vec![],
+        write: vec![folder.into()],
+        prefix: None,
+        expires: "30d".into(),
+        cidr: vec!["127.0.0.0/8".into()],
+    };
+    assert_eq!(
+        code(commands::token(&a, write("/")).await),
+        3,
+        "whole-vault write"
+    );
+    assert_eq!(
+        code(commands::token(&a, write("Resumes/")).await),
+        3,
+        "tenant switch off"
+    );
     assert_eq!(code(commands::token(&a, revoke).await), 0);
     let revoked: bool = sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM scoped_token")
         .fetch_one(&e.t.owner)
@@ -781,4 +816,180 @@ async fn the_cli_syncs_one_users_configuration_only() {
     );
     let state = std::fs::read_to_string(fa.join(".kura/config-state.json")).unwrap();
     assert!(!state.contains("snippets/wide.css"), "forgotten here");
+}
+
+/// RFC 0004 §6.P, in process: a bot holding a scoped token and no login
+/// attaches and gets its readable folders only (4), pushes a recap under its
+/// write folder (1), and is refused by its own client, before anything is
+/// sent, when a file leaves that folder (5).
+#[tokio::test]
+async fn a_scoped_token_syncs_its_folders_and_refuses_the_rest() {
+    let Some(st) = storage(module_path!()).await else {
+        return;
+    };
+    let Some(e) = env_with(module_path!(), Some(st)).await else {
+        return;
+    };
+    let docs = common::app::CONFIG.replacen(
+        "  vaultNamespaces: [maxime]",
+        "  vaultNamespaces: [maxime]\n  scopedTokens: { write: true }",
+        1,
+    );
+    let cfgdir = dir("token-docs");
+    std::fs::write(cfgdir.join("config.yaml"), docs).unwrap();
+    let docs = kura_server::reconcile::files::read_dir(&cfgdir).unwrap();
+    kura_server::reconcile::reconcile(&e.t.app, &docs, true)
+        .await
+        .unwrap();
+    e.state.set_snapshot(
+        kura_server::reconcile::snapshot::load_if_changed(&e.t.app, None)
+            .await
+            .unwrap()
+            .unwrap(),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = format!("http://{}", listener.local_addr().unwrap());
+    let router = app(e.state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+    tokio::spawn(async move { axum::serve(listener, router).await });
+
+    // The game master: an admin on a device, with the campaign's notes.
+    let admin = e.key.token("boss", "gm", &["maxime-admins"]);
+    let gm = Ctx {
+        home: dir("gm-home"),
+        access_token: Some(admin.clone()),
+    };
+    let issuer = "https://auth.example.org/application/o/kura/".to_owned();
+    let r = commands::login(
+        &gm,
+        server.clone(),
+        issuer,
+        "kura-cli".into(),
+        Some("gm".into()),
+    )
+    .await;
+    assert_eq!(code(r), 0);
+    let gm_dir = dir("gm-vault");
+    for (path, text) in [
+        ("Sessions/1.md", "session one\n"),
+        ("MJ/secret.md", "the villain\n"),
+    ] {
+        std::fs::create_dir_all(gm_dir.join(path).parent().unwrap()).unwrap();
+        std::fs::write(gm_dir.join(path), text).unwrap();
+    }
+    assert_eq!(
+        code(commands::attach(&gm, "knowledge", gm_dir.clone(), true).await),
+        0
+    );
+
+    let device = kura_cli::config::Config::load(&gm.home)
+        .unwrap()
+        .unwrap()
+        .device
+        .unwrap();
+    let v = common::app::vault_id(&e, "knowledge").await;
+    let (status, issued) = e
+        .call(
+            "POST",
+            &format!("/v1/vaults/{v}/tokens"),
+            &admin,
+            Some(&device.to_string()),
+            Some(serde_json::json!({
+                "name": "discord-recap",
+                "scopes": [{ "path": "Sessions/", "mode": "read" }, { "path": "Resumes/", "mode": "write" }],
+                "expiresInDays": 30,
+                "cidrs": ["127.0.0.0/8"],
+            })),
+        )
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED, "{issued}");
+
+    // The bot: a token and the server's address, nothing else.
+    let bot = Ctx {
+        home: dir("bot-home"),
+        access_token: Some(issued["token"].as_str().unwrap().to_owned()),
+    };
+    kura_cli::config::Config {
+        server,
+        ..Default::default()
+    }
+    .save(&bot.home)
+    .unwrap();
+    let bot_dir = dir("bot-vault");
+    assert_eq!(
+        code(commands::attach(&bot, "knowledge", bot_dir.clone(), true).await),
+        0
+    );
+    assert_eq!(
+        files(&bot_dir),
+        [("Sessions/1.md".to_owned(), "session one\n".to_owned())],
+        "observation 4: nothing of MJ/"
+    );
+    assert!(
+        kura_cli::config::Config::load(&bot.home)
+            .unwrap()
+            .unwrap()
+            .device
+            .is_none(),
+        "a token registers no device"
+    );
+    let on_disk = std::fs::read_to_string(bot.home.join("config.json")).unwrap();
+    assert!(!on_disk.contains("kura_"), "the token is never written");
+
+    // Observation 1: a recap under the write folder reaches the game master.
+    std::fs::create_dir_all(bot_dir.join("Resumes")).unwrap();
+    std::fs::write(bot_dir.join("Resumes/1.md"), "recap one\n").unwrap();
+    assert_eq!(code(commands::sync_cmd(&bot, None, false, false).await), 0);
+    assert_eq!(code(commands::sync_cmd(&gm, None, false, false).await), 0);
+    assert_eq!(
+        std::fs::read_to_string(gm_dir.join("Resumes/1.md")).unwrap(),
+        "recap one\n"
+    );
+    let by: String =
+        sqlx::query_scalar("SELECT user_sub FROM revision WHERE path = 'Resumes/1.md'")
+            .fetch_one(&e.t.owner)
+            .await
+            .unwrap();
+    assert_eq!(by, format!("key:{}", issued["id"].as_str().unwrap()));
+
+    // Observation 5: moved out of the write folder, the client refuses
+    // before sending; the server counted no refusal and nothing moved.
+    let head = || async {
+        sqlx::query_scalar::<_, i64>("SELECT head_seq FROM vault WHERE name = 'knowledge'")
+            .fetch_one(&e.t.owner)
+            .await
+            .unwrap()
+    };
+    let before = head().await;
+    std::fs::create_dir_all(bot_dir.join("MJ")).unwrap();
+    std::fs::rename(bot_dir.join("Resumes/1.md"), bot_dir.join("MJ/1.md")).unwrap();
+    let refused = commands::sync_cmd(&bot, None, false, false).await;
+    assert_eq!(code(refused), 3);
+    assert_eq!(head().await, before);
+    assert_eq!(
+        e.state
+            .metrics
+            .token_writes_total
+            .with_label_values(&["refused"])
+            .get(),
+        0
+    );
+    // A file it only reads, edited: refused the same way.
+    std::fs::rename(bot_dir.join("MJ/1.md"), bot_dir.join("Resumes/1.md")).unwrap();
+    std::fs::write(bot_dir.join("Sessions/1.md"), "rewritten by the bot\n").unwrap();
+    assert_eq!(code(commands::sync_cmd(&bot, None, false, false).await), 3);
+    assert_eq!(head().await, before);
+    // A refused push still pulls (code review of 2026-11-17, #1): the game
+    // master's new session reaches the bot whose own edit stays local.
+    std::fs::write(gm_dir.join("Sessions/2.md"), "session two\n").unwrap();
+    assert_eq!(code(commands::sync_cmd(&gm, None, false, false).await), 0);
+    assert_eq!(code(commands::sync_cmd(&bot, None, false, false).await), 3);
+    assert_eq!(
+        std::fs::read_to_string(bot_dir.join("Sessions/2.md")).unwrap(),
+        "session two\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(bot_dir.join("Sessions/1.md")).unwrap(),
+        "rewritten by the bot\n",
+        "the local edit is kept"
+    );
 }

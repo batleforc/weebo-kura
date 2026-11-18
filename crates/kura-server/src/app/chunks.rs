@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use super::SharedState;
 use super::body::{Body, Raw};
-use super::device::DeviceCaller;
-use crate::authz::{self, VaultAccess};
+use super::reader::{KeyCaller, NOT_UPLOADED, Writer};
+use crate::authz::VaultAccess;
 use crate::db;
 use crate::problem::{ApiError, Problem, ProblemType};
 use crate::store::{Storage, crypto};
@@ -32,6 +32,9 @@ pub const MAX_BATCH_BODY: usize = 128 << 10;
 pub const BATCH_FETCHES: usize = 8;
 /// `chunks/batch` answers one replica builds at once (RFC 0002 §7.5).
 pub const BATCHES_IN_FLIGHT: usize = 8;
+/// A `chunks/upload` body: 4 MiB of chunks and a header per record
+/// (RFC 0002 §6.1).
+pub const MAX_UPLOAD_BODY: usize = MAX_BATCH_BYTES + MAX_HASHES * kura_core::wire::RECORD_HEADER;
 /// AES-GCM with random nonces: warn well before 2^32 encryptions under one key (§6.6).
 pub const ENCRYPTION_WARNING: i64 = 1 << 30;
 
@@ -73,18 +76,6 @@ fn parse_hash(s: &str) -> Result<ChunkHash, ApiError> {
     })
 }
 
-async fn access(
-    state: &SharedState,
-    caller: &DeviceCaller,
-    v: Uuid,
-    min: VaultRole,
-) -> Result<VaultAccess, ApiError> {
-    let snap = state
-        .snapshot()
-        .ok_or(ApiError::of(ProblemType::Unavailable))?;
-    authz::require_role(&state.db, &snap, &caller.caller.principal, v, min).await
-}
-
 /// Which of these chunks the vault lacks; present ones are kept from garbage collection.
 #[utoipa::path(
     post,
@@ -100,11 +91,11 @@ async fn access(
 )]
 pub async fn missing_chunks(
     State(state): State<SharedState>,
-    caller: DeviceCaller,
+    caller: Writer,
     Path(v): Path<Uuid>,
     Body(body): Body<MissingRequest>,
 ) -> Result<Json<MissingResponse>, ApiError> {
-    let a = access(&state, &caller, v, VaultRole::Editor).await?;
+    let a = caller.access(&state, v).await?;
     if body.hashes.len() > MAX_HASHES {
         return Err(ApiError::with_detail(
             ProblemType::InvalidRequest,
@@ -116,7 +107,20 @@ pub async fn missing_chunks(
         .iter()
         .map(|h| parse_hash(h))
         .collect::<Result<Vec<_>, _>>()?;
-    let raw: Vec<Vec<u8>> = hashes.iter().map(|h| h.as_bytes().to_vec()).collect();
+    // A token is told about what it may name only: everything else is
+    // "missing", stored or not, and is not kept from collection (RFC 0004 T3).
+    let asked = match caller.key() {
+        Some(k) => {
+            let known = k.knows(&state, &a, &hashes, true).await?;
+            hashes
+                .iter()
+                .filter(|h| known.contains(h))
+                .copied()
+                .collect()
+        }
+        None => hashes.clone(),
+    };
+    let raw: Vec<Vec<u8>> = asked.iter().map(|h| h.as_bytes().to_vec()).collect();
     let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
     // "Present" refreshes last_touched, so GC cannot take it before the commit (§6.4).
     let present: Vec<Vec<u8>> =
@@ -154,11 +158,11 @@ pub async fn missing_chunks(
 )]
 pub async fn put_chunk(
     State(state): State<SharedState>,
-    caller: DeviceCaller,
+    caller: Writer,
     Path((v, hash)): Path<(Uuid, String)>,
     Raw(body): Raw,
 ) -> Result<StatusCode, ApiError> {
-    let a = access(&state, &caller, v, VaultRole::Editor).await?;
+    let a = caller.access(&state, v).await?;
     storage(&state)?;
     let hash = parse_hash(&hash)?;
     // T6: the bytes are their address, checked before anything is stored.
@@ -170,6 +174,10 @@ pub async fn put_chunk(
         return Err(ApiError::of(ProblemType::HashMismatch));
     }
     store_chunk(&state, &a, v, hash, body).await?;
+    // Sending the bytes is the proof, stored already or not (RFC 0004 §6.4).
+    if let Some(k) = caller.key() {
+        k.uploaded(&state, &a, &hash, true).await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -182,107 +190,176 @@ pub(super) async fn store_chunk(
     hash: ChunkHash,
     body: bytes::Bytes,
 ) -> Result<(), ApiError> {
+    store_chunks(state, a, v, vec![(hash, body)]).await
+}
+
+/// [`store_chunk`] for many chunks at once (RFC 0002 phase 3): one
+/// transaction to find what is already stored and check the quota for the
+/// sum, the objects sealed and stored [`BATCH_FETCHES`] at a time, one
+/// transaction to record them.
+pub(super) async fn store_chunks(
+    state: &SharedState,
+    a: &VaultAccess,
+    v: Uuid,
+    chunks: Vec<(ChunkHash, bytes::Bytes)>,
+) -> Result<(), ApiError> {
+    use futures_util::{StreamExt as _, TryStreamExt as _};
     let store = storage(state)?;
-    let len = i64::try_from(body.len()).map_err(|_| ApiError::of(ProblemType::PayloadTooLarge))?;
+    let mut seen = std::collections::HashSet::new();
+    let chunks: Vec<_> = chunks
+        .into_iter()
+        .filter(|(h, _)| seen.insert(*h))
+        .collect();
+    let raw: Vec<Vec<u8>> = chunks.iter().map(|(h, _)| h.as_bytes().to_vec()).collect();
     // 1. A short transaction: already present? over quota? No connection is
     //    held across the Vault and object storage calls below (review P1).
     let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
-    let present: bool = sqlx::query_scalar(
-        "UPDATE chunk SET last_touched = now() WHERE vault_id = $1 AND hash = $2 RETURNING true",
+    let present: std::collections::HashSet<Vec<u8>> = sqlx::query_scalar(
+        "UPDATE chunk SET last_touched = now() WHERE vault_id = $1 AND hash = ANY($2) RETURNING hash",
     )
     .bind(v)
-    .bind(hash.as_bytes().as_slice())
-    .fetch_optional(&mut *tx)
+    .bind(&raw)
+    .fetch_all(&mut *tx)
     .await?
-    .unwrap_or(false);
-    if present {
+    .into_iter()
+    .collect();
+    let todo: Vec<_> = chunks
+        .into_iter()
+        .filter(|(h, _)| !present.contains(h.as_bytes().as_slice()))
+        .collect();
+    if todo.is_empty() {
         tx.commit().await?;
         return Ok(());
     }
-    check_quota(state, a, &mut tx, len).await?;
+    let adding = todo.iter().fold(0i64, |n, (_, b)| {
+        n.saturating_add(i64::try_from(b.len()).unwrap_or(i64::MAX))
+    });
+    check_quota(state, a, &mut tx, adding).await?;
     tx.commit().await?;
 
     // 2. Seal and store, no transaction open. Storage first: if it fails, no
-    //    row points at a missing object (§14).
+    //    row points at a missing object (§14); objects already put are left
+    //    to the orphan sweep (migration 0011).
     let key = store
         .keys
         .get(&state.db, a.tenant, &a.tenant_slug, v)
         .await?;
-    let object_key = key
-        .object_key(v, &hash)
-        .map_err(|e| ApiError::Unavailable(e.to_string()))?;
-    let sealed = tokio::task::spawn_blocking(move || crypto::seal(&key, v, &hash, &body))
-        .await
-        .map_err(|e| ApiError::Unavailable(e.to_string()))?
-        .map_err(|e| ApiError::Unavailable(e.to_string()))?;
-    let path = object_store::path::Path::from(object_key.as_str());
     let objects = store.objects();
-    objects
-        .put(&path, sealed.into())
-        .await
-        .map_err(|e| ApiError::Unavailable(e.to_string()))?;
+    let stored: Vec<(ChunkHash, i32, String)> = futures_util::stream::iter(todo)
+        .map(|(hash, body)| {
+            let (key, objects) = (key.clone(), objects.clone());
+            async move {
+                let size = i32::try_from(body.len())
+                    .map_err(|_| ApiError::of(ProblemType::PayloadTooLarge))?;
+                let object_key = key
+                    .object_key(v, &hash)
+                    .map_err(|e| ApiError::Unavailable(e.to_string()))?;
+                let sealed =
+                    tokio::task::spawn_blocking(move || crypto::seal(&key, v, &hash, &body))
+                        .await
+                        .map_err(|e| ApiError::Unavailable(e.to_string()))?
+                        .map_err(|e| ApiError::Unavailable(e.to_string()))?;
+                objects
+                    .put(
+                        &object_store::path::Path::from(object_key.as_str()),
+                        sealed.into(),
+                    )
+                    .await
+                    .map_err(|e| ApiError::Unavailable(e.to_string()))?;
+                Ok::<_, ApiError>((hash, size, object_key))
+            }
+        })
+        .buffer_unordered(BATCH_FETCHES)
+        .try_collect()
+        .await?;
+    let paths = |only: &dyn Fn(&ChunkHash) -> bool| -> Vec<object_store::path::Path> {
+        stored
+            .iter()
+            .filter(|(h, _, _)| only(h))
+            .map(|(_, _, k)| object_store::path::Path::from(k.as_str()))
+            .collect()
+    };
 
-    // 3. Record it. The tenant lock serializes this check with every other
+    // 3. Record them. The tenant lock serializes this check with every other
     //    upload of the tenant, so concurrent uploads cannot overshoot the
     //    quota (review P3).
-    let (tx, inserted, count) = match record_chunk(state, a, v, &hash, len, &object_key).await {
+    let (tx, inserted, count) = match record_chunks(state, a, v, &stored).await {
         Ok(recorded) => recorded,
         Err(e) => {
             // Refused before the commit: the transaction rolled back, no row
-            // names the object.
-            delete_orphan(&objects, &path).await;
+            // names the objects.
+            for path in paths(&|_| true) {
+                delete_orphan(&objects, &path).await;
+            }
             return Err(e);
         }
     };
-    // A failed commit is ambiguous: the row may have landed. The object stays
-    // for the orphan sweep (migration 0011) rather than leave a row naming a
-    // deleted object (review 2026-11-15 #3).
+    // A failed commit is ambiguous: the rows may have landed. The objects
+    // stay for the orphan sweep rather than leave rows naming deleted
+    // objects (review 2026-11-15 #3).
     tx.commit().await?;
     if count >= ENCRYPTION_WARNING {
         tracing::warn!(vault = %v, encryptions = count, "data key nearing its random-nonce bound; rotate the vault key");
     }
-    if !inserted {
-        // Another upload of the same chunk won; ours is an orphan object.
+    // Another upload of the same chunk won; ours are orphan objects.
+    for path in paths(&|h| !inserted.contains(h.as_bytes().as_slice())) {
         delete_orphan(&objects, &path).await;
     }
     Ok(())
 }
 
-/// The chunk's row and the vault's encryption count, in a transaction left
-/// open for the caller to commit: `(transaction, inserted, encryptions)`.
-async fn record_chunk<'a>(
+/// The chunks' rows and the vault's encryption count, in a transaction left
+/// open for the caller to commit: `(transaction, inserted hashes, encryptions)`.
+async fn record_chunks<'a>(
     state: &'a SharedState,
     a: &VaultAccess,
     v: Uuid,
-    hash: &ChunkHash,
-    len: i64,
-    object_key: &str,
-) -> Result<(sqlx::Transaction<'a, sqlx::Postgres>, bool, i64), ApiError> {
-    let size = i32::try_from(len).map_err(|_| ApiError::of(ProblemType::PayloadTooLarge))?;
+    stored: &[(ChunkHash, i32, String)],
+) -> Result<
+    (
+        sqlx::Transaction<'a, sqlx::Postgres>,
+        std::collections::HashSet<Vec<u8>>,
+        i64,
+    ),
+    ApiError,
+> {
+    let hashes: Vec<Vec<u8>> = stored
+        .iter()
+        .map(|(h, _, _)| h.as_bytes().to_vec())
+        .collect();
+    let sizes: Vec<i32> = stored.iter().map(|(_, s, _)| *s).collect();
+    let keys: Vec<&str> = stored.iter().map(|(_, _, k)| k.as_str()).collect();
+    let adding = sizes
+        .iter()
+        .fold(0i64, |n, s| n.saturating_add(i64::from(*s)));
     let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('kura.quota:' || $1::text))")
         .bind(a.tenant)
         .execute(&mut *tx)
         .await?;
-    check_quota(state, a, &mut tx, len).await?;
-    let inserted: Option<bool> = sqlx::query_scalar(
-        "INSERT INTO chunk (vault_id, tenant_id, hash, size, object_key) VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (vault_id, hash) DO NOTHING RETURNING true",
+    check_quota(state, a, &mut tx, adding).await?;
+    let inserted: std::collections::HashSet<Vec<u8>> = sqlx::query_scalar(
+        "INSERT INTO chunk (vault_id, tenant_id, hash, size, object_key)
+         SELECT $1, $2, h, s, k FROM unnest($3::bytea[], $4::int[], $5::text[]) AS u(h, s, k)
+         ON CONFLICT (vault_id, hash) DO NOTHING RETURNING hash",
     )
     .bind(v)
     .bind(a.tenant)
-    .bind(hash.as_bytes().as_slice())
-    .bind(size)
-    .bind(object_key)
-    .fetch_optional(&mut *tx)
-    .await?;
+    .bind(&hashes)
+    .bind(&sizes)
+    .bind(&keys)
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .collect();
     let count: i64 = sqlx::query_scalar(
-        "UPDATE vault SET encryptions = encryptions + 1 WHERE id = $1 RETURNING encryptions",
+        "UPDATE vault SET encryptions = encryptions + $2 WHERE id = $1 RETURNING encryptions",
     )
     .bind(v)
+    .bind(i64::try_from(stored.len()).unwrap_or(i64::MAX))
     .fetch_one(&mut *tx)
     .await?;
-    Ok((tx, inserted.is_some(), count))
+    Ok((tx, inserted, count))
 }
 
 async fn delete_orphan(
@@ -451,11 +528,11 @@ pub(super) async fn read_blob(
 )]
 pub async fn put_blob(
     State(state): State<SharedState>,
-    caller: DeviceCaller,
+    caller: Writer,
     Path((v, hash)): Path<(Uuid, String)>,
     Body(body): Body<BlobManifest>,
 ) -> Result<StatusCode, ApiError> {
-    let a = access(&state, &caller, v, VaultRole::Editor).await?;
+    let a = caller.access(&state, v).await?;
     let hash = parse_hash(&hash)?;
     let chunks = body
         .chunks
@@ -476,7 +553,22 @@ pub async fn put_blob(
     if max_file.is_some_and(|m| body.size > m.bytes()) {
         return Err(ApiError::of(ProblemType::PayloadTooLarge));
     }
+    // A token's manifest names only chunks it reads or uploaded: otherwise
+    // it could name a hash seen elsewhere and read the content back (T2).
+    if let Some(k) = caller.key() {
+        let known = k.knows(&state, &a, &chunks, true).await?;
+        if !chunks.iter().all(|c| known.contains(c)) {
+            return Err(KeyCaller::refuse(
+                &state,
+                ProblemType::HashMismatch,
+                NOT_UPLOADED,
+            ));
+        }
+    }
     store_blob(&state, &a, v, hash, body.size, &chunks).await?;
+    if let Some(k) = caller.key() {
+        k.uploaded(&state, &a, &hash, false).await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -489,9 +581,24 @@ pub(super) async fn store_blob(
     size: u64,
     chunks: &[ChunkHash],
 ) -> Result<(), ApiError> {
+    let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
+    record_blob(&mut tx, a, v, hash, size, chunks).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`store_blob`] within the caller's transaction, so that several
+/// manifests are stored together or not at all.
+async fn record_blob(
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+    a: &VaultAccess,
+    v: Uuid,
+    hash: ChunkHash,
+    size: u64,
+    chunks: &[ChunkHash],
+) -> Result<(), ApiError> {
     let raw: Vec<Vec<u8>> = chunks.iter().map(|h| h.as_bytes().to_vec()).collect();
     let size = i64::try_from(size).map_err(|_| ApiError::of(ProblemType::PayloadTooLarge))?;
-    let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
     // FOR KEY SHARE: garbage collection skips these rows until this commits,
     // and a row it already took is not returned, so the client re-uploads
     // (decision 24).
@@ -500,7 +607,7 @@ pub(super) async fn store_blob(
     )
     .bind(v)
     .bind(&raw)
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await?;
     let mut total: i64 = 0;
     for h in &raw {
@@ -530,7 +637,7 @@ pub(super) async fn store_blob(
     .bind(a.tenant)
     .bind(hash.as_bytes().as_slice())
     .bind(size)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await?;
     if inserted == Some(true) {
         let positions: Vec<i32> = (0..raw.len())
@@ -545,10 +652,9 @@ pub(super) async fn store_blob(
         .bind(hash.as_bytes().as_slice())
         .bind(positions)
         .bind(&raw)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
-    tx.commit().await?;
     Ok(())
 }
 
@@ -569,17 +675,14 @@ pub(super) async fn store_content(
     let data = bytes::Bytes::from(data);
     let spans = kura_core::chunks(&data, params);
     let hashes: Vec<ChunkHash> = spans.iter().map(|c| c.hash).collect();
-    for span in &spans {
-        let end = span.offset.saturating_add(span.len);
-        store_chunk(
-            state,
-            a,
-            v,
-            span.hash,
-            data.slice(span.offset..end.min(data.len())),
-        )
-        .await?;
-    }
+    let parts = spans
+        .iter()
+        .map(|span| {
+            let end = span.offset.saturating_add(span.len).min(data.len());
+            (span.hash, data.slice(span.offset.min(end)..end))
+        })
+        .collect();
+    store_chunks(state, a, v, parts).await?;
     let size = data.len() as u64;
     let blob = blob_hash(size, &hashes);
     store_blob(state, a, v, blob, size, &hashes).await?;
@@ -874,22 +977,11 @@ pub async fn batch_chunks(
         .buffered(BATCH_FETCHES)
         .collect()
         .await;
-    let mut out = Vec::with_capacity(budget.saturating_add(plan.len().saturating_mul(37)));
+    let mut out = Vec::with_capacity(
+        budget.saturating_add(plan.len().saturating_mul(kura_core::wire::RECORD_HEADER)),
+    );
     for ((h, _), part) in plan.iter().zip(parts) {
-        out.extend_from_slice(h.as_bytes());
-        match part? {
-            Some(bytes) => {
-                out.push(0);
-                out.extend_from_slice(
-                    &u32::try_from(bytes.len()).unwrap_or(u32::MAX).to_be_bytes(),
-                );
-                out.extend_from_slice(&bytes);
-            }
-            None => {
-                out.push(1);
-                out.extend_from_slice(&0u32.to_be_bytes());
-            }
-        }
+        kura_core::wire::write_record(&mut out, h, part?.as_deref());
     }
     let m = &state.metrics.batch_items_total;
     m.with_label_values(&["chunks", "found"])
@@ -905,6 +997,174 @@ pub async fn batch_chunks(
     Ok(response)
 }
 
+/// Many chunks in one call (RFC 0002 phase 3): the records of `chunks/batch`,
+/// every one found. Each chunk's BLAKE3 is checked before any is stored
+/// (T7), as `put_chunk` checks one.
+#[utoipa::path(
+    post,
+    path = "/vaults/{v}/chunks/upload",
+    tag = "chunks",
+    params(("v" = Uuid, Path, description = "Vault id"), ("X-Kura-Device" = Uuid, Header, description = "This device")),
+    request_body(
+        content = Vec<u8>,
+        content_type = "application/octet-stream",
+        description = "1 to 1,000 records `hash[32] 0 length[4, big-endian] bytes`, at most 4 MiB of chunks"
+    ),
+    responses(
+        (status = 204, description = "Every chunk stored, or already present"),
+        (status = 400, description = "A record cut short, missing, or no record", body = Problem, content_type = "application/problem+json"),
+        (status = 413, description = "Over 4 MiB of chunks", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "A chunk that is not its address (nothing stored), or quota exceeded", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("bearer_token" = [])),
+)]
+pub async fn upload_chunks(
+    State(state): State<SharedState>,
+    caller: Writer,
+    Path(v): Path<Uuid>,
+    Raw(body): Raw,
+) -> Result<StatusCode, ApiError> {
+    let a = caller.access(&state, v).await?;
+    storage(&state)?;
+    let records = kura_core::wire::parse_records(&body)
+        .map_err(|e| ApiError::with_detail(ProblemType::InvalidRequest, e.to_string()))?;
+    if records.is_empty() || records.len() > MAX_HASHES {
+        return Err(ApiError::with_detail(
+            ProblemType::InvalidRequest,
+            "between 1 and 1,000 records",
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut chunks: Vec<(ChunkHash, bytes::Bytes)> = Vec::with_capacity(records.len());
+    let mut total = 0usize;
+    for (h, data) in records {
+        let data = data.ok_or(ApiError::with_detail(
+            ProblemType::InvalidRequest,
+            "an upload record carries its chunk (status 0)",
+        ))?;
+        total = total.saturating_add(data.len());
+        if seen.insert(h) {
+            chunks.push((h, body.slice_ref(data)));
+        }
+    }
+    if total > MAX_BATCH_BYTES {
+        return Err(ApiError::of(ProblemType::PayloadTooLarge));
+    }
+    // T7: every chunk is its address, or nothing is stored.
+    let check = chunks.clone();
+    let wrong =
+        tokio::task::spawn_blocking(move || check.iter().any(|(h, d)| ChunkHash::of(d) != *h))
+            .await
+            .map_err(|e| ApiError::Unavailable(e.to_string()))?;
+    if wrong {
+        return Err(ApiError::of(ProblemType::HashMismatch));
+    }
+    let hashes: Vec<ChunkHash> = chunks.iter().map(|(h, _)| *h).collect();
+    let stored = chunks.len();
+    store_chunks(&state, &a, v, chunks).await?;
+    if let Some(k) = caller.key() {
+        for h in &hashes {
+            k.uploaded(&state, &a, h, true).await?;
+        }
+    }
+    state
+        .metrics
+        .batch_items_total
+        .with_label_values(&["upload", "stored"])
+        .inc_by(stored as u64);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlobUploadRequest {
+    /// 1 to 1,000 manifests, each under its address.
+    pub manifests: Vec<HashedManifest>,
+}
+
+/// Many manifests in one call (RFC 0002 phase 3), with the checks of
+/// `PUT /blobs/{hash}`: all stored, or none.
+#[utoipa::path(
+    post,
+    path = "/vaults/{v}/blobs/upload",
+    tag = "chunks",
+    params(("v" = Uuid, Path, description = "Vault id"), ("X-Kura-Device" = Uuid, Header, description = "This device")),
+    request_body = BlobUploadRequest,
+    responses(
+        (status = 204, description = "Every manifest stored, or already present"),
+        (status = 400, description = "No manifest, more than 1,000, or a malformed hash", body = Problem, content_type = "application/problem+json"),
+        (status = 413, description = "A file over the tenant's maxFileSize", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "A hash mismatch, a chunk missing, or sizes that disagree: nothing stored", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("bearer_token" = [])),
+)]
+pub async fn upload_blobs(
+    State(state): State<SharedState>,
+    caller: Writer,
+    Path(v): Path<Uuid>,
+    Body(body): Body<BlobUploadRequest>,
+) -> Result<StatusCode, ApiError> {
+    let a = caller.access(&state, v).await?;
+    if body.manifests.is_empty() || body.manifests.len() > MAX_HASHES {
+        return Err(ApiError::with_detail(
+            ProblemType::InvalidRequest,
+            "between 1 and 1,000 manifests",
+        ));
+    }
+    let snap = state
+        .snapshot()
+        .ok_or(ApiError::of(ProblemType::Unavailable))?;
+    let max_file = snap
+        .config
+        .tenants
+        .get(a.tenant_slug.as_str())
+        .and_then(|t| t.doc.spec.quota.max_file_size);
+    let mut parsed = Vec::with_capacity(body.manifests.len());
+    for m in &body.manifests {
+        let hash = parse_hash(&m.hash)?;
+        let chunks = m
+            .chunks
+            .iter()
+            .map(|h| parse_hash(h))
+            .collect::<Result<Vec<_>, _>>()?;
+        if blob_hash(m.size, &chunks) != hash {
+            return Err(ApiError::of(ProblemType::HashMismatch));
+        }
+        if max_file.is_some_and(|x| m.size > x.bytes()) {
+            return Err(ApiError::of(ProblemType::PayloadTooLarge));
+        }
+        parsed.push((hash, m.size, chunks));
+    }
+    // As `put_blob`: a token names only chunks it reads or uploaded (T2).
+    if let Some(k) = caller.key() {
+        let mut all: Vec<ChunkHash> = parsed
+            .iter()
+            .flat_map(|(_, _, c)| c.iter().copied())
+            .collect();
+        all.sort();
+        all.dedup();
+        let known = k.knows(&state, &a, &all, true).await?;
+        if !all.iter().all(|c| known.contains(c)) {
+            return Err(KeyCaller::refuse(
+                &state,
+                ProblemType::HashMismatch,
+                NOT_UPLOADED,
+            ));
+        }
+    }
+    let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
+    for (hash, size, chunks) in &parsed {
+        record_blob(&mut tx, &a, v, *hash, *size, chunks).await?;
+    }
+    tx.commit().await?;
+    if let Some(k) = caller.key() {
+        for (hash, _, _) in &parsed {
+            k.uploaded(&state, &a, hash, false).await?;
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// One stored object, decrypted with the vault's key and checked against its address.
 async fn open_object(
     state: &SharedState,
@@ -913,6 +1173,9 @@ async fn open_object(
     hash: ChunkHash,
     object_key: &str,
 ) -> Result<Vec<u8>, ApiError> {
+    // Every object-storage read passes here: RFC 0005 §6.P observation 2
+    // checks a refused chunk never reaches it (RUST_LOG=kura::object_read=debug).
+    tracing::debug!(target: "kura::object_read", vault = %v, chunk = %hash, "object read");
     let stored = storage(state)?
         .objects()
         .get(&object_store::path::Path::from(object_key))

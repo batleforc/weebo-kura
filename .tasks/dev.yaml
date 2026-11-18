@@ -45,13 +45,34 @@ tasks:
       - echo "export KURA_TEST_DATABASE_URL=postgres://postgres:kura-dev@127.0.0.1:{{.PG_PORT}}/postgres"
 
   dev:vault:
-    desc: "Start OpenBao in dev mode on localhost:58200 (root token kura-dev, in memory) (usage: task dev:vault [VAULT_PORT=58200])"
+    desc: "Start a persistent OpenBao on localhost:58200 (token kura-dev; data in the volume kura-dev-vault-data, unseal key in dev/openbao-keys.json), initialised and unsealed (usage: task dev:vault [VAULT_PORT=58200])"
     cmds:
       - task: dev:network
       - cmd: |
           podman container exists {{.VAULT_CONTAINER}} || \
-          podman run -d --name {{.VAULT_CONTAINER}} --network {{.NET}} -p 127.0.0.1:{{.VAULT_PORT}}:8200 -e BAO_DEV_ROOT_TOKEN_ID=kura-dev {{.VAULT_IMAGE}}
+          podman run -d --name {{.VAULT_CONTAINER}} --network {{.NET}} -p 127.0.0.1:{{.VAULT_PORT}}:8200 \
+            -v kura-dev-vault-data:/openbao/file -v {{.ROOT_DIR}}/dev/openbao.hcl:/openbao/config/kura.hcl:ro,Z {{.VAULT_IMAGE}} server
           podman start {{.VAULT_CONTAINER}} >/dev/null
+      - '{{.WAIT}} curl -sf http://127.0.0.1:{{.VAULT_PORT}}/v1/sys/seal-status'
+      # A dev-mode OpenBao kept everything in memory: a restart lost the Transit
+      # keys, and with them every vault's data (2026-11-17). Initialise once
+      # (one key share), unseal at every start, and keep the token kura-dev.
+      - |
+        set -eu
+        bao() { podman exec -e BAO_ADDR=http://127.0.0.1:8200 {{.VAULT_CONTAINER}} bao "$@"; }
+        keys=dev/openbao-keys.json
+        if bao status -format=json | jq -e '.initialized | not' >/dev/null; then
+          [ ! -e "$keys" ] || { echo "$keys exists but OpenBao is not initialised: move it aside first" >&2; exit 1; }
+          install -m 600 /dev/null "$keys"
+          bao operator init -key-shares=1 -key-threshold=1 -format=json > "$keys"
+        fi
+        [ -s "$keys" ] || { echo "OpenBao is initialised but $keys is missing: task dev:down to start over" >&2; exit 1; }
+        if bao status -format=json | jq -e .sealed >/dev/null; then
+          bao operator unseal "$(jq -r '.unseal_keys_b64[0]' "$keys")" >/dev/null
+        fi
+        root=$(jq -r .root_token "$keys")
+        podman exec -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN="$root" {{.VAULT_CONTAINER}} sh -c \
+          'bao token lookup kura-dev >/dev/null 2>&1 || bao token create -id=kura-dev -policy=root -orphan >/dev/null'
       - '{{.WAIT}} curl -sf http://127.0.0.1:{{.VAULT_PORT}}/v1/sys/health'
       - echo "export KURA_TEST_VAULT_ADDR=http://127.0.0.1:{{.VAULT_PORT}} KURA_TEST_VAULT_TOKEN=kura-dev"
 
@@ -164,7 +185,10 @@ tasks:
         bao() { podman exec -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN=kura-dev {{.VAULT_CONTAINER}} bao "$@"; }
         bao secrets list | grep -q '^mv/' || bao secrets enable -path=mv kv-v2
         bao secrets list | grep -q '^transit/' || bao secrets enable transit
-        bao read transit/keys/kura-dev >/dev/null 2>&1 || bao write -f transit/keys/kura-dev >/dev/null
+        # One Transit key per tenant of dev/config (decision 33): dev, and jdr (RFC 0005).
+        for t in dev jdr; do
+          bao read transit/keys/kura-$t >/dev/null 2>&1 || bao write -f transit/keys/kura-$t >/dev/null
+        done
         bao kv put -mount=mv kura/database url=postgres://kura_app:kura-test@127.0.0.1:{{.PG_PORT}}/kura >/dev/null
         bao kv put -mount=mv kura/bucket endpoint=http://127.0.0.1:{{.S3_PORT}} bucket=kura-dev accessKeyId=kura-dev secretAccessKey=kura-dev-secret >/dev/null
       - |
@@ -214,9 +238,11 @@ tasks:
       - dev/token.sh {{.AS | default "alice"}}
 
   dev:down:
-    desc: Stop and remove the local containers and their network (their data goes with them; dev/certs and dev/.env.local stay)
+    desc: Stop and remove the local containers and their network (their data goes with them, OpenBao's volume and keys too; dev/certs and dev/.env.local stay)
     cmds:
       - podman rm -f -i kura-dev-authentik-worker kura-dev-authentik-server {{.S3_CONTAINER}} {{.VAULT_CONTAINER}} {{.PG_CONTAINER}}
+      - podman volume rm -f kura-dev-vault-data >/dev/null
+      - rm -f dev/openbao-keys.json
       - podman network rm -f {{.NET}} 2>/dev/null || true
 
   test:db:

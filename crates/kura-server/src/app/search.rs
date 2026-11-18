@@ -134,7 +134,7 @@ async fn index_one(
         return Ok(Some(path));
     }
     let (vault, tenant): (Uuid, Uuid) = (j.try_get("vault_id")?, j.try_get("tenant_id")?);
-    let a = authz::key_access(&state.db, snap, tenant, vault)
+    let a = authz::key_access(&state.db, snap, tenant, vault, VaultRole::Viewer)
         .await?
         .ok_or(ApiError::of(ProblemType::NotFound))?;
     let raw: Option<Vec<u8>> = j.try_get("blob_hash")?;
@@ -260,14 +260,14 @@ pub async fn search(
              FROM search_doc d CROSS JOIN q
              JOIN entry e ON e.vault_id = d.vault_id AND e.id = d.entry_id
              JOIN revision r ON r.id = e.head_revision
-             WHERE d.vault_id = $1 AND e.namespace = 'notes' AND NOT e.deleted AND e.path_key LIKE $3 ESCAPE '\\'
+             WHERE d.vault_id = $1 AND e.namespace = 'notes' AND NOT e.deleted AND e.path_key LIKE ANY($3)
                AND (d.lex_fr @@ q.fr OR d.lex_en @@ q.en)
              ORDER BY score DESC LIMIT $4
          ),
          names AS (
              SELECT e.id, e.path, r.blob_hash, r.size, (similarity(e.path, $2) / 2)::real AS score
              FROM entry e JOIN revision r ON r.id = e.head_revision
-             WHERE e.vault_id = $1 AND e.namespace = 'notes' AND NOT e.deleted AND e.path_key LIKE $3 ESCAPE '\\'
+             WHERE e.vault_id = $1 AND e.namespace = 'notes' AND NOT e.deleted AND e.path_key LIKE ANY($3)
                AND e.path % $2
              ORDER BY score DESC LIMIT $4
          )
@@ -277,7 +277,7 @@ pub async fn search(
     )
     .bind(v)
     .bind(query)
-    .bind(authz::like_prefix(&ra.prefix_key))
+    .bind(ra.scope.like_patterns())
     .bind(limit)
     .fetch_all(&mut *tx)
     .await?;

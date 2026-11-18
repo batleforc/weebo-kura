@@ -2,14 +2,14 @@
 
 | Field | Value |
 | --- | --- |
-| Status | In review (2026-11-15) |
+| Status | Implemented (2026-11-17) |
 | Short | Restricted viewers, web reader |
 | Settles | How people without Obsidian (the players of a tabletop campaign) read and search the folders of a vault that a manager opens to them, and nothing else |
 | Author | Maxime (batleforc) |
 | Co-author | Claude Fable 5.2 |
 | Created | 2026-11-15 |
 | Supersedes | — (keeps RFC 0001's non-goal "public sharing": every reader stays an authenticated member) |
-| Touches | `crates/kura-api` (`spec.rs`, `validate/`), `crates/kura-server` (`authz.rs`, `app/vaults.rs`, `app/reader.rs`, `reconcile/`, migration `0021`), `ui/` (reader pages, in the application of RFC 0003), `tests/heavy/reader.sh`, `docs/` |
+| Touches | `crates/kura-api` (`spec.rs`, `validate/`, `reason.rs`), `crates/kura-core` (`scope.rs`, `wire.rs`), `crates/kura-server` (`authz.rs`, `config.rs`, `db.rs`, `app/vaults.rs`, `app/reader.rs`, `app/commits.rs`, `app/ui.rs`, `reconcile/status.rs`, migrations `0021` and `0025`, `tests/viewers.rs`), `crates/kura-cli` (`commands.rs`), `ui/` (`src/reader/`, `src/pages/` Vaults, Browse, Search, History, Access, locales, `public/frame.css`, `e2e/reader.spec.ts`), `tests/heavy/reader.sh`, `dev/config/tenants.yaml`, `dev/authentik/blueprints/kura.yaml`, `docs/operator.md`, `docs/api/openapi.json`, `docs/RFC/assets/0005-reader.html` |
 | Risk | high |
 
 > **Reference material**, about 6,500 words. For the decision, read §1, §3,
@@ -763,3 +763,231 @@ accepted by a server that does not filter would be T1.
 | R15 | `grep -n "pub fn" crates/kura-wasm/src/lib.rs`, run 2026-11-15 (`path_problem`, `config_synced`, sync entry points) | `d1bad91` | decision 8 |
 | R17 | `crates/kura-server/src/db.rs:119-139` (`check_schema`: a newer schema is accepted today) | `d1bad91` | §6.2, §13 |
 | R16 | `crates/kura-server/src/problem.rs:37-47` (`is_denial` includes `NotFound`), `crates/kura-server/src/app/mod.rs:345-400` (`audit_denials`) | `d1bad91` | §10.1 |
+| R18 | `c2449ce` feat: folder-restricted viewers and the web reader (RFC 0005) | `c2449ce` | §18.1, phases 1 to 3 |
+| R19 | `49e1b7d` feat: close the remaining gaps of RFC 0003, 0004 and 0005 | `49e1b7d` | §18.1, D3 to D6 |
+| R20 | [Implementation plan](rfc0005-implementation-plan.md): progress and divergences D1 to D8 | `49e1b7d` | §18 |
+| R21 | `tests/heavy/reader.sh`, `ui/e2e/reader.spec.ts` (Playwright 1.64.1, Chromium), run on the dev stack 2026-11-17 | `49e1b7d` | §18.3 |
+| R22 | `docs/RFC/assets/0005-reader.html` (HTML mock, batlehub-design tokens) | `49e1b7d` | §18.6 |
+| R24 | The change closing the landing gaps (§18.8): `authz::settle` and its tests, `BindingView.{widened, emptyFolders}`, `VaultView.updatedAt`, the `kura::object_read` debug event, `ui/src/reader/{events,retry,time}.ts`, `perf/attach.sh` (decision 5); 283 Rust tests, 96 console tests and the six heavy suites green on the dev stack | 2026-11-17, the commit after `1c22fce` | §18.8 |
+| R23 | `ui/package.json`, `ui/pnpm-lock.yaml` (`markdown-it` 14.3.3, `dompurify` 3.4.18), `ui/src/reader/vault.ts` (`MAX_PAGES`), `ui/src/reader/render.ts` (`MAX_RENDER`, `MAX_IMAGE`), `crates/kura-server/src/app/vaults.rs` (`binding_changed`), `deny.toml`; `task audit` run 2026-11-17 | `49e1b7d` | §18.2, §18.5 |
+
+---
+
+## 18. Revision against the tree (2026-11-17)
+
+Every question of §15 is settled and every phase of §16 is done. Landing
+first found behaviour the text promises and the tree lacked (§18.2, the
+divergences the plan does not record); §18.8 records how each was closed the
+same day [R24], after which the maintainer moved the RFC to `Implemented`. It
+was never formally `Accepted`. The implementation plan [R20] holds the
+detail and the divergence table D1 to D8; this section is the delta.
+
+### 18.1 What shipped
+
+| Phase | Commit | What |
+| --- | --- | --- |
+| 1 | `c2449ce` [R18] | Migration `0021` (`role_binding.paths` with its `CHECK`, `schema_floor` raised to 21, `kura_bindings_replace` carrying `paths` and keeping ids); `VaultAccess.paths` and its scope in `vault_accesses`, widest grant wins; `Reader::access` copying a person's scope into `ReadAccess`; `GET /vaults` with `paths` |
+| 2 | `c2449ce` [R18] | `spec::Binding.paths`, `validate::check_paths`, `put_binding` and `list_bindings` with `paths` (a role raised clears them), the `RestrictedBindingWidened` warning counted by `kura_config_warnings`; `docs/operator.md` "Viewers restricted to folders" |
+| 3 | `c2449ce` [R18] | The reader pages in `ui/` (vaults, browse and read, search, history), the renderer, the sandboxed frame and its hashed bridge (`frame-csp.txt`), French and English; `tests/heavy/reader.sh` and `ui/e2e/reader.spec.ts` |
+| Gaps | `49e1b7d` [R19] | Revision authors (migration `0025`, `RevisionInfo.author`) shown in History; the route gate test; tenant `jdr` in the dev stack, so search and the §6.P setup are as written; the HTML mock `docs/RFC/assets/0005-reader.html` with the design system's tokens; the scope rules moved to `kura_core::scope`, shared by server and CLI (RFC 0004) |
+
+### 18.2 Divergences from the text
+
+Recorded in the plan [R20], in one line each:
+
+- **D1** (§4.3): in files, two folders of a binding compare lowercased, not
+  fully folded; `kura-api` does not depend on `caseless`, and a duplicate
+  that differs beyond lowercasing is harmless in a union. The server
+  compares them folded.
+- **D2** (§4.3, the warning): warned only for a restricted claim value the
+  tenant maps to `owner` or `admin`. "Bound twice" cannot happen in one
+  vault (one row per subject), and a person who is also in an unrestricted
+  group is known only at request time.
+- **D3** (§14, the gate test): first left out, then closed by
+  `no_route_shows_a_restricted_viewer_a_hidden_note`, which walks every
+  vault route of `limits::LIMITS` as a restricted viewer.
+- **D4** (§6.P observation 3): first not observed (search off on the dev
+  tenant), then closed by tenant `jdr` with search on; see §18.3.
+- **D5** (§4.5, History authors): first absent, then closed by migration
+  `0025` and `RevisionInfo.author`, a key's or a device's name, never a
+  subject.
+- **D6** (§6.P setup): first run on a `campaign` vault of the dev tenant,
+  then closed by tenant `jdr` (groups `jdr-mj`, `jdr-players`) as written.
+- **D7** (§6.P observation 6): the injected document's `script-src`
+  violation is read from the browser console, and the test also checks
+  that no request left for `/x` or `example.org`.
+- **D8** (RFC 0003 §4.4): the console reads its own application's discovery
+  document (`ui.oidc.discovery`), because Authentik answers a cross-origin
+  read of another application's discovery with that application's redirect
+  URIs only.
+
+Found in the tree on 2026-11-17 and not recorded in the plan:
+
+- **§8**: `markdown-it` shipped at 14.3.3, not 15.0.3; the reason was not
+  recorded (§18.5).
+- **§7.5**: the reader holds no event socket, and search runs when the form
+  is submitted, not on debounced input. It still never polls; a reader
+  sees new notes on reload.
+- **§4.2, T9**: the reader lists at most 50 pages of 1,000 entries
+  (`ui/src/reader/vault.ts`, `MAX_PAGES`); a larger vault's tree is cut
+  there. The RFC set no such bound.
+- **§10.3, decision 5**: the first load of a 10,000-note vault in the reader
+  was not measured; no `prefix` query was added on `GET …/entries`.
+- **§10.1**: the `binding_changed` audit event carries `role` and `folders`
+  (the count, 0 for the whole vault), not a separate `restricted=` field;
+  folder names are not logged, as written.
+- **§13**: `docs/operator.md` gives no query listing restricted bindings for
+  a rollback past RFC 0004; it says "Roll forward, never back". The schema
+  floor (decision 4) is the guard that shipped.
+- **§4.3, warnings**: the Access page shows each binding's folders or
+  "whole vault", and the tenant role's grant as a row of its own; it does
+  not mark a widened binding "effective: whole vault", and shows no "0
+  notes" for a folder that matches nothing.
+- **§11, accessibility**: the folder tree is nested `<details>` and links in
+  a labelled `nav`, keyboard reachable, not an ARIA `tree`.
+- **§14, test names**: the tests landed under other names, several rows per
+  test (§18.4); `authz.rs` has no unit test of its own for the scope of
+  §5.1, whose branches are covered by the integration tests of
+  `tests/viewers.rs` and the rules by `kura_core::scope`'s unit tests.
+
+### 18.3 What the proof observed
+
+`tests/heavy/reader.sh` [R21] on the local stack, with `curl`, the `kura`
+binary and Playwright 1.64.1 driving Chromium (`ui/e2e/reader.spec.ts`), in
+tenant `jdr` (bob in `jdr-players`, alice in `jdr-mj`). The notes carry the
+run's process id in their names (`Sessions/s12-<pid>.md`, …).
+
+1. **Observed.** In Chromium, bob's tree shows `Sessions` and `Resumes`, not
+   `MJ`; the note renders, `[[Session 11]]` and `[[MJ/secret]]` both as
+   plain text with no link.
+2. **Observed**, in part. Bob's listing has no `MJ/` entry; the hidden
+   note's blob (hash read from the database) answers `404` with a body
+   byte-equal to a random hash's. The server log is not checked for the
+   absence of an object-storage read; the in-process tests do not check it
+   either.
+3. **Observed** (D4). Alice finds `xyzzy` once indexed; bob gets `200` with
+   no hit, and the search page shows the "No note matches … shared with
+   you" text.
+4. **Observed.** Bob's `kura attach` into an empty folder brings `Sessions/`
+   and `Resumes/`; nothing matching `MJ` arrives.
+5. **Observed**, in part. After alice moves the note under `MJ/`,
+   `GET …/revisions` for it is `404` to bob. The not-found page is observed
+   on the hidden note's address in Chromium, before the move, not on the
+   moved note's address after it.
+6. **Observed** (D7). No request to `/x` or `example.org`; evaluating
+   `parent.localStorage` in the frame throws `SecurityError`; a script
+   injected past the sanitiser logs a `script-src` violation and runs
+   nothing.
+7. **Observed.** An anonymous `GET /v1/vaults` is `401`.
+
+All seven `ok` on the dev stack on 2026-11-17 [R20].
+
+### 18.4 Threats against the tests
+
+| # | Proven by | Notes |
+| --- | --- | --- |
+| T1 | `crates/kura-server/tests/viewers.rs`: `a_restricted_viewer_reads_its_folders_only`, `no_route_shows_a_restricted_viewer_a_hidden_note` (the gate, every vault route of `limits::LIMITS`); `reader.sh` observations 2 and 4 | Holds as written |
+| T2 | `tests/viewers.rs`: `a_restricted_viewer_reads_its_folders_only` (chunk, blob and revisions of a hidden note byte-equal to a missing one; a batch lists it as `missing`); `ui/src/reader/reader.spec.ts`: "links listed notes by entry id, and leaves hidden ones as plain text", "resolves a target by path or by name, and only among listed entries"; `ui/src/pages/reader-pages.spec.ts`: "says a hidden note does not exist, the same as a missing one" | Holds as written |
+| T3 | `tests/viewers.rs`: `folders_are_a_viewers_only` (the `CHECK`, files, API, id kept on a `paths` change); `crates/kura-api/src/validate/tests.rs`: `binding_paths_are_checked` | Holds as written |
+| T4 | `tests/viewers.rs`: `folders_are_a_viewers_only` (the `RestrictedBindingWidened` warning), `a_restricted_viewer_reads_its_folders_only` (the widest grant wins) | Holds, narrowed by D2 and without "effective: whole vault" (§18.2) |
+| T5 | `crates/kura-server/src/notify.rs`: `payloads_become_events` (a notice is a vault and a `seq`) | Existing behaviour; no new `notice_has_no_path`. The reader holds no socket (§18.2) |
+| T6 | `ui/src/reader/reader.spec.ts`: "leaves nothing that runs or calls out from %s" (the XSS corpus), "is sandboxed without same-origin, and trusts only its own frame's messages", "has the hash the build writes"; `ui/e2e/reader.spec.ts`: "a restricted viewer reads the shared folders, and a hostile note runs nothing" (observation 6) | Holds as written |
+| T7 | `ui/src/reader/reader.spec.ts`: "keeps external links, embeds listed images and drops remote ones"; observation 6 (no request to `example.org`) | Holds as written |
+| T8 | `ui/src/pages/reader-pages.spec.ts`: "shows the shared folders and renders a note in the sandboxed frame" (every content call `cache: "no-store"`) | Holds as written |
+| T9 | `ui/src/pages/reader-pages.spec.ts`: "offers a file that is not Markdown as a download, and follows only listed links" | The download of a non-Markdown file is tested; the 1 MiB render cap (`MAX_RENDER`) and the 2 MiB image cap (`MAX_IMAGE`) have no test of their own. The entries cap of §18.2 bounds the tree |
+| T10 | `reader.sh` observation 7 | No in-process `anonymous_is_401`; `crates/kura-server/tests/console.rs` `me_shows_only_own_tenants` covers an invalid token on `GET /v1/me` |
+
+### 18.5 Supply chain
+
+| Dependency | RFC | Shipped (`ui/pnpm-lock.yaml`) |
+| --- | --- | --- |
+| `markdown-it` | 15.0.3 | 14.3.3 (`^14.3.3`, with `@types/markdown-it` `^14.2.0`) |
+| `dompurify` | 3.4.18 | 3.4.18 |
+| `@playwright/test` (proof only) | the version `ui/` pins | 1.64.1 |
+
+No server dependency was added. `task audit` is green on 2026-11-17,
+`pnpm audit` of `ui/` included; its dated exceptions (`deny.toml`:
+RUSTSEC-2026-0542 and RUSTSEC-2026-0543, both via `object_store`) are not
+this RFC's.
+
+### 18.6 Mocks against what shipped
+
+The wireframes of §4.5 stay as written; the HTML mock built with the design
+system is `docs/RFC/assets/0005-reader.html` [R22].
+
+- **Vaults**: role and reach ("2 folders", "whole vault") on the first
+  screen as drawn, with tenant, a manage link and the source as extra
+  columns; no "updated" column. The empty state reads "No vault is open to
+  you yet." without the line on whom to ask.
+- **Browse and read**: two panes, shared folders only, hidden links as plain
+  text, as drawn. Under the note a History link, not "Last edited … by
+  alice · History (4)".
+- **Not found or hidden**: one message, "This note does not exist, or is not
+  shared with you.", and "Back to campaign", as drawn.
+- **Search**: the no-hit text and the search-off text are the mock's, word
+  for word; hits show as text.
+- **History**: date, path, state and author; a key reads "key <name>", a
+  device its name, not "alice (laptop)" (D5).
+- **Session expired, server unavailable**: RFC 0003's shell states: "Your
+  session ended. …" and an error with a Retry button; no automatic retry
+  every 30 s.
+
+### 18.7 Header
+
+`Risk` stays high: the filter on people is one place, as the rating of §7
+says, and the deltas above do not widen it.
+
+### 18.8 Gaps closed on landing (2026-11-17)
+
+Each gap of §18.2 found in the tree, and each §7 row §18.4 left without a
+test of its own, closed the same day [R24]:
+
+- **§8**: `markdown-it` 15.0.3 as written (released 2026-10-16; it ships
+  its own types, so `@types/markdown-it` is gone); `task ui:audit` adds
+  nothing.
+- **§7.5**: the reader holds one event socket per open vault
+  (`ui/src/reader/events.ts`, a ticket then `…/events`), refreshes once per
+  burst of notices, reconnects from 1 s to 60 s, stops on `4002` and `4005`,
+  and never polls; search runs 400 ms after typing stops, the button still
+  at once. The socket's survival without a close frame has no watchdog
+  (a `shortcut:` comment).
+- **§4.2, T9**: the 50,000-entry bound stays and the Browse page says the
+  tree was cut and that search finds the rest.
+- **§10.3, decision 5**: measured by `perf/attach.sh`: the first load of
+  10,000 notes (the vault list, then 10 pages of entries) takes 247 to
+  262 ms, under the 2 s that would call for a `prefix` query, so none was
+  added.
+- **§10.1**: `binding_changed` carries `restricted=true|false` beside the
+  `folders` count.
+- **§13**: `docs/operator.md` gives the query listing restricted bindings,
+  which must return no row before a binary older than RFC 0004 starts.
+- **§4.3 warnings**: the bindings listing gains `widened` (a restricted
+  claim value the tenant maps to owner or admin, D2's rule, now also for
+  bindings made through the API) and `emptyFolders` (bound folders with no
+  note, one `NOT EXISTS` query); the Access page shows "effective: whole
+  vault" and "(0 notes)". A person also in an unrestricted group is still
+  known only at request time (D2).
+- **§6.P observation 2**: `open_object` logs a debug event under target
+  `kura::object_read`; `reader.sh` requires the line for a visible chunk
+  and its absence for the hidden one (`KURA_DEV_LOG`, the server run with
+  `RUST_LOG=info,kura::object_read=debug`). Observation 5 now checks the
+  not-found page at the moved note's new address and its old one.
+- **§4.5**: an Updated column (`updatedAt`, the time of the vault's latest
+  revision; a restricted viewer sees it move for hidden folders, as
+  `headSeq` already did), "Ask a vault manager to add you, then reload.",
+  "Last edited … by …" under a note, and a retry by itself after 30 s on a
+  `503` beside the Retry button. Not drawn as mocked: the "History (4)"
+  count and a live countdown.
+- **§11**: the tree stays native `<details>` in a labelled `nav`: §11's
+  "keyboard navigable `tree`" is read as the kind of widget, which the
+  native one is. Search results are announced in a live region, and Browse
+  and Search gained their headings.
+- **§14 and §7**: `authz::settle`, the scope rule of §5.1 as a pure
+  function, has six unit tests; T5 is `tests/events.rs::notice_has_no_path`;
+  T10 is `tests/viewers.rs::anonymous_is_401` (six reader routes); T9's caps
+  are tested in `reader.spec.ts` (`MAX_IMAGE`, never fetched above) and
+  `reader-pages.spec.ts` (`MAX_RENDER`, a download link and no frame).
+
+Still divergences, accepted as written in §18.2: D1 to D8, the remaining
+§14 names, and `reader.sh`'s suite counting only its own run's secret note,
+since earlier runs leave theirs in the vault.

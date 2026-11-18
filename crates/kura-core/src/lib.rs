@@ -8,8 +8,12 @@ pub mod config;
 #[cfg(feature = "merge")]
 pub mod merge;
 pub mod path;
+#[cfg(feature = "scope")]
+pub mod scope;
 pub mod sync;
 pub mod token;
+#[cfg(feature = "webhook")]
+pub mod webhook;
 pub mod wire;
 
 pub use chunk::{ChunkHash, ChunkParams, ChunkSpan, blob_hash, chunks};
