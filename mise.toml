@@ -13,7 +13,7 @@ rtk = "latest"
 uv = "latest"
 "pipx:desloppify[full]" = "latest"
 "pipx:graphifyy" = "latest"
-"github:batleforc/weebo-skillsagent" = "0.17.0"
+"github:batleforc/weebo-skillsagent" = "0.18.1"
 cargo-binstall = "latest"
 # task audit
 cargo-deny = "latest"
@@ -36,6 +36,7 @@ helm = "latest"
 kubeconform = "latest"
 "aqua:prometheus/prometheus" = "latest"
 k6 = "latest"
+codex = "latest"
 
 [env]
 # Nightly only for `cargo fuzz`, pinned by date so a fuzz run is reproducible.

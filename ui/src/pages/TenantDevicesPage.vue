@@ -12,6 +12,8 @@ import BreadCrumbs from "@/components/ui/BreadCrumbs.vue";
 import ConfirmRow from "@/components/ui/ConfirmRow.vue";
 import RevokedToggle from "@/components/ui/RevokedToggle.vue";
 import StateMark from "@/components/ui/StateMark.vue";
+import TableFilter from "@/components/ui/TableFilter.vue";
+import { matching } from "@/filter";
 import { useLoad } from "@/manage/useLoad";
 import { ago, when } from "@/reader/time";
 
@@ -36,8 +38,13 @@ const showRevoked = ref(false);
 const revokedCount = computed(
   () => others.value.filter((d) => d.revoked).length,
 );
+const query = ref("");
 const shown = computed(() =>
-  showRevoked.value ? others.value : others.value.filter((d) => !d.revoked),
+  matching(
+    showRevoked.value ? others.value : others.value.filter((d) => !d.revoked),
+    query.value,
+    (d) => [d.owner ?? "", d.name],
+  ),
 );
 const refusal = ref<string | null>(null);
 const confirming = ref<Device | null>(null);
@@ -69,6 +76,7 @@ onMounted(load);
       :can-retry="canRetry" @retry="load"
     >
       <p v-if="refusal" role="alert" class="mb-2 border-l border-rule pl-3">{{ refusal }}</p>
+      <TableFilter v-model="query" :empty="shown.length === 0" />
       <div class="relative overflow-x-auto" tabindex="0">
       <table class="w-full text-left">
         <thead>

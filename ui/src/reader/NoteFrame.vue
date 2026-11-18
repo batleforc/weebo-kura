@@ -4,14 +4,27 @@
  * filled through `srcdoc`, sandboxed with `allow-scripts` and never
  * `allow-same-origin`, so its origin is opaque and nothing in it reaches the
  * application's storage or memory. What its bridge sends is untrusted: a
- * number for the height, and a link the application decides about.
+ * number for the height, and a link the application decides about. What it
+ * receives is the theme, so a switch repaints the note without reloading it.
  */
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+
+import { theme } from "@/prefs";
 
 const props = defineProps<{ document: string; title: string }>();
 const emit = defineEmits<{ link: [href: string] }>();
 const frame = ref<HTMLIFrameElement | null>(null);
 const height = ref(200);
+/** Hidden until the new document reports its height: no flash at the old one. */
+const ready = ref(false);
+watch(
+  () => props.document,
+  () => (ready.value = false),
+);
+watch(theme, (value) =>
+  // An opaque origin: "*" is the only target; the frame reads nothing else from it.
+  frame.value?.contentWindow?.postMessage({ theme: value }, "*"),
+);
 
 function onMessage(event: MessageEvent): void {
   if (!frame.value || event.source !== frame.value.contentWindow) return;
@@ -25,6 +38,7 @@ function onMessage(event: MessageEvent): void {
     Number.isFinite(value)
   ) {
     height.value = Math.min(Math.max(Math.ceil(value), 50), 100_000);
+    ready.value = true;
   } else if (
     kind === "link" &&
     typeof value === "string" &&
@@ -46,8 +60,10 @@ defineExpose({ onMessage, height });
     :srcdoc="props.document"
     sandbox="allow-scripts"
     referrerpolicy="no-referrer"
-    class="w-full border-0"
+    class="w-full border-0 transition-opacity duration-150 motion-reduce:transition-none"
+    :class="ready ? 'opacity-100' : 'opacity-0'"
     :style="{ height: `${height}px` }"
     data-test="note-frame"
+    @load="ready = true"
   />
 </template>

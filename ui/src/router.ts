@@ -80,7 +80,8 @@ export const routes: RouteRecordRaw[] = [
       {
         path: "notes/:entry/history",
         name: "history",
-        component: () => import("@/pages/HistoryPage.vue"),
+        // The note again, its history open in a drawer beside it.
+        component: () => import("@/pages/BrowsePage.vue"),
         meta: { access: "member" },
       },
       {
@@ -154,7 +155,18 @@ export const routes: RouteRecordRaw[] = [
 ];
 
 export function makeRouter(history = createWebHistory("/app/")): Router {
-  const router = createRouter({ history, routes });
+  const router = createRouter({
+    history,
+    routes,
+    // shortcut: a saved place is restored before an async note has its height, so a long note may land short; restore after the frame reports its height if it shows.
+    scrollBehavior(to, from, saved) {
+      if (saved) return saved;
+      // Opening or closing a note's history keeps the reader's place.
+      if (to.params.entry && to.params.entry === from.params.entry)
+        return false;
+      return to.path === from.path ? false : { top: 0 };
+    },
+  });
   router.beforeEach(async (to) => {
     const access = to.meta.access;
     if (access === "public") return true;

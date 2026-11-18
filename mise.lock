@@ -19,13 +19,13 @@ url = "https://github.com/prometheus/prometheus/releases/download/v3.16.0/promet
 url_api = "https://api.github.com/repos/prometheus/prometheus/releases/assets/713900575"
 
 [[tools."aqua:rustsec/rustsec/cargo-audit"]]
-version = "0.22.2"
+version = "0.23.0"
 backend = "aqua:rustsec/rustsec/cargo-audit"
 
 [tools."aqua:rustsec/rustsec/cargo-audit"."platforms.linux-x64"]
-checksum = "sha256:ab28a1bdb54db4d5d8ad5981cf1f959410370b3d28250dbd35f6a44248620e39"
-url = "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-x86_64-unknown-linux-gnu-v0.22.2.tgz"
-url_api = "https://api.github.com/repos/rustsec/rustsec/releases/assets/439291614"
+checksum = "sha256:b77993532b253fcbf550996d7716465ec3d734d4e74e7f87bfb65a19add0fb59"
+url = "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.23.0/cargo-audit-x86_64-unknown-linux-gnu-v0.23.0.tgz"
+url_api = "https://api.github.com/repos/rustsec/rustsec/releases/assets/731640338"
 
 [[tools."aqua:taiki-e/cargo-llvm-cov"]]
 version = "0.9.1"
@@ -48,13 +48,13 @@ url_api = "https://api.github.com/repos/cargo-bins/cargo-binstall/releases/asset
 provenance = "github-attestations"
 
 [[tools.cargo-deny]]
-version = "0.20.2"
+version = "0.21.0"
 backend = "aqua:EmbarkStudios/cargo-deny"
 
 [tools.cargo-deny."platforms.linux-x64"]
-checksum = "sha256:9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f"
-url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471598214"
+checksum = "sha256:a2170b854ff697e79e39c4c538981c9c1bdd803addbae6719a4cb66b4585a903"
+url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.21.0/cargo-deny-0.21.0-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/755168773"
 
 [[tools."cargo:cargo-fuzz"]]
 version = "0.13.2"
@@ -73,13 +73,13 @@ version = "0.2.130"
 backend = "cargo:wasm-bindgen-cli"
 
 [[tools.claude]]
-version = "2.1.323"
+version = "2.1.325"
 backend = "aqua:anthropics/claude-code"
 
 [tools.claude."platforms.linux-x64"]
-checksum = "sha256:522255678548859b9799b7b098c03a3aa286c9a9ede01957e35f4713ccc43631"
-url = "https://github.com/anthropics/claude-code/releases/download/v2.1.323/claude-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/anthropics/claude-code/releases/assets/741010604"
+checksum = "sha256:9686b0fb1eefbd7f2cc1f53f932516c29cd605e9d976223323a6c6e9a4c9c7fe"
+url = "https://github.com/anthropics/claude-code/releases/download/v2.1.325/claude-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/anthropics/claude-code/releases/assets/745018803"
 
 [[tools.cocogitto]]
 version = "7.0.0"
@@ -90,14 +90,23 @@ checksum = "sha256:e03938ff2c4c86d71c00c0f3284dbbe95c5ca76fe34a51f33e945c23010d5
 url = "https://github.com/cocogitto/cocogitto/releases/download/7.0.0/cocogitto-7.0.0-x86_64-unknown-linux-musl.tar.gz"
 url_api = "https://api.github.com/repos/cocogitto/cocogitto/releases/assets/366659350"
 
+[[tools.codex]]
+version = "0.169.0"
+backend = "aqua:openai/codex"
+
+[tools.codex."platforms.linux-x64"]
+checksum = "sha256:3b8ed091149cc63a59046b9f094bcfa21cdb4dda15ede441ce369bcee4a71ba0"
+url = "https://github.com/openai/codex/releases/download/rust-v0.169.0/codex-package-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/openai/codex/releases/assets/742918488"
+
 [[tools."github:batleforc/weebo-skillsagent"]]
-version = "0.17.0"
+version = "0.18.1"
 backend = "github:batleforc/weebo-skillsagent"
 
 [tools."github:batleforc/weebo-skillsagent"."platforms.linux-x64"]
-checksum = "sha256:7c0fb8877a01ae299266cadf98278d4c08e55b225559dacb92c831711a3056b5"
-url = "https://github.com/batleforc/weebo-skillsagent/releases/download/v0.17.0/wska-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/batleforc/weebo-skillsagent/releases/assets/673155386"
+checksum = "sha256:74f34e3c3b0021437005c310af08f57ffbdcf169ac6d8889d2c55e09f9e0d2d0"
+url = "https://github.com/batleforc/weebo-skillsagent/releases/download/v0.18.1/wska-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/batleforc/weebo-skillsagent/releases/assets/756215908"
 
 [[tools.gitleaks]]
 version = "8.30.1"
@@ -109,12 +118,12 @@ url = "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8
 url_api = "https://api.github.com/repos/gitleaks/gitleaks/releases/assets/378332058"
 
 [[tools.helm]]
-version = "4.3.1"
+version = "4.3.2"
 backend = "aqua:helm/helm"
 
 [tools.helm."platforms.linux-x64"]
-checksum = "sha256:0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b"
-url = "https://get.helm.sh/helm-v4.3.1-linux-amd64.tar.gz"
+checksum = "sha256:d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983"
+url = "https://get.helm.sh/helm-v4.3.2-linux-amd64.tar.gz"
 
 [[tools.jq]]
 version = "1.8.2"
@@ -127,13 +136,13 @@ url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/453012752"
 provenance = "github-attestations"
 
 [[tools.k6]]
-version = "2.3.0"
+version = "2.4.0"
 backend = "aqua:grafana/k6"
 
 [tools.k6."platforms.linux-x64"]
-checksum = "sha256:39c3117b6af817592dcd0ce4242105c0a7af10948c2a425306f0be8f7a8a8ab1"
-url = "https://github.com/grafana/k6/releases/download/v2.3.0/k6-v2.3.0-linux-amd64.tar.gz"
-url_api = "https://api.github.com/repos/grafana/k6/releases/assets/579287772"
+checksum = "sha256:5a5ecf23529ccf93135bc7e5b0c1cd5126ecf5f2672e22eed1556a0ab74abb87"
+url = "https://github.com/grafana/k6/releases/download/v2.4.0/k6-v2.4.0-linux-amd64.tar.gz"
+url_api = "https://api.github.com/repos/grafana/k6/releases/assets/739591241"
 
 [[tools.kubeconform]]
 version = "0.8.0"
@@ -157,17 +166,17 @@ version = "1.0"
 backend = "pipx:desloppify"
 
 [[tools."pipx:graphifyy"]]
-version = "0.9.108"
+version = "0.9.111"
 backend = "pipx:graphifyy"
 
 [[tools.pnpm]]
-version = "12.17.0"
+version = "12.21.0"
 backend = "aqua:pnpm/pnpm"
 
 [tools.pnpm."platforms.linux-x64"]
-checksum = "sha256:2c58959fd5df5cb9f4e72784c08a60ffc7ee558fed9b04b22254e29112203a51"
-url = "https://github.com/pnpm/pnpm/releases/download/v12.17.0/pnpm-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/692316705"
+checksum = "sha256:84c4773bcf4a217f4083cd7b2a91e4cee6103cf42426c1282ef37d308f55a410"
+url = "https://github.com/pnpm/pnpm/releases/download/v12.21.0/pnpm-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/744357264"
 provenance = "github-attestations"
 
 [[tools.rtk]]

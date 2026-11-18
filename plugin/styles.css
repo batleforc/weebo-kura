@@ -1,4 +1,27 @@
-/* State is text, never colour alone (§4.5). */
-.kura-status { font-variant-numeric: tabular-nums; }
-.kura-code { font-family: var(--font-monospace); font-size: 1.6em; letter-spacing: 0.1em; user-select: all; }
+/* State is text, never colour alone (§4.5): the icon and its tint repeat the word.
+   Obsidian's own variables only, so any theme carries it. */
+.kura-status { font-variant-numeric: tabular-nums; display: inline-flex; align-items: center; gap: var(--size-4-1); }
+.kura-status-icon { display: inline-flex; }
+.kura-status-icon svg { width: var(--icon-xs); height: var(--icon-xs); }
+.kura-status[data-tone="warn"] .kura-status-icon,
+.side-dock-ribbon-action[data-tone="warn"] { color: var(--text-warning); }
+.kura-status[data-tone="error"] .kura-status-icon,
+.side-dock-ribbon-action[data-tone="error"] { color: var(--text-error); }
+.kura-status[data-tone="off"] .kura-status-icon,
+.side-dock-ribbon-action[data-tone="off"] { color: var(--text-faint); }
+@media (prefers-reduced-motion: no-preference) {
+  .kura-status[data-tone="busy"] .kura-status-icon svg,
+  .side-dock-ribbon-action[data-tone="busy"] svg { animation: kura-spin 1.2s linear infinite; }
+}
+@keyframes kura-spin { to { transform: rotate(360deg); } }
+
+.kura-state { font-weight: var(--font-semibold); margin-top: 0; }
+.kura-code-row { display: flex; align-items: center; gap: var(--size-4-2); margin: var(--size-4-3) 0; }
+.kura-code { font-family: var(--font-monospace); font-size: 1.6em; letter-spacing: 0.1em; user-select: all; background: none; }
+.kura-wait { color: var(--text-muted); }
 .kura-list li { overflow-wrap: anywhere; }
+.kura-why { color: var(--text-muted); }
+.kura-manual { border-top: 1px solid var(--background-modifier-border); padding: var(--size-4-2) 0; }
+.kura-manual > summary { cursor: pointer; color: var(--text-muted); padding: var(--size-4-1) 0; }
+.kura-manual-actions { display: flex; justify-content: flex-end; padding-top: var(--size-4-2); }
+.kura-notice-action { margin-left: var(--size-4-2); }

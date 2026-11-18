@@ -230,6 +230,45 @@ describe("shell", () => {
     expect(router.currentRoute.value.name).toBe("signin");
   });
 
+  it("folds each vault's sections under it, the open one unfolded, the manager's tabs for a tenant admin", async () => {
+    vi.mocked(sdk.listVaults).mockResolvedValue({
+      data: [
+        { id: "v1", name: "campagne", tenant: "jdr", role: "viewer" },
+        { id: "v2", name: "archives", tenant: "jdr", role: "viewer" },
+      ],
+    } as never);
+    const { wrapper, router } = await shell({
+      subject: "s",
+      tenants: [{ slug: "jdr", role: "admin" }],
+      platformAdmin: false,
+    });
+    router.addRoute({
+      path: "/vaults/:v/:rest(.*)*",
+      name: "vault-notes",
+      component: { template: "<p/>" },
+      meta: { access: "member" },
+    });
+    await router.push("/vaults/v1/notes");
+    await flushPromises();
+    const sections = wrapper.findAll("[data-test=vault-sections]");
+    expect(sections).toHaveLength(1);
+    expect(sections[0]?.findAll("a").map((a) => a.text())).toEqual([
+      "Overview",
+      "Notes",
+      "Access",
+      "Keys",
+      "Notifications",
+    ]);
+    expect(sections[0]?.find("[aria-current=page]").text()).toBe("Notes");
+    const [first, second] = wrapper.findAll("[data-test=vault-expand]");
+    // Sorted by name: archives, then campagne.
+    expect(first?.attributes("aria-expanded")).toBe("false");
+    await first?.trigger("click");
+    expect(wrapper.findAll("[data-test=vault-sections]")).toHaveLength(2);
+    await second?.trigger("click");
+    expect(second?.attributes("aria-expanded")).toBe("false");
+  });
+
   it("says so when the caller is in no tenant", async () => {
     const { wrapper } = await shell({
       subject: "s",

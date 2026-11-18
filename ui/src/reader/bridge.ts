@@ -1,7 +1,8 @@
 /**
  * The one script the note frame runs (RFC 0005 §6.5): it reports the
  * document's height and the link a user clicked to the application, and
- * nothing else. The server's Content-Security-Policy allows it by its hash,
+ * takes from it one thing only, the theme to show (light or dark). The
+ * server's Content-Security-Policy allows it by its hash,
  * written at build time to `dist/frame-csp.txt`; any other script, whatever a
  * note carries, is refused. Keep it byte for byte: the hash is of this text.
  */
@@ -10,7 +11,9 @@ export const BRIDGE =
   'const size=()=>post("height",document.documentElement.scrollHeight);' +
   'new ResizeObserver(size).observe(document.body);addEventListener("load",size);' +
   'document.addEventListener("click",(e)=>{const a=e.target instanceof Element?e.target.closest("a[href]"):null;' +
-  'if(!a)return;e.preventDefault();post("link",a.getAttribute("href"))})})();';
+  'if(!a)return;e.preventDefault();post("link",a.getAttribute("href"))});' +
+  'addEventListener("message",(e)=>{const t=e.source===parent&&e.data?e.data.theme:null;' +
+  'if(t==="light"||t==="dark")document.documentElement.dataset.theme=t})})();';
 
 /** `'sha256-…'`, the CSP source of the bridge. */
 export async function bridgeHash(text: string = BRIDGE): Promise<string> {

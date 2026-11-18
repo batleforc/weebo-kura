@@ -10,7 +10,7 @@ import { useRoute } from "vue-router";
 
 import { useMe } from "@/me";
 import { setupLink } from "@/obsidian";
-import { useVaults } from "@/vaults";
+import { sectionOf, sectionsOf, useVaults } from "@/vaults";
 
 const { t } = useI18n();
 const route = useRoute();
@@ -19,51 +19,15 @@ const meStore = useMe();
 const origin = window.location.origin;
 const id = computed(() => String(route.params.v));
 const vault = computed(() => vaultStore.list.find((v) => v.id === id.value));
-const manages = computed(
-  () =>
-    vault.value?.role === "manager" ||
-    (meStore.me?.tenants.some(
-      (x) => x.slug === vault.value?.tenant && x.role !== "member",
-    ) ??
-      false),
-);
 const obsidian = computed(() =>
   vault.value && !vault.value.paths ? setupLink(origin, vault.value) : null,
 );
-/** The tab the current page belongs to: a note, its history and search are Notes. */
-const current = computed(() => {
-  const name = String(route.name ?? "");
-  if (["vault-access", "vault-keys", "vault-notifications"].includes(name))
-    return name;
-  return name === "vault" ? "vault" : "vault-notes";
-});
-const tabs = computed(() => [
-  { name: "vault", to: `/vaults/${id.value}`, label: t("vault.overview") },
-  {
-    name: "vault-notes",
-    to: `/vaults/${id.value}/notes`,
-    label: t("vault.notes"),
-  },
-  ...(manages.value
-    ? [
-        {
-          name: "vault-access",
-          to: `/vaults/${id.value}/access`,
-          label: t("manage.access"),
-        },
-        {
-          name: "vault-keys",
-          to: `/vaults/${id.value}/keys`,
-          label: t("manage.keys"),
-        },
-        {
-          name: "vault-notifications",
-          to: `/vaults/${id.value}/notifications`,
-          label: t("manage.notifications"),
-        },
-      ]
-    : []),
-]);
+const current = computed(() => sectionOf(route.name));
+/** The reader takes the width; every tab shares the same one-line header. */
+const reading = computed(() => current.value === "vault-notes");
+const tabs = computed(() =>
+  vault.value ? sectionsOf(vault.value, meStore.me?.tenants) : [],
+);
 
 onMounted(() => {
   void vaultStore.load().catch(() => undefined);
@@ -72,27 +36,28 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="flex max-w-6xl flex-col gap-6">
-    <header class="flex flex-wrap items-end justify-between gap-4">
-      <div class="min-w-0">
-        <p v-if="vault" class="text-ink-dim">{{ vault.tenant }} · {{ t("vault.youAre", { role: t(`role.${vault.role}`) }) }}</p>
-        <h1 class="break-all">{{ vault?.name ?? "…" }}</h1>
+  <section class="flex flex-col gap-6">
+    <header class="flex flex-wrap items-center gap-x-6 gap-y-3 border-b border-rule-soft pb-4">
+      <div class="flex min-w-0 flex-wrap items-baseline gap-x-2">
+        <span v-if="vault" class="text-[length:var(--t-head)] text-ink-dim">{{ vault.tenant }} /</span>
+        <h1 class="break-all text-[length:var(--t-head)]">{{ vault?.name ?? "…" }}</h1>
+        <span v-if="vault" class="meta text-ink-dim" data-test="role">{{ t("vault.youAre", { role: t(`role.${vault.role}`) }) }}</span>
       </div>
-      <div class="flex flex-wrap gap-2">
-        <RouterLink v-if="current !== 'vault-notes'" :to="`/vaults/${id}/notes`" class="ctl">{{ t("vault.read") }}</RouterLink>
-        <a v-if="obsidian" :href="obsidian" class="action" data-test="open-obsidian">{{ t("vaults.obsidian") }}</a>
-      </div>
+      <!-- From 768px the sidebar carries the sections; on a phone it folds away, so they show here. -->
+      <nav :aria-label="t('vault.sections')" class="inline-flex max-w-full overflow-x-auto whitespace-nowrap border border-rule md:hidden" data-test="vault-tabs">
+        <RouterLink
+          v-for="(tab, i) in tabs"
+          :key="tab.name"
+          :to="tab.to"
+          class="px-3 py-1 no-underline"
+          :class="[i ? 'border-l border-rule' : '', current === tab.name ? 'bg-ink font-bold text-ground' : 'text-ink-dim hover:text-ink']"
+          :aria-current="current === tab.name ? 'page' : undefined"
+        >{{ t(tab.label) }}</RouterLink>
+      </nav>
+      <a v-if="obsidian" :href="obsidian" class="ctl !py-1 md:ml-auto" data-test="open-obsidian">{{ t("vaults.obsidian") }}</a>
     </header>
-    <nav :aria-label="t('vault.sections')" class="flex flex-wrap self-start border border-rule" data-test="vault-tabs">
-      <RouterLink
-        v-for="(tab, i) in tabs"
-        :key="tab.name"
-        :to="tab.to"
-        class="px-3.5 py-2 no-underline"
-        :class="[i ? 'border-l border-rule' : '', current === tab.name ? 'bg-ink font-bold text-ground' : 'text-ink-dim hover:text-ink']"
-        :aria-current="current === tab.name ? 'page' : undefined"
-      >{{ tab.label }}</RouterLink>
-    </nav>
-    <RouterView />
+    <div :class="{ 'max-w-6xl': !reading }">
+      <RouterView />
+    </div>
   </section>
 </template>

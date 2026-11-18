@@ -13,7 +13,8 @@
     "home": "Home",
     "findVault": "Find a vault",
     "findVaultHint": "notes, campaign…",
-    "noVault": "No vault matches."
+    "noVault": "No vault matches.",
+    "sectionsOf": "Sections of {name}"
   },
   "signIn": {
     "action": "Sign in with Authentik",
@@ -92,7 +93,6 @@
     "notFound": "This note does not exist, or is not shared with you.",
     "back": "Back to {name}",
     "backToVault": "Back to the vault",
-    "backToNote": "Back to the note",
     "download": "Download {name}",
     "history": "History",
     "searchOff": "Search is not enabled for this vault. Browse the folders instead.",
@@ -101,7 +101,6 @@
     "noRevision": "No revision.",
     "current": "current",
     "deleted": "deleted",
-    "view": "View",
     "reach": "{n} folders",
     "whole": "whole vault",
     "open": "Open",
@@ -109,7 +108,26 @@
     "lastEdited": "Last edited {date}",
     "lastEditedBy": "Last edited {date} by {who}",
     "cut": "This vault lists more than {n} entries: the folders show the first {n} only. Search finds the others.",
-    "unavailable": "Kura is not answering (503). Retrying in 30 s…"
+    "unavailable": "Kura is not answering (503). Retrying in 30 s…",
+    "close": "Close",
+    "notShown": "not shown here",
+    "find": "Find a note",
+    "findHint": "Name or text…",
+    "byName": "By name",
+    "inText": "In the text",
+    "noName": "No note by that name.",
+    "searching": "Searching…",
+    "prev": "Previous note: {name}",
+    "next": "Next note: {name}",
+    "copyLink": "Copy link",
+    "copied": "Link copied",
+    "pastRevision": "The revision of {date}, not the current one.",
+    "backToCurrent": "Show the current one",
+    "revealFolder": "Show {name} in the folders",
+    "keys": "Keyboard shortcuts",
+    "keyFind": "find a note",
+    "keyTurn": "turn the page",
+    "keyClose": "close"
   },
   "manage": {
     "title": "Manage",
@@ -418,7 +436,6 @@
     "notes": "Notes",
     "sections": "Vault sections",
     "youAre": "you are {role}",
-    "read": "Read in the browser",
     "who": "Who can open it",
     "manageAccess": "Manage access",
     "liveKeys": "Live access keys",
@@ -427,5 +444,9 @@
     "manageKeys": "Manage keys",
     "recent": "Changed last",
     "browse": "Browse the notes"
+  },
+  "filter": {
+    "label": "Filter",
+    "none": "Nothing matches “{q}”."
   }
 }

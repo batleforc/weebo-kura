@@ -7,8 +7,9 @@ import { ensureDevice, signOut } from "@/api/client";
 import { problemType } from "@/api/problem";
 import { useSession } from "@/auth/session";
 import PrefsMenu from "@/components/PrefsMenu.vue";
+import Chevron from "@/components/ui/Chevron.vue";
 import { useMe } from "@/me";
-import { useVaults } from "@/vaults";
+import { sectionOf, sectionsOf, useVaults } from "@/vaults";
 
 const { t } = useI18n();
 const route = useRoute();
@@ -28,6 +29,20 @@ const groups = computed(() => {
       .sort((a, b) => a.name.localeCompare(b.name)),
   }));
 });
+/** The vaults whose sections the sidebar shows; the open vault's unfold by themselves. */
+const expanded = ref(new Set<string>());
+function toggle(id: string): void {
+  const next = new Set(expanded.value);
+  if (!next.delete(id)) next.add(id);
+  expanded.value = next;
+}
+watch(
+  () => route.params.v,
+  (v) => {
+    if (typeof v === "string" && !expanded.value.has(v)) toggle(v);
+  },
+  { immediate: true },
+);
 /** On a phone the vault list folds under the header; open from 768px. */
 const wide = ref(
   typeof matchMedia === "function" && matchMedia("(min-width: 768px)").matches,
@@ -81,14 +96,37 @@ async function leave(): Promise<void> {
             <nav :aria-label="t('nav.vaults')" class="flex flex-col gap-3" data-test="vault-nav">
               <div v-for="g in groups" :key="g.tenant" class="flex flex-col">
                 <span class="px-2 pb-1 text-ink-dim">{{ g.tenant }}</span>
-                <RouterLink
-                  v-for="v in g.vaults"
-                  :key="v.id"
-                  :to="`/vaults/${v.id}`"
-                  class="px-2 py-1 no-underline hover:text-ink"
-                  :class="route.params.v === v.id ? 'bg-ink font-bold text-ground' : ''"
-                  :aria-current="route.params.v === v.id ? 'page' : undefined"
-                >{{ v.name }}</RouterLink>
+                <ul class="flex flex-col">
+                  <li v-for="v in g.vaults" :key="v.id">
+                    <div class="flex">
+                      <button
+                        type="button"
+                        class="grid w-6 shrink-0 place-items-center text-ink-dim hover:text-ink pointer-coarse:w-11"
+                        :aria-expanded="expanded.has(v.id)"
+                        :aria-controls="`sections-${v.id}`"
+                        :aria-label="t('nav.sectionsOf', { name: v.name })"
+                        data-test="vault-expand"
+                        @click="toggle(v.id)"
+                      ><Chevron :dir="expanded.has(v.id) ? 'down' : 'right'" /></button>
+                      <RouterLink
+                        :to="`/vaults/${v.id}`"
+                        class="min-w-0 flex-1 break-words py-1 pr-2 no-underline hover:text-ink"
+                        :class="route.params.v === v.id ? 'font-bold text-ink' : ''"
+                        :aria-current="route.params.v === v.id ? 'location' : undefined"
+                      >{{ v.name }}</RouterLink>
+                    </div>
+                    <ul v-if="expanded.has(v.id)" :id="`sections-${v.id}`" class="mb-1 ml-3 border-l border-rule-soft pl-1" data-test="vault-sections">
+                      <li v-for="s in sectionsOf(v, meStore.me?.tenants)" :key="s.name">
+                        <RouterLink
+                          :to="s.to"
+                          class="block px-2 py-1 no-underline"
+                          :class="route.params.v === v.id && sectionOf(route.name) === s.name ? 'bg-ink font-bold text-ground' : 'text-ink-dim hover:text-ink'"
+                          :aria-current="route.params.v === v.id && sectionOf(route.name) === s.name ? 'page' : undefined"
+                        >{{ t(s.label) }}</RouterLink>
+                      </li>
+                    </ul>
+                  </li>
+                </ul>
               </div>
               <p v-if="vaultStore.loaded && !groups.length" class="px-2 text-ink-dim">{{ t("nav.noVault") }}</p>
             </nav>

@@ -1,12 +1,12 @@
 // Kura Sync (RFC 0001 §6.8): Obsidian glue only. Sign-in, sync timing,
 // notifications, the vault host and the status words live in tested modules.
-import { MarkdownView, Modal, Notice, Platform, Plugin, requestUrl } from "obsidian";
+import { MarkdownView, Menu, Notice, Platform, Plugin, TFile, getLanguage, requestUrl, setIcon, setTooltip } from "obsidian";
 import type { App } from "obsidian";
 import wasmBytes from "./wasm/kura_bg.wasm";
 import { isRecord } from "./types";
 import { AuthError, Session, discover, secretId, secureUrl, startDevice, waitForApproval } from "./auth";
-import { type Setup, parseSetup } from "./setup";
-import type { DeviceCode, Http } from "./auth";
+import { parseSetup } from "./setup";
+import type { Http } from "./auth";
 import { Controller } from "./controller";
 import { loadCore } from "./core";
 import type { Core } from "./core";
@@ -17,7 +17,11 @@ import { Api } from "./remote";
 import type { VaultView } from "./remote";
 import { KuraSettingTab } from "./settings";
 import type { Situation } from "./status";
-import { label } from "./status";
+import { icon, label, newConflicts, tone, word } from "./status";
+import { ago, setLanguage, t } from "./i18n";
+import { consoleUrl, entryOf } from "./links";
+import { CodeModal, ConfirmModal, PluginModal, ProblemsModal, SetupModal, SwitchModal, WelcomeModal } from "./modals";
+import type { Report } from "./types";
 import { PluginGuard, codeHashes, emptyConsent, forget, readConsent } from "./plugins";
 import type { Consent, PluginRegistry } from "./plugins";
 
@@ -33,9 +37,11 @@ export interface Settings {
   maxFileMiB: number;
   /** Synced plugins agreed to or refused on this device (decision 34). */
   consent: Consent;
+  /** The first-run welcome was shown once. */
+  welcomed: boolean;
 }
 
-const DEFAULTS: Settings = { server: "", issuer: "", clientId: "kura-plugin", vault: "", vaultName: "", device: "", deviceName: "", maxFileMiB: 200, consent: emptyConsent() };
+const DEFAULTS: Settings = { server: "", issuer: "", clientId: "kura-plugin", vault: "", vaultName: "", device: "", deviceName: "", maxFileMiB: 200, consent: emptyConsent(), welcomed: false };
 
 /** Stored settings, field by field: `data.json` is not trusted blindly. */
 function readSettings(data: unknown): Settings {
@@ -55,6 +61,7 @@ function readSettings(data: unknown): Settings {
     deviceName: text("deviceName", DEFAULTS.deviceName),
     maxFileMiB: typeof size === "number" && size > 0 ? size : DEFAULTS.maxFileMiB,
     consent: readConsent(d.consent),
+    welcomed: d.welcomed === true,
   };
 }
 
@@ -79,27 +86,6 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => window.set
 const timers = { set: (fn: () => void, ms: number) => window.setTimeout(fn, ms), clear: (id: number) => { window.clearTimeout(id); } };
 const random16 = (): Uint8Array => crypto.getRandomValues(new Uint8Array(16));
 
-class CodeModal extends Modal {
-  cancelled = false;
-  constructor(app: App, private readonly code: DeviceCode) {
-    super(app);
-  }
-  override onOpen(): void {
-    this.setTitle("Sign in to Kura");
-    const open = this.code.verificationUriComplete ?? this.code.verificationUri;
-    this.contentEl.createEl("p", { text: `1. Open ${this.code.verificationUri}` });
-    this.contentEl.createEl("button", { text: "Open" }).onclick = () => window.open(open);
-    this.contentEl.createEl("p", { text: "2. Enter this code:" });
-    this.contentEl.createEl("p", { text: this.code.userCode, cls: "kura-code" });
-    this.contentEl.createEl("button", { text: "Copy" }).onclick = () => void navigator.clipboard.writeText(this.code.userCode);
-    this.contentEl.createEl("p", { text: "Waiting for approval..." });
-  }
-  override onClose(): void {
-    this.cancelled = true;
-  }
-}
-
-/** A full resync would trash many files: the user decides (§6.3). */
 /** Obsidian's plugin switchboard (`app.plugins`, not in the public API),
  * read defensively: if its shape changes, configuration sync never enables
  * anything. */
@@ -139,109 +125,22 @@ function registry(app: App): PluginRegistry | null {
   };
 }
 
-/** The §4.5 mock: a synced plugin, or a new version of one, runs only on [Enable]. */
-class PluginModal extends Modal {
-  private answer: (yes: boolean) => void = () => undefined;
-  constructor(app: App, private readonly id: string) {
-    super(app);
-  }
-  ask(): Promise<boolean> {
-    return new Promise((resolve) => {
-      this.answer = resolve;
-      this.open();
-    });
-  }
-  override onOpen(): void {
-    this.setTitle("Kura Sync");
-    const manifests: unknown = Reflect.get(Reflect.get(this.app, "plugins") ?? {}, "manifests");
-    const m: unknown = isRecord(manifests) ? manifests[this.id] : null;
-    const name = isRecord(m) && typeof m.name === "string" ? m.name : this.id;
-    const version = isRecord(m) && typeof m.version === "string" ? ` ${m.version}` : "";
-    this.contentEl.createEl("p", { text: `Plugin "${name}"${version} was synced from another of your devices.` });
-    this.contentEl.createEl("p", { text: "It is installed but disabled on this device." });
-    this.contentEl.createEl("p", { text: "Plugins run code with access to this vault." });
-    this.contentEl.createEl("button", { text: "Keep disabled" }).onclick = () => {
-      this.close();
-    };
-    this.contentEl.createEl("button", { text: "Enable", cls: "mod-cta" }).onclick = () => {
-      this.answer(true);
-      this.answer = () => undefined;
-      this.close();
-    };
-  }
-  override onClose(): void {
-    this.answer(false);
-  }
-}
-
-/** What a setup link would change, shown before anything is applied. */
-class SetupModal extends Modal {
-  private answer: (yes: boolean) => void = () => undefined;
-  constructor(app: App, private readonly setup: Setup, private readonly current: Settings) {
-    super(app);
-  }
-  ask(): Promise<boolean> {
-    return new Promise((resolve) => {
-      this.answer = resolve;
-      this.open();
-    });
-  }
-  override onOpen(): void {
-    this.setTitle("Kura: connect this vault?");
-    this.contentEl.createEl("p", { text: "A link asks Kura Sync to use these settings. Accept only if you opened it from your Kura console." });
-    const list = this.contentEl.createEl("ul");
-    list.createEl("li", { text: `Server: ${this.setup.server}` });
-    list.createEl("li", { text: `Sign in with: ${this.setup.issuer}` });
-    list.createEl("li", { text: `Kura vault: ${this.setup.vault === "" ? "chosen after signing in" : this.setup.vaultName}` });
-    if (this.current.server !== "" && this.current.server !== this.setup.server) {
-      this.contentEl.createEl("p", { text: `This replaces the connection to ${this.current.server}; this device signs in again.` });
-    }
-    this.contentEl.createEl("button", { text: "Cancel" }).onclick = () => {
-      this.close();
-    };
-    this.contentEl.createEl("button", { text: "Connect and sign in", cls: "mod-cta" }).onclick = () => {
-      this.answer(true);
-      this.answer = () => undefined;
-      this.close();
-    };
-  }
-  override onClose(): void {
-    this.answer(false);
-  }
-}
-
-class ConfirmModal extends Modal {
-  private answer: (yes: boolean) => void = () => undefined;
-  constructor(app: App, private readonly deletions: number, private readonly files: number) {
-    super(app);
-  }
-  ask(): Promise<boolean> {
-    return new Promise((resolve) => {
-      this.answer = resolve;
-      this.open();
-    });
-  }
-  override onOpen(): void {
-    this.setTitle("Kura: files deleted elsewhere");
-    const share = this.files === 0 ? 100 : Math.round((this.deletions * 100) / this.files);
-    this.contentEl.createEl("p", {
-      text: `This device was away longer than the vault keeps deletions. ${String(this.deletions)} local files (${String(share)}%) were deleted on other devices. Move them to the trash?`,
-    });
-    this.contentEl.createEl("button", { text: "Move to trash", cls: "mod-warning" }).onclick = () => {
-      this.answer(true);
-      this.answer = () => undefined;
-      this.close();
-    };
-    this.contentEl.createEl("button", { text: "Not now" }).onclick = () => {
-      this.close();
-    };
-  }
-  override onClose(): void {
-    this.answer(false);
-  }
-}
-
 const CONFIG_EVERY_MS = 5 * 60 * 1000 - 15_000;
+
+/** A notice with one button: the thing to do about it, at hand. */
+/** Why something failed, in a sentence: the message, not the object. */
+function because(e: unknown): string {
+  return e instanceof AuthError || e instanceof Error ? e.message : String(e);
+}
+
+function notify(text: string, action: { label: string; run: () => void }): void {
+  const body = createFragment((f) => {
+    f.createSpan({ text });
+    const b = f.createEl("button", { text: action.label, cls: "kura-notice-action" });
+    b.onclick = action.run;
+  });
+  new Notice(body, 10_000);
+}
 
 export default class KuraPlugin extends Plugin {
   config: Settings = { ...DEFAULTS };
@@ -256,23 +155,44 @@ export default class KuraPlugin extends Plugin {
   private controller: Controller | null = null;
   private notifier: Notifier | null = null;
   private statusEl: HTMLElement | null = null;
+  private statusIcon: HTMLElement | null = null;
+  private statusText: HTMLElement | null = null;
   private ribbonEl: HTMLElement | null = null;
   private tab: KuraSettingTab | null = null;
+  /** The note host of the running sync: its state maps paths to entries. */
+  private host: ObsidianHost | null = null;
+  /** When the last run finished, on this device, in this session. */
+  lastSyncAt: number | null = null;
+  private readOnlyAnnounced = false;
 
   override async onload(): Promise<void> {
+    setLanguage(getLanguage());
     this.config = readSettings(await this.loadData());
     this.core = loadCore(wasmBytes);
-    if (!Platform.isMobile) this.statusEl = this.addStatusBarItem();
-    // Mobile has no plugin status bar: the ribbon label carries the state (§4.5).
-    this.ribbonEl = this.addRibbonIcon("refresh-cw", "Kura", () => {
-      void this.controller?.sync(true);
-    });
+    if (!Platform.isMobile) {
+      // The state, as an icon and its word; a click opens what can be done about it.
+      const el = this.addStatusBarItem();
+      el.addClass("kura-status", "mod-clickable");
+      this.statusIcon = el.createSpan({ cls: "kura-status-icon" });
+      this.statusText = el.createSpan();
+      el.onClickEvent((e) => { this.menu(e); });
+      this.statusEl = el;
+    }
+    // Mobile has no plugin status bar: the ribbon's icon and label carry the state (§4.5).
+    this.ribbonEl = this.addRibbonIcon("cloud", "Kura", (e) => { this.menu(e); });
     this.tab = new KuraSettingTab(this.app, this);
     this.addSettingTab(this.tab);
-    this.addCommand({ id: "sync-now", name: "Sync now", callback: () => void this.controller?.sync(true) });
-    this.addCommand({ id: "sign-in", name: "Sign in", callback: () => void this.signIn() });
+    this.commands();
     // The console's "Open in Obsidian": obsidian://kura-setup?server=…&issuer=…&kuraVault=…
     this.registerObsidianProtocolHandler("kura-setup", (params) => void this.setupFrom(params));
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, file) => {
+        if (!(file instanceof TFile) || !this.connected()) return;
+        menu.addItem((i) => i.setSection("kura").setTitle(t("menu.openNote")).setIcon("globe").onClick(() => void this.openInConsole(file.path, false)));
+        menu.addItem((i) => i.setSection("kura").setTitle(t("menu.history")).setIcon("history").onClick(() => void this.openInConsole(file.path, true)));
+        menu.addItem((i) => i.setSection("kura").setTitle(t("menu.copyLink")).setIcon("link").onClick(() => void this.copyLink(file.path)));
+      }),
+    );
     const touched = (): void => this.controller?.touched();
     this.registerEvent(this.app.vault.on("create", touched));
     this.registerEvent(this.app.vault.on("modify", touched));
@@ -281,13 +201,18 @@ export default class KuraPlugin extends Plugin {
     // Resume: pull when the app comes back (§6.3).
     // The configuration is scanned at most every 5 minutes, and on resume (§6.8).
     this.registerInterval(window.setInterval(() => void this.controller?.sync(), 5 * 60 * 1000));
+    // The "2 min ago" of the tooltip and the settings ages with the clock.
+    this.registerInterval(window.setInterval(() => { if (this.latest !== null) this.paint(this.latest); }, 60 * 1000));
     this.registerDomEvent(document, "visibilitychange", () => {
       if (document.visibilityState === "visible") {
         this.configSyncedAt = 0;
         void this.controller?.sync();
       }
     });
-    this.app.workspace.onLayoutReady(() => void this.start());
+    this.app.workspace.onLayoutReady(() => {
+      void this.start();
+      void this.welcome();
+    });
   }
 
   override onunload(): void {
@@ -306,27 +231,167 @@ export default class KuraPlugin extends Plugin {
     return null;
   }
 
+  /** Signed in, with a vault: the console links mean something. */
+  connected(): boolean {
+    return this.config.device !== "" && this.config.vault !== "" && this.config.server !== "";
+  }
+
   private sessionFor(): Session | null {
     const s = this.config;
     if (!this.secretsAvailable() || s.server === "" || s.issuer === "" || s.vault === "") return null;
     return new Session(http, s.issuer, s.clientId, this.app.secretStorage, secretId(s.server, s.vault), () => Date.now());
   }
 
+  private commands(): void {
+    this.addCommand({ id: "sync-now", name: t("cmd.sync"), callback: () => void this.controller?.sync(true) });
+    this.addCommand({ id: "sign-in", name: t("cmd.signIn"), callback: () => void this.signIn() });
+    this.addCommand({ id: "sign-out", name: t("cmd.signOut"), checkCallback: (check) => {
+      if (this.config.device === "") return false;
+      if (!check) this.signOut();
+      return true;
+    } });
+    this.addCommand({ id: "status", name: t("cmd.status"), callback: () => {
+      new Notice(t("n.status", { word: this.latest === null ? t("word.notConfigured") : word(this.latest), last: this.lastLine() }));
+    } });
+    this.addCommand({ id: "problems", name: t("cmd.problems"), callback: () => { this.showProblems(); } });
+    this.addCommand({ id: "settings", name: t("cmd.settings"), callback: () => { this.openSettings(); } });
+    const onNote = (run: (path: string) => void) => (check: boolean): boolean => {
+      const file = this.app.workspace.getActiveFile();
+      if (file === null || !this.connected()) return false;
+      if (!check) run(file.path);
+      return true;
+    };
+    this.addCommand({ id: "open-note", name: t("cmd.openNote"), checkCallback: onNote((p) => void this.openInConsole(p, false)) });
+    this.addCommand({ id: "note-history", name: t("cmd.history"), checkCallback: onNote((p) => void this.openInConsole(p, true)) });
+    this.addCommand({ id: "copy-link", name: t("cmd.copyLink"), checkCallback: onNote((p) => void this.copyLink(p)) });
+  }
+
+  /** What the status bar and the ribbon offer: the next useful things to do. */
+  private menu(e: MouseEvent): void {
+    const m = new Menu();
+    if (this.latest?.signedIn !== true) {
+      m.addItem((i) => i.setTitle(t("menu.signIn")).setIcon("log-in").onClick(() => void this.signIn()));
+    } else {
+      m.addItem((i) => i.setTitle(t("menu.sync")).setIcon("refresh-cw").onClick(() => void this.controller?.sync(true)));
+    }
+    const last = this.latest?.last ?? null;
+    if ((last?.conflicts.length ?? 0) + (last?.unsyncable.length ?? 0) + (last?.failed.length ?? 0) > 0) {
+      m.addItem((i) => i.setTitle(t("menu.problems")).setIcon("alert-triangle").onClick(() => { this.showProblems(); }));
+    }
+    if (this.connected()) {
+      m.addSeparator();
+      const file = this.app.workspace.getActiveFile();
+      if (file !== null) m.addItem((i) => i.setTitle(t("menu.openNote")).setIcon("globe").onClick(() => void this.openInConsole(file.path, false)));
+      m.addItem((i) => i.setTitle(t("menu.openVault")).setIcon("external-link").onClick(() => window.open(consoleUrl(this.config.server, this.config.vault))));
+    }
+    m.addSeparator();
+    m.addItem((i) => i.setTitle(t("menu.settings")).setIcon("settings").onClick(() => { this.openSettings(); }));
+    m.showAtMouseEvent(e);
+  }
+
+  /** "Last sync 2 min ago", or that it has not happened yet. */
+  lastLine(): string {
+    return this.lastSyncAt === null ? t("tip.never") : t("tip.last", { when: ago(this.lastSyncAt, Date.now()) });
+  }
+
+  async syncNow(): Promise<void> {
+    await this.controller?.sync(true);
+  }
+
+  showProblems(): void {
+    new ProblemsModal(this.app, this.latest?.last ?? null, (p) => { this.openFile(p); }).open();
+  }
+
+  openFile(path: string): void {
+    void this.app.workspace.openLinkText(path, "", false);
+  }
+
+  /** Obsidian's settings, on this plugin's tab (not public API: read defensively). */
+  openSettings(): void {
+    const setting: unknown = Reflect.get(this.app, "setting");
+    if (typeof setting !== "object" || setting === null) return;
+    const open: unknown = Reflect.get(setting, "open");
+    const tab: unknown = Reflect.get(setting, "openTabById");
+    if (typeof open === "function") Reflect.apply(open, setting, []);
+    if (typeof tab === "function") Reflect.apply(tab, setting, [this.manifest.id]);
+  }
+
+  private async entry(path: string): Promise<string | null> {
+    const host = this.host;
+    return host === null ? null : entryOf(await host.loadState(), path);
+  }
+
+  private async openInConsole(path: string, history: boolean): Promise<void> {
+    const entry = await this.entry(path);
+    if (entry === null) {
+      new Notice(t("n.notSynced"));
+      return;
+    }
+    window.open(consoleUrl(this.config.server, this.config.vault, entry, history));
+  }
+
+  private async copyLink(path: string): Promise<void> {
+    const entry = await this.entry(path);
+    if (entry === null) {
+      new Notice(t("n.notSynced"));
+      return;
+    }
+    await navigator.clipboard.writeText(consoleUrl(this.config.server, this.config.vault, entry));
+    new Notice(t("n.copied"));
+  }
+
+  /** Once, on a vault with nothing set up: how to connect it. */
+  private async welcome(): Promise<void> {
+    if (this.config.welcomed || this.config.server !== "") return;
+    this.config.welcomed = true;
+    await this.saveSettings();
+    if (await new WelcomeModal(this.app).ask()) this.openSettings();
+  }
+
   render(s: Situation): void {
-    // Announced once per session: a run held below the horizon (a note
-    // left open) resyncs again on every sync until the note closes.
-    if (!this.resyncAnnounced && s.last !== null && s.last !== this.latest?.last && s.last.resynced !== null) {
-      this.resyncAnnounced = true;
-      new Notice(
-        s.last.resynced === "history_rewound"
-          ? "Kura: the server lost recent history. Nothing was removed here; files it no longer had were pushed again."
-          : `Kura: full resync. ${String(s.last.trashed)} files deleted elsewhere were moved to the trash.`,
-      );
+    const before = this.latest?.last ?? null;
+    if (s.last !== null && s.last !== before) {
+      this.lastSyncAt = Date.now();
+      // Announced once per session: a run held below the horizon (a note
+      // left open) resyncs again on every sync until the note closes.
+      if (!this.resyncAnnounced && s.last.resynced !== null) {
+        this.resyncAnnounced = true;
+        new Notice(s.last.resynced === "history_rewound" ? t("n.rewound") : t("n.resync", { n: s.last.trashed }));
+      }
+      this.announceConflicts(before, s.last);
+    }
+    if (!this.readOnlyAnnounced && s.role === "viewer" && s.pending > 0) {
+      this.readOnlyAnnounced = true;
+      new Notice(t("n.readOnly"), 10_000);
     }
     this.latest = s;
+    this.paint(s);
+  }
+
+  private announceConflicts(before: Report | null, now: Report): void {
+    const fresh = newConflicts(before, now);
+    const first = fresh[0];
+    if (first === undefined) return;
+    const text = fresh.length === 1 ? t("n.conflict", { name: first }) : t("n.conflicts", { n: fresh.length });
+    notify(text, fresh.length === 1 ? { label: t("a.open"), run: () => { this.openFile(first); } } : { label: t("a.show"), run: () => { this.showProblems(); } });
+  }
+
+  /** The status bar, the ribbon and the settings' first line, from one state. */
+  private paint(s: Situation): void {
     const text = label(s);
-    this.statusEl?.setText(text);
-    this.ribbonEl?.setAttribute("aria-label", text);
+    const glyph = icon(tone(s));
+    const tip = s.pending > 0 ? `${this.lastLine()} · ${t("tip.pending", { n: s.pending })}` : this.lastLine();
+    if (this.statusEl !== null && this.statusIcon !== null) {
+      setIcon(this.statusIcon, glyph);
+      this.statusText?.setText(text);
+      this.statusEl.dataset.tone = tone(s);
+      setTooltip(this.statusEl, tip, { placement: "top" });
+    }
+    if (this.ribbonEl !== null) {
+      setIcon(this.ribbonEl, glyph);
+      this.ribbonEl.dataset.tone = tone(s);
+      this.ribbonEl.setAttribute("aria-label", `${text} · ${tip}`);
+    }
     this.tab?.refreshState();
   }
 
@@ -335,7 +400,7 @@ export default class KuraPlugin extends Plugin {
     this.notifier?.stop();
     this.notifier = null;
     if (!this.secretsAvailable()) {
-      new Notice("Kura Sync needs Obsidian 1.11.4 or later: update Obsidian.");
+      new Notice(t("n.needsObsidian"));
       return;
     }
     if (!secureUrl(this.config.server) || !secureUrl(this.config.issuer)) return;
@@ -358,6 +423,7 @@ export default class KuraPlugin extends Plugin {
     } catch {
       // Offline: the controller reports it.
     }
+    this.host = host;
     let vault = this.vaults.find((v) => v.id === s.vault) ?? null;
     const core = this.core;
     const controller = new Controller({
@@ -413,7 +479,13 @@ export default class KuraPlugin extends Plugin {
     const plugins = registry(this.app);
     if (plugins === null) return;
     const s = this.config;
-    const guard = new PluginGuard(plugins, s.consent, () => this.saveSettings(), (id) => new PluginModal(this.app, id).ask());
+    const guard = new PluginGuard(plugins, s.consent, () => this.saveSettings(), (id) => {
+      const manifests: unknown = Reflect.get(Reflect.get(this.app, "plugins") ?? {}, "manifests");
+      const m: unknown = isRecord(manifests) ? manifests[id] : null;
+      const name = isRecord(m) && typeof m.name === "string" ? m.name : id;
+      const version = isRecord(m) && typeof m.version === "string" ? ` ${m.version}` : "";
+      return new PluginModal(this.app, name, version).ask();
+    });
     // Never this plugin's own folder, whatever it is named (phase 8 review M4).
     const own = (this.manifest.dir ?? "").slice(this.app.vault.configDir.length + 1).toLowerCase();
     const keep = (p: string): boolean =>
@@ -438,28 +510,28 @@ export default class KuraPlugin extends Plugin {
       await core.sync(host, api.remote(s.vault, "config"), state, options);
       await guard.review(codeHashes(await host.loadState()));
     } catch (e) {
-      new Notice(`Kura: the configuration did not sync: ${String(e)}`);
+      new Notice(t("n.configFailed", { cause: because(e) }));
     }
   }
 
   async signIn(): Promise<void> {
     const s = this.config;
     if (!this.secretsAvailable()) {
-      new Notice("Kura Sync needs Obsidian 1.11.4 or later: update Obsidian.");
+      new Notice(t("n.needsObsidian"));
       return;
     }
     if (s.server === "" || s.issuer === "") {
-      new Notice("Set the server and the identity provider first.");
+      new Notice(t("n.setFirst"));
       return;
     }
     if (!secureUrl(s.server) || !secureUrl(s.issuer)) {
-      new Notice("The server and the identity provider must use https://.");
+      new Notice(t("n.https"));
       return;
     }
     try {
       const d = await discover(http, s.issuer);
       const code = await startDevice(http, d, s.clientId);
-      const modal = new CodeModal(this.app, code);
+      const modal = new CodeModal(this.app, code, () => Date.now());
       modal.open();
       const tokens = await waitForApproval(http, d, s.clientId, code, sleep, () => Date.now(), () => modal.cancelled);
       modal.close();
@@ -476,14 +548,10 @@ export default class KuraPlugin extends Plugin {
       // `display` is deprecated from 1.13; the plugin supports 1.11.4 (§6.8).
       // eslint-disable-next-line @typescript-eslint/no-deprecated
       this.tab?.display();
-      new Notice(
-        this.vaults.some((v) => v.id === s.vault)
-          ? `Signed in to Kura: syncing ${s.vaultName}.`
-          : "Signed in to Kura. Choose a vault in the settings.",
-      );
+      new Notice(this.vaults.some((v) => v.id === s.vault) ? t("n.signedInSyncing", { vault: s.vaultName }) : t("n.signedInChoose"));
       await this.start();
     } catch (e) {
-      new Notice(e instanceof AuthError ? e.message : `Sign-in failed: ${String(e)}`);
+      new Notice(t("n.signInFailed", { cause: because(e) }));
     }
   }
 
@@ -491,10 +559,10 @@ export default class KuraPlugin extends Plugin {
   async setupFrom(params: Record<string, string | undefined>): Promise<void> {
     const setup = parseSetup(params);
     if (typeof setup === "string") {
-      new Notice(`Kura: this setup link is refused: ${setup}.`);
+      new Notice(t("n.linkRefused", { why: setup }));
       return;
     }
-    if (!(await new SetupModal(this.app, setup, this.config).ask())) return;
+    if (!(await new SetupModal(this.app, setup, this.config.server).ask())) return;
     const s = this.config;
     if (s.server !== setup.server) {
       // A device belongs to one server: a new server registers a new one.
@@ -513,9 +581,11 @@ export default class KuraPlugin extends Plugin {
   }
 
   /** Choosing another vault detaches first: the sync state is dropped, files stay (§4.5). */
-  async chooseVault(id: string): Promise<void> {
+  /** False when the user kept the vault they had. */
+  async chooseVault(id: string): Promise<boolean> {
     const v = this.vaults.find((x) => x.id === id);
-    if (v === undefined) return;
+    if (v === undefined) return false;
+    if (this.config.vault !== "" && this.config.vault !== id && !(await new SwitchModal(this.app, this.config.vaultName, v.name).ask())) return false;
     const pending = this.app.secretStorage.getSecret(secretId(this.config.server, "pending"));
     this.config.vault = v.id;
     this.config.vaultName = v.name;
@@ -526,12 +596,15 @@ export default class KuraPlugin extends Plugin {
     }
     await this.saveSettings();
     await this.start();
+    return true;
   }
 
   signOut(): void {
     this.session?.signOut();
     this.app.secretStorage.setSecret(secretId(this.config.server, "pending"), "");
     this.notifier?.stop();
+    // Repaints the state as signed out.
+    void this.controller?.sync();
     // eslint-disable-next-line @typescript-eslint/no-deprecated -- supports 1.11.4
     this.tab?.display();
   }
