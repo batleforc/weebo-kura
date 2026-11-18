@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # A run by hand, e.g. after the workflow was re-enabled.
+  workflow_dispatch:
 
 permissions:
   contents: read
