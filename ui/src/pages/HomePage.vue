@@ -178,16 +178,16 @@ onMounted(load);
                 <StateMark kind="live" :word="t('home.active', { n: mine.length }, mine.length)" />
               </p>
               <p v-if="latest" class="text-ink-dim">{{ t("home.latest", { name: latest.name, when: ago(latest.lastSeen, locale) }) }}</p>
-              <RouterLink to="/devices">{{ t("home.devicesAction") }}</RouterLink>
+              <RouterLink to="/devices" class="underline underline-offset-4">{{ t("home.devicesAction") }}</RouterLink>
             </section>
             <section v-if="manages" aria-labelledby="you-run" class="flex flex-col gap-1.5 border-t border-dashed border-rule-soft pt-5" data-test="manage">
               <h2 id="you-run" class="label">{{ t("home.run") }}</h2>
-              <p class="text-ink-dim">{{ t("home.runCount", { tenants: tenantsRun, vaults: managed.vaults.length }) }}</p>
+              <p class="text-ink-dim">{{ t("home.runTenants", { n: tenantsRun }, tenantsRun) }}, {{ t("home.runVaults", { n: managed.vaults.length }, managed.vaults.length) }}</p>
               <ul class="flex flex-col gap-1">
-                <li v-for="slug in managed.tenants" :key="`v-${slug}`"><RouterLink :to="`/manage/tenants/${slug}/vaults`">{{ t("home.tenantVaults", { tenant: slug }) }}</RouterLink></li>
-                <li v-for="slug in managed.tenants" :key="`n-${slug}`"><RouterLink :to="`/manage/tenants/${slug}/notifications`">{{ t("home.tenantNotifications", { tenant: slug }) }}</RouterLink></li>
-                <li v-if="managed.tenants.length"><RouterLink to="/manage/devices">{{ t("manage.devices") }}</RouterLink></li>
-                <li v-if="managed.platform"><RouterLink to="/manage/status">{{ t("manage.status") }}</RouterLink></li>
+                <li v-for="slug in managed.tenants" :key="`v-${slug}`"><RouterLink :to="`/manage/tenants/${slug}/vaults`" class="underline underline-offset-4">{{ t("home.tenantVaults", { tenant: slug }) }}</RouterLink></li>
+                <li v-for="slug in managed.tenants" :key="`n-${slug}`"><RouterLink :to="`/manage/tenants/${slug}/notifications`" class="underline underline-offset-4">{{ t("home.tenantNotifications", { tenant: slug }) }}</RouterLink></li>
+                <li v-if="managed.tenants.length"><RouterLink to="/manage/devices" class="underline underline-offset-4">{{ t("manage.devices") }}</RouterLink></li>
+                <li v-if="managed.platform"><RouterLink to="/manage/status" class="underline underline-offset-4">{{ t("manage.status") }}</RouterLink></li>
               </ul>
             </section>
           </aside>

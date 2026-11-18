@@ -16,6 +16,7 @@ import AsyncState from "@/components/ui/AsyncState.vue";
 import ConfirmRow from "@/components/ui/ConfirmRow.vue";
 import ForbiddenState from "@/components/ui/ForbiddenState.vue";
 import TableFilter from "@/components/ui/TableFilter.vue";
+import TableScroll from "@/components/ui/TableScroll.vue";
 import { matching } from "@/filter";
 import { useLoad } from "@/manage/useLoad";
 import { useVault } from "@/manage/useVault";
@@ -132,8 +133,8 @@ onMounted(load);
     <AsyncState v-else :loading="loading" :error="error" :empty="false" empty-message="" :title="t('manage.failed')" :can-retry="canRetry" @retry="load">
       <p v-if="refusal" role="alert" class="mb-2 border-l border-rule pl-3">{{ refusal }}</p>
       <TableFilter v-model="query" :empty="shown.length === 0" />
-      <div class="relative overflow-x-auto" tabindex="0">
-      <table class="w-full text-left">
+      <TableScroll :label="t('state.tableRegion')">
+      <table class="acts w-full text-left">
         <thead>
           <tr>
             <th scope="col">{{ t("access.subject") }}</th>
@@ -147,7 +148,7 @@ onMounted(load);
           <!-- The tenant role's grant, so the page answers "who can read this". -->
           <tr class="border-t border-rule-soft text-ink-dim">
             <td>{{ t("access.tenantAdmins") }}</td>
-            <td>manager</td>
+            <td>{{ t("role.manager") }}</td>
             <td>{{ t("reader.whole") }}</td>
             <td>{{ t("access.tenantRole") }}</td>
             <td />
@@ -163,11 +164,11 @@ onMounted(load);
                 class="bg-ground"
                 @change="pending = { subject: b.subject, role: ($event.target as HTMLSelectElement).value }"
               >
-                <option>viewer</option>
-                <option>editor</option>
-                <option>manager</option>
+                <option value="viewer">{{ t("role.viewer") }}</option>
+                <option value="editor">{{ t("role.editor") }}</option>
+                <option value="manager">{{ t("role.manager") }}</option>
               </select>
-              <span v-else>{{ b.role }}</span>
+              <span v-else>{{ t(`role.${b.role}`) }}</span>
             </td>
             <!-- RFC 0005 §4.3: the warnings, as text, not colour. -->
             <td v-if="b.paths">
@@ -194,7 +195,7 @@ onMounted(load);
           </template>
         </tbody>
       </table>
-      </div>
+      </TableScroll>
       <p v-if="bindings.length === 0" class="mt-2 text-ink-dim">{{ t("access.empty") }}</p>
       <button v-if="!adding" type="button" class="mt-4 border border-rule px-3" @click="adding = true">{{ t("access.add") }}</button>
       <form v-else class="mt-4 grid max-w-lg gap-2 border-t border-dashed border-rule-soft pt-4" @submit.prevent="add">
@@ -214,9 +215,9 @@ onMounted(load);
         </label>
         <label>{{ t("access.role") }}
           <select v-model="role" class="ml-2 bg-ground" data-test="role">
-            <option>viewer</option>
-            <option>editor</option>
-            <option>manager</option>
+            <option value="viewer">{{ t("role.viewer") }}</option>
+            <option value="editor">{{ t("role.editor") }}</option>
+            <option value="manager">{{ t("role.manager") }}</option>
           </select>
         </label>
         <label v-if="role === 'viewer'">{{ t("access.folders") }}

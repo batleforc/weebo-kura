@@ -82,7 +82,7 @@ async function leave(): Promise<void> {
   <template v-if="shell">
     <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-2 focus:z-10 focus:bg-ground focus:px-2">{{ t("nav.skip") }}</a>
     <div class="flex min-h-screen flex-wrap">
-      <aside class="flex w-full flex-col gap-5 border-b border-rule-soft px-4 py-5 md:w-64 md:border-r md:border-b-0 md:py-6" :aria-label="t('nav.main')">
+      <aside class="flex w-full flex-col gap-5 border-b border-rule-soft px-4 py-5 md:w-64 md:border-r md:border-b-0 md:py-6" :aria-label="t('nav.sidebar')">
         <RouterLink to="/vaults" class="font-display text-[length:var(--t-px-md)] font-bold tracking-[0.04em] no-underline">KURA</RouterLink>
         <nav :aria-label="t('nav.main')" class="flex flex-col">
           <RouterLink to="/vaults" class="px-2 py-1.5 text-ink-dim hover:text-ink" exact-active-class="bg-ink font-bold !text-ground" data-test="home">{{ t("nav.home") }}</RouterLink>
@@ -137,7 +137,7 @@ async function leave(): Promise<void> {
           <RouterLink to="/help" class="hover:text-ink" active-class="!text-ink font-bold" data-test="help">{{ t("nav.help") }}</RouterLink>
           <PrefsMenu class="self-start" />
           <span>
-            {{ meStore.me?.name ?? meStore.me?.subject ?? "" }} ·
+            <template v-if="meStore.me?.name">{{ meStore.me.name }} · </template>
             <button type="button" class="underline hover:text-ink" data-test="sign-out" @click="leave">{{ t("nav.signOut") }}</button>
           </span>
         </div>

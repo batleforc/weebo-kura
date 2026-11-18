@@ -10,6 +10,7 @@ import type { DeliveryView } from "@/api/generated/types.gen";
 import AsyncState from "@/components/ui/AsyncState.vue";
 import BreadCrumbs from "@/components/ui/BreadCrumbs.vue";
 import ForbiddenState from "@/components/ui/ForbiddenState.vue";
+import TableScroll from "@/components/ui/TableScroll.vue";
 import { useLoad } from "@/manage/useLoad";
 import { when } from "@/reader/time";
 
@@ -48,7 +49,7 @@ onMounted(load);
     <h1 class="mb-4">{{ t("notifications.deliveriesTitle") }}</h1>
     <ForbiddenState v-if="forbidden" :detail="forbiddenDetail" />
     <AsyncState v-else :loading="loading" :error="error" :empty="deliveries.length === 0" :empty-message="t('notifications.noDelivery')" :title="t('manage.failed')" :can-retry="canRetry" @retry="load">
-      <div class="relative overflow-x-auto" tabindex="0">
+      <TableScroll :label="t('state.tableRegion')">
       <table class="w-full text-left">
         <thead>
           <tr>
@@ -67,7 +68,7 @@ onMounted(load);
           </tr>
         </tbody>
       </table>
-      </div>
+      </TableScroll>
     </AsyncState>
   </section>
 </template>

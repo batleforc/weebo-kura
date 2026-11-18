@@ -10,6 +10,7 @@ import AsyncState from "@/components/ui/AsyncState.vue";
 import BreadCrumbs from "@/components/ui/BreadCrumbs.vue";
 import ForbiddenState from "@/components/ui/ForbiddenState.vue";
 import StateMark from "@/components/ui/StateMark.vue";
+import TableScroll from "@/components/ui/TableScroll.vue";
 import { useLoad } from "@/manage/useLoad";
 import { when } from "@/reader/time";
 
@@ -83,7 +84,7 @@ onMounted(load);
       <p class="mb-2 text-ink-dim">
         {{ t("status.generation", { generation: (status?.generation ?? "").slice(0, 8), at: status?.writtenAt ? when(status.writtenAt, locale) : "" }) }}
       </p>
-      <div class="relative overflow-x-auto" tabindex="0">
+      <TableScroll :label="t('state.tableRegion')">
       <table class="w-full text-left">
         <thead>
           <tr>
@@ -102,7 +103,7 @@ onMounted(load);
           </tr>
         </tbody>
       </table>
-      </div>
+      </TableScroll>
     </AsyncState>
   </section>
 </template>

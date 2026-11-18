@@ -18,6 +18,7 @@ import ForbiddenState from "@/components/ui/ForbiddenState.vue";
 import RevokedToggle from "@/components/ui/RevokedToggle.vue";
 import StateMark from "@/components/ui/StateMark.vue";
 import TableFilter from "@/components/ui/TableFilter.vue";
+import TableScroll from "@/components/ui/TableScroll.vue";
 import { matching } from "@/filter";
 import { useLoad } from "@/manage/useLoad";
 import { useMe } from "@/me";
@@ -176,8 +177,8 @@ onMounted(() => {
       <p v-if="refusal" role="alert" class="mb-2 border-l border-rule pl-3">{{ refusal }}</p>
       <p v-if="tokens.length === 0" class="text-ink-dim">{{ t("keys.empty") }}</p>
       <TableFilter v-if="tokens.length > 0" v-model="query" :empty="shown.length === 0" />
-      <div v-if="tokens.length > 0" class="relative overflow-x-auto" tabindex="0">
-      <table class="w-full text-left">
+      <TableScroll v-if="tokens.length > 0" :label="t('state.tableRegion')">
+      <table class="acts w-full text-left">
         <thead>
           <tr>
             <th scope="col">{{ t("keys.name") }}</th>
@@ -217,7 +218,7 @@ onMounted(() => {
           </template>
         </tbody>
       </table>
-      </div>
+      </TableScroll>
       <RevokedToggle v-model="showRevoked" :count="revokedCount" />
       <button v-if="!creating" type="button" class="mt-4 border border-rule px-3" data-test="new-key" @click="creating = true">
         {{ t("keys.new") }}

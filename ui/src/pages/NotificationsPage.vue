@@ -26,6 +26,7 @@ import BreadCrumbs from "@/components/ui/BreadCrumbs.vue";
 import ConfirmRow from "@/components/ui/ConfirmRow.vue";
 import ForbiddenState from "@/components/ui/ForbiddenState.vue";
 import StateMark from "@/components/ui/StateMark.vue";
+import TableScroll from "@/components/ui/TableScroll.vue";
 import { useLoad } from "@/manage/useLoad";
 import { useMe } from "@/me";
 import { ago, when } from "@/reader/time";
@@ -384,8 +385,8 @@ onMounted(async () => {
       <p v-if="tested" role="status" class="mb-2" data-test="tested">{{ t("notifications.tested", tested) }}</p>
       <p v-if="refusal" role="alert" class="mb-2 border-l border-rule pl-3">{{ refusal }}</p>
       <p v-if="shown.length === 0" class="text-ink-dim">{{ t("notifications.empty") }}</p>
-      <div v-else class="relative overflow-x-auto" tabindex="0">
-      <table class="w-full text-left">
+      <TableScroll v-else :label="t('state.tableRegion')">
+      <table class="acts w-full text-left">
         <thead>
           <tr>
             <th scope="col">{{ t("keys.name") }}</th>
@@ -401,7 +402,7 @@ onMounted(async () => {
           <template v-for="r in shown" :key="r.id">
           <tr class="border-t border-rule-soft" :data-rule="r.name">
             <th scope="row" class="font-normal">{{ r.name }}</th>
-            <td>{{ r.events.join(", ") }}</td>
+            <td>{{ r.events.map((e) => t(`notifications.ev.${e}`)).join(", ") }}</td>
             <td>{{ vaultName(r.vault) }}</td>
             <td>{{ r.host }}</td>
             <td><template v-if="r.last">{{ r.last.result }} · <time :datetime="r.last.at" :title="when(r.last.at, locale)">{{ ago(r.last.at, locale) }}</time></template></td>
@@ -436,7 +437,7 @@ onMounted(async () => {
           </template>
         </tbody>
       </table>
-      </div>
+      </TableScroll>
       <button v-if="!creating" ref="newRule" type="button" class="mt-4 border border-rule px-3" data-test="new-rule" @click="openForm(null)">
         {{ t("notifications.new") }}
       </button>
@@ -451,7 +452,7 @@ onMounted(async () => {
         </label>
         <fieldset class="flex flex-wrap gap-3">
           <legend>{{ t("notifications.events") }}</legend>
-          <label v-for="e in offered" :key="e"><input v-model="events" type="checkbox" :value="e" /> {{ e }}</label>
+          <label v-for="e in offered" :key="e"><input v-model="events" type="checkbox" :value="e" /> {{ t(`notifications.ev.${e}`) }} <code class="meta text-ink-dim">{{ e }}</code></label>
         </fieldset>
         <label>{{ t("notifications.webhook") }}
           <input v-model="url" :required="!editing" type="url" class="ml-2 w-96 border border-rule bg-ground px-1" :placeholder="editing ? t('notifications.unchanged', { host: editing.host }) : 'https://hub.example.org/hooks/kura'" data-test="url" />

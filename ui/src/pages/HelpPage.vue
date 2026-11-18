@@ -138,7 +138,7 @@ onMounted(async () => {
               <ul v-if="syncable.length && setupLink(server)" class="mt-3 grid gap-2">
                 <li v-for="v in syncable" :key="v.id" class="flex flex-wrap items-baseline gap-x-3">
                   <a :href="setupLink(server, v) ?? undefined" class="border border-rule px-3 py-1 hover:border-ink" :data-setup="v.name">{{ t("help.obsidian.open", { name: v.name }) }}</a>
-                  <span class="meta text-ink-dim">{{ v.tenant }} · {{ v.role }}</span>
+                  <span class="meta text-ink-dim">{{ v.tenant }} · {{ t(`role.${v.role}`) }}</span>
                 </li>
               </ul>
               <p v-else-if="!setupLink(server)" class="mt-3 text-ink-dim">{{ t("help.obsidian.noLink") }}</p>

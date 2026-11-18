@@ -11,6 +11,7 @@ import AsyncState from "@/components/ui/AsyncState.vue";
 import ConfirmRow from "@/components/ui/ConfirmRow.vue";
 import RevokedToggle from "@/components/ui/RevokedToggle.vue";
 import StateMark from "@/components/ui/StateMark.vue";
+import TableScroll from "@/components/ui/TableScroll.vue";
 import { ago, when } from "@/reader/time";
 import { useVaults } from "@/vaults";
 
@@ -26,6 +27,13 @@ const error = ref<string | null>(null);
 const mine = computed(() => devices.value.filter((d) => !d.owner));
 const showRevoked = ref(false);
 const revokedCount = computed(() => mine.value.filter((d) => d.revoked).length);
+// Every device revoked and folded: say so, not a table of headers only.
+const allRevoked = computed(
+  () =>
+    !showRevoked.value &&
+    mine.value.length > 0 &&
+    revokedCount.value === mine.value.length,
+);
 const shown = computed(() =>
   showRevoked.value ? mine.value : mine.value.filter((d) => !d.revoked),
 );
@@ -100,8 +108,9 @@ onMounted(() => {
       :title="t('devices.failed')"
       @retry="load"
     >
-      <div class="relative overflow-x-auto" tabindex="0">
-      <table class="w-full text-left">
+      <p v-if="allRevoked" class="text-ink-dim" data-test="no-live">{{ t("state.noLive", { n: revokedCount }, revokedCount) }}</p>
+      <TableScroll v-else :label="t('state.tableRegion')">
+      <table class="acts w-full text-left">
         <thead>
           <tr>
             <th scope="col">{{ t("devices.name") }}</th>
@@ -116,7 +125,7 @@ onMounted(() => {
           <template v-for="d in shown" :key="d.id">
           <tr class="border-t border-rule-soft" :data-device="d.id">
             <td>{{ d.name }}</td>
-            <td>{{ d.profile }}</td>
+            <td>{{ t(`devices.profiles.${d.profile}`) }}</td>
             <td><time :datetime="d.lastSeen" :title="when(d.lastSeen, locale)">{{ ago(d.lastSeen, locale) }}</time></td>
             <td data-test="vaults">
               <template v-for="(f, i) in d.vaults ?? []" :key="f.vault"><template v-if="i">, </template>{{ followed(d, f).name }}<span v-if="followed(d, f).lag" class="text-ink-dim"> ({{ followed(d, f).lag }})</span></template>
@@ -155,7 +164,7 @@ onMounted(() => {
           </template>
         </tbody>
       </table>
-      </div>
+      </TableScroll>
       <RevokedToggle v-model="showRevoked" :count="revokedCount" />
     </AsyncState>
   </section>

@@ -36,7 +36,7 @@ function cancel(): void {
         role="alertdialog"
         tabindex="-1"
         :aria-labelledby="id"
-        class="flex flex-wrap items-center gap-2 border-t border-accent pt-2"
+        class="sticky left-0 flex max-w-[calc(100vw-2rem)] flex-wrap items-center gap-2 border-t border-accent pt-2"
         @keydown.esc="cancel"
       >
         <p :id="id" class="mr-2">{{ question }}</p>

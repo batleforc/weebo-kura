@@ -94,7 +94,7 @@ onMounted(async () => {
           <span class="text-ink-dim">{{ t(`role.${b.role}`) }}<template v-if="b.paths"> · {{ t("reader.reach", { n: b.paths.length }) }}</template></span>
         </li>
       </ul>
-      <RouterLink :to="`/vaults/${id}/access`">{{ t("vault.manageAccess") }}</RouterLink>
+      <RouterLink :to="`/vaults/${id}/access`" class="underline underline-offset-4">{{ t("vault.manageAccess") }}</RouterLink>
     </section>
 
     <section v-if="manages" aria-labelledby="live-keys" class="flex flex-col gap-2">
@@ -107,7 +107,7 @@ onMounted(async () => {
         </li>
       </ul>
       <p v-if="revoked" class="text-ink-dim">{{ t("vault.revokedHidden", { n: revoked }, revoked) }}</p>
-      <RouterLink :to="`/vaults/${id}/keys`">{{ t("vault.manageKeys") }}</RouterLink>
+      <RouterLink :to="`/vaults/${id}/keys`" class="underline underline-offset-4">{{ t("vault.manageKeys") }}</RouterLink>
     </section>
 
     <section aria-labelledby="recent" class="flex flex-col gap-2">
@@ -120,7 +120,7 @@ onMounted(async () => {
           <span v-if="e.path.includes('/')" class="ml-2 text-ink-dim">{{ e.path.slice(0, e.path.lastIndexOf("/") + 1) }}</span>
         </li>
       </ul>
-      <RouterLink :to="`/vaults/${id}/notes`">{{ t("vault.browse") }}</RouterLink>
+      <RouterLink :to="`/vaults/${id}/notes`" class="underline underline-offset-4">{{ t("vault.browse") }}</RouterLink>
     </section>
 
     <VaultDevices v-if="vault" :vault="id" :manages="manages" />

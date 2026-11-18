@@ -40,11 +40,11 @@ onMounted(() => {
     <header class="flex flex-wrap items-center gap-x-6 gap-y-3 border-b border-rule-soft pb-4">
       <div class="flex min-w-0 flex-wrap items-baseline gap-x-2">
         <span v-if="vault" class="text-[length:var(--t-head)] text-ink-dim">{{ vault.tenant }} /</span>
-        <h1 class="break-all text-[length:var(--t-head)]">{{ vault?.name ?? "…" }}</h1>
+        <h1 class="break-all text-[length:var(--t-head)]">{{ vault?.name ?? (vaultStore.loaded ? t("vault.missingTitle") : "…") }}</h1>
         <span v-if="vault" class="meta text-ink-dim" data-test="role">{{ t("vault.youAre", { role: t(`role.${vault.role}`) }) }}</span>
       </div>
       <!-- From 768px the sidebar carries the sections; on a phone it folds away, so they show here. -->
-      <nav :aria-label="t('vault.sections')" class="inline-flex max-w-full overflow-x-auto whitespace-nowrap border border-rule md:hidden" data-test="vault-tabs">
+      <nav :aria-label="t('vault.sections')" class="scroll-x inline-flex max-w-full overflow-x-auto whitespace-nowrap border border-rule md:hidden" data-test="vault-tabs">
         <RouterLink
           v-for="(tab, i) in tabs"
           :key="tab.name"
@@ -56,7 +56,11 @@ onMounted(() => {
       </nav>
       <a v-if="obsidian" :href="obsidian" class="ctl !py-1 md:ml-auto" data-test="open-obsidian">{{ t("vaults.obsidian") }}</a>
     </header>
-    <div :class="{ 'max-w-6xl': !reading }">
+    <div v-if="vaultStore.loaded && !vault" role="alert" class="flex flex-col gap-2" data-test="vault-missing">
+      <p>{{ t("vault.missing") }}</p>
+      <RouterLink to="/vaults" class="self-start underline underline-offset-4">{{ t("forbidden.toHome") }}</RouterLink>
+    </div>
+    <div v-else :class="{ 'max-w-6xl': !reading }">
       <RouterView />
     </div>
   </section>

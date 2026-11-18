@@ -11,13 +11,26 @@ import { messageOf } from "@/api/problem";
 import AsyncState from "@/components/ui/AsyncState.vue";
 import BreadCrumbs from "@/components/ui/BreadCrumbs.vue";
 import ConfirmRow from "@/components/ui/ConfirmRow.vue";
+import ForbiddenState from "@/components/ui/ForbiddenState.vue";
 import TableFilter from "@/components/ui/TableFilter.vue";
+import TableScroll from "@/components/ui/TableScroll.vue";
 import { matching } from "@/filter";
 import { useLoad } from "@/manage/useLoad";
+import { useMe } from "@/me";
 
 const { t } = useI18n();
 const route = useRoute();
+const meStore = useMe();
 const tenant = computed(() => String(route.params.t));
+// The page is a tenant admin's: a member is told so, not shown a form.
+const admin = computed(
+  () =>
+    meStore.me === null ||
+    meStore.me.tenants.some(
+      (x) =>
+        x.slug === tenant.value && (x.role === "admin" || x.role === "owner"),
+    ),
+);
 const {
   data: all,
   loading,
@@ -71,13 +84,18 @@ async function remove(v: Vault): Promise<void> {
     refusal.value = messageOf(e);
   }
 }
-onMounted(load);
+onMounted(() => {
+  void meStore.load().catch(() => undefined);
+  void load();
+});
 </script>
 
 <template>
   <section>
     <BreadCrumbs :items="[{ label: t('home.title'), to: '/vaults' }, { label: tenant }]" />
     <h1 class="mb-4">{{ t("manage.tenantVaults") }}</h1>
+    <ForbiddenState v-if="!admin" />
+    <template v-else>
     <AsyncState
       :loading="loading"
       :error="error"
@@ -87,8 +105,8 @@ onMounted(load);
       :can-retry="canRetry" @retry="load"
     >
       <TableFilter v-model="query" :empty="shown.length === 0" />
-      <div class="relative overflow-x-auto" tabindex="0">
-      <table class="w-full text-left">
+      <TableScroll :label="t('state.tableRegion')">
+      <table class="acts w-full text-left">
         <thead>
           <tr>
             <th scope="col">{{ t("vaults.name") }}</th>
@@ -118,14 +136,15 @@ onMounted(load);
           </template>
         </tbody>
       </table>
-      </div>
+      </TableScroll>
     </AsyncState>
     <p v-if="refusal" role="alert" class="mt-2 border-l border-rule pl-3">{{ refusal }}</p>
-    <form class="mt-4 flex gap-2" @submit.prevent="create">
+    <form v-if="!error" class="mt-4 flex gap-2" @submit.prevent="create">
       <label>{{ t("tenantVaults.newName") }}
         <input v-model="name" required pattern="[a-z0-9]([-a-z0-9]*[a-z0-9])?" maxlength="63" class="ml-2 border border-rule bg-ground px-1" />
       </label>
       <button type="submit" class="border border-rule px-3">{{ t("tenantVaults.create") }}</button>
     </form>
+    </template>
   </section>
 </template>

@@ -112,13 +112,60 @@ main tbody tr:hover {
   background: var(--ground-raised);
 }
 
-/* A finger needs a bigger target than a pointer. */
+/* A finger needs a bigger target than a pointer; the sidebar's links too. */
 @media (pointer: coarse) {
   button,
   select,
   input:not([type="checkbox"], [type="radio"]) {
     min-height: 44px;
   }
+  aside a {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}
+
+/* The browser's placeholder grey misses 4.5:1 on the light ground. */
+::placeholder {
+  color: var(--ink-dim);
+  opacity: 1;
+}
+
+/* A table or a tab strip wider than its box: a shadow marks each edge that
+   hides more, drawn by backgrounds that scroll with the content (no script). */
+.scroll-x {
+  background:
+    linear-gradient(to right, var(--ground) 40%, transparent) left / 1.5rem 100%
+    no-repeat local,
+    linear-gradient(to left, var(--ground) 40%, transparent) right / 1.5rem 100%
+    no-repeat local,
+    radial-gradient(
+      farthest-side at 0 50%,
+      color-mix(in oklch, var(--ink) 22%, transparent),
+      transparent
+    )
+    left / 0.75rem 100% no-repeat scroll,
+    radial-gradient(
+      farthest-side at 100% 50%,
+      color-mix(in oklch, var(--ink) 22%, transparent),
+      transparent
+    )
+    right / 0.75rem 100% no-repeat scroll;
+}
+
+/* A row's action stays in view however wide the table: the last column holds
+   to the right edge of its scroller (a confirmation row spans, so it does not). */
+main table.acts thead th:last-child,
+main table.acts tbody td:last-child:not([colspan]) {
+  position: sticky;
+  right: 0;
+  padding-inline: 1.25rem 0;
+  /* The columns sliding under it fade out instead of being cut mid-word. */
+  background: linear-gradient(to right, transparent, var(--ground) 1rem);
+}
+main table.acts tbody tr:hover td:last-child:not([colspan]) {
+  background: linear-gradient(to right, transparent, var(--ground-raised) 1rem);
 }
 
 :focus-visible {

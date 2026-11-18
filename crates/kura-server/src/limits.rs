@@ -14,7 +14,8 @@ pub const LIMITS: &[(&str, &str, u32)] = &[
     ("DELETE", "/v1/devices/{d}", 10),
     // RFC 0003: per subject, before the console has a device.
     ("POST", "/v1/devices/{d}/sign-out", 10),
-    ("GET", "/v1/me", 60),
+    // Read by the console on each sign-in and page load; cheap (no database).
+    ("GET", "/v1/me", 120),
     ("GET", "/v1/vaults/{v}/bindings", 60),
     ("GET", "/v1/vaults/{v}/sync", 60),
     // One report per sync run; the plugin runs at most every few seconds.

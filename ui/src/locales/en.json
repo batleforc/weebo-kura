@@ -14,7 +14,8 @@
     "findVault": "Find a vault",
     "findVaultHint": "notes, campaign…",
     "noVault": "No vault matches.",
-    "sectionsOf": "Sections of {name}"
+    "sectionsOf": "Sections of {name}",
+    "sidebar": "Console"
   },
   "signIn": {
     "action": "Sign in with Authentik",
@@ -63,13 +64,21 @@
     "revoke": "Revoke",
     "confirmRevoke": "Revoke {name}? Every device signed in with the same Authentik session is refused until it signs in again.",
     "confirm": "Revoke",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "confirmRevokeOf": "Revoke {owner}'s device {name}? Every device signed in with the same Authentik session is refused until it signs in again.",
+    "profiles": {
+      "desktop": "desktop",
+      "mobile": "mobile",
+      "web": "web console"
+    }
   },
   "state": {
     "loading": "Loading…",
     "retry": "Retry",
     "showRevoked": "Show the revoked one | Show the {n} revoked",
-    "hideRevoked": "Hide the revoked"
+    "hideRevoked": "Hide the revoked",
+    "tableRegion": "Table, scrolls sideways",
+    "noLive": "No live device; the revoked one is folded. | No live device; {n} revoked are folded."
   },
   "problem": {
     "network": "The server could not be reached.",
@@ -245,7 +254,7 @@
     "created": "Rule created",
     "once": "Shown once: your receiver checks X-Kura-Signature with it. The URL will be shown as its host only from now on.",
     "tested": "Test of {rule}: {result}",
-    "empty": "No rule yet. A rule sends events of this tenant to a webhook.",
+    "empty": "No rule yet. A rule sends this tenant's events, this vault's among them, to a webhook.",
     "events": "Events",
     "vault": "Vault",
     "to": "To",
@@ -280,7 +289,22 @@
     "rotated": "New signing secret",
     "confirmRotate": "Rotate the signing secret of {name}? The old one stops at once: the receiver refuses deliveries until it checks with the new one.",
     "confirmRemove": "Remove the rule {name}? Its deliveries stop.",
-    "more": "More"
+    "more": "More",
+    "ev": {
+      "token.created": "key created",
+      "token.revoked": "key revoked",
+      "token.expiring": "key expiring",
+      "token.denied": "key refused",
+      "binding.changed": "access changed",
+      "binding.removed": "access removed",
+      "vault.changed": "notes changed",
+      "vault.conflict": "conflict",
+      "device.registered": "device added",
+      "device.revoked": "device revoked",
+      "vault.created": "vault created",
+      "vault.deleted": "vault deleted",
+      "quota.high": "quota nearly full"
+    }
   },
   "prefs": {
     "title": "Preferences",
@@ -429,9 +453,10 @@
     "latest": "Latest: {name}, {when}.",
     "devicesAction": "See and revoke",
     "run": "You run",
-    "runCount": "{tenants} tenant(s), {vaults} vault(s).",
     "tenantVaults": "Vaults of {tenant}",
-    "tenantNotifications": "Notifications of {tenant}"
+    "tenantNotifications": "Notifications of {tenant}",
+    "runTenants": "1 tenant | {n} tenants",
+    "runVaults": "1 vault | {n} vaults"
   },
   "vault": {
     "overview": "Overview",
@@ -445,7 +470,9 @@
     "revokedHidden": "1 revoked key hidden | {n} revoked keys hidden",
     "manageKeys": "Manage keys",
     "recent": "Changed last",
-    "browse": "Browse the notes"
+    "browse": "Browse the notes",
+    "missing": "No vault here: it does not exist, or it is not open to you.",
+    "missingTitle": "Vault not found"
   },
   "filter": {
     "label": "Filter",
@@ -476,5 +503,14 @@
       "unsyncable": "1 file cannot sync | {n} files cannot sync",
       "failed": "1 file not written | {n} files not written"
     }
+  },
+  "people": {
+    "unnamed": "unnamed · {id}"
+  },
+  "forbidden": {
+    "title": "Not for your role",
+    "ask": "Ask a manager of this vault, or an admin of its tenant.",
+    "toVault": "Back to the vault",
+    "toHome": "Back home"
   }
 }

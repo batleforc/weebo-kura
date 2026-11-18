@@ -14,7 +14,9 @@ import AsyncState from "@/components/ui/AsyncState.vue";
 import RevokedToggle from "@/components/ui/RevokedToggle.vue";
 import StateMark from "@/components/ui/StateMark.vue";
 import TableFilter from "@/components/ui/TableFilter.vue";
+import TableScroll from "@/components/ui/TableScroll.vue";
 import { matching } from "@/filter";
+import { personLabel } from "@/people";
 import { ago, when } from "@/reader/time";
 import { byDistance, leftovers, type Standing, standing } from "@/sync";
 
@@ -26,6 +28,13 @@ const error = ref<string | null>(null);
 const showRevoked = ref(false);
 const query = ref("");
 const revokedCount = computed(() => rows.value.filter((d) => d.revoked).length);
+// Every device revoked and folded: say so, not a table of headers only.
+const allRevoked = computed(
+  () =>
+    !showRevoked.value &&
+    rows.value.length > 0 &&
+    revokedCount.value === rows.value.length,
+);
 const shown = computed(() =>
   byDistance(
     matching(
@@ -55,6 +64,12 @@ async function load(): Promise<void> {
   } finally {
     loading.value = false;
   }
+}
+
+function person(d: DeviceSync): string {
+  return personLabel(d.owner ?? "", d.ownerName, (id) =>
+    t("people.unnamed", { id }),
+  ).label;
 }
 
 const marks: Record<Standing["kind"], "live" | "waiting" | "off" | "refused"> =
@@ -94,8 +109,9 @@ onMounted(load);
       :title="t('sync.failed')"
       @retry="load"
     >
-      <TableFilter v-if="manages" v-model="query" :empty="shown.length === 0" />
-      <div class="relative overflow-x-auto" tabindex="0">
+      <TableFilter v-if="manages && !allRevoked" v-model="query" :empty="shown.length === 0" />
+      <p v-if="allRevoked" class="text-ink-dim" data-test="no-live">{{ t("state.noLive", { n: revokedCount }, revokedCount) }}</p>
+      <TableScroll v-else :label="t('state.tableRegion')">
       <table class="w-full text-left" data-test="sync">
         <thead>
           <tr>
@@ -110,7 +126,7 @@ onMounted(load);
         <tbody>
           <tr v-for="d in shown" :key="d.device" class="border-t border-rule-soft" :data-device="d.device">
             <td>{{ d.name }}<span v-if="d.revoked" class="ml-2 text-ink-dim">({{ t("devices.revoked") }})</span></td>
-            <td v-if="manages" :title="d.owner ?? undefined" class="break-all">{{ d.owner ? (d.ownerName ?? d.owner) : t("sync.you") }}</td>
+            <td v-if="manages" :title="d.owner ?? undefined">{{ d.owner ? person(d) : t("sync.you") }}</td>
             <td>
               <time v-if="d.caughtUpAt" :datetime="d.caughtUpAt" :title="when(d.caughtUpAt, locale)">{{ ago(d.caughtUpAt, locale) }}</time>
               <template v-else>—</template>
@@ -128,7 +144,7 @@ onMounted(load);
           </tr>
         </tbody>
       </table>
-      </div>
+      </TableScroll>
       <p class="text-ink-dim">{{ t("sync.handed") }}</p>
       <RevokedToggle v-model="showRevoked" :count="revokedCount" />
     </AsyncState>

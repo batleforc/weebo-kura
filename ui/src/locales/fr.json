@@ -14,7 +14,8 @@
     "findVault": "Rechercher un coffre",
     "findVaultHint": "notes, campaign…",
     "noVault": "Aucun coffre ne correspond.",
-    "sectionsOf": "Sections de {name}"
+    "sectionsOf": "Sections de {name}",
+    "sidebar": "Console"
   },
   "signIn": {
     "action": "Se connecter avec Authentik",
@@ -63,13 +64,21 @@
     "revoke": "Révoquer",
     "confirmRevoke": "Révoquer {name} ? Tous les appareils connectés avec la même session Authentik sont refusés jusqu'à leur prochaine connexion.",
     "confirm": "Révoquer",
-    "cancel": "Annuler"
+    "cancel": "Annuler",
+    "confirmRevokeOf": "Révoquer l'appareil {name} de {owner} ? Tous les appareils connectés avec la même session Authentik sont refusés jusqu'à leur prochaine connexion.",
+    "profiles": {
+      "desktop": "ordinateur",
+      "mobile": "mobile",
+      "web": "console web"
+    }
   },
   "state": {
     "loading": "Chargement…",
     "retry": "Réessayer",
     "showRevoked": "Afficher le révoqué | Afficher les {n} révoqués",
-    "hideRevoked": "Masquer les révoqués"
+    "hideRevoked": "Masquer les révoqués",
+    "tableRegion": "Tableau, défile horizontalement",
+    "noLive": "Aucun appareil actif ; le révoqué est replié. | Aucun appareil actif ; {n} révoqués sont repliés."
   },
   "problem": {
     "network": "Le serveur est injoignable.",
@@ -245,7 +254,7 @@
     "created": "Règle créée",
     "once": "Montré une seule fois : votre receveur vérifie X-Kura-Signature avec. L'URL ne sera plus montrée que par son hôte.",
     "tested": "Test de {rule} : {result}",
-    "empty": "Aucune règle pour l'instant. Une règle envoie les événements de ce tenant à un webhook.",
+    "empty": "Aucune règle pour l'instant. Une règle envoie les événements de ce tenant, dont ceux de ce coffre, à un webhook.",
     "events": "Événements",
     "vault": "Coffre",
     "to": "Vers",
@@ -280,7 +289,22 @@
     "rotated": "Nouveau secret de signature",
     "confirmRotate": "Changer le secret de signature de {name} ? L'ancien cesse aussitôt : le receveur refuse les livraisons jusqu'à ce qu'il vérifie avec le nouveau.",
     "confirmRemove": "Retirer la règle {name} ? Ses livraisons s'arrêtent.",
-    "more": "Plus"
+    "more": "Plus",
+    "ev": {
+      "token.created": "clé créée",
+      "token.revoked": "clé révoquée",
+      "token.expiring": "clé bientôt expirée",
+      "token.denied": "clé refusée",
+      "binding.changed": "accès modifié",
+      "binding.removed": "accès retiré",
+      "vault.changed": "notes modifiées",
+      "vault.conflict": "conflit",
+      "device.registered": "appareil ajouté",
+      "device.revoked": "appareil révoqué",
+      "vault.created": "coffre créé",
+      "vault.deleted": "coffre supprimé",
+      "quota.high": "quota presque plein"
+    }
   },
   "prefs": {
     "title": "Préférences",
@@ -429,9 +453,10 @@
     "latest": "Le plus récent : {name}, {when}.",
     "devicesAction": "Voir et révoquer",
     "run": "Vous gérez",
-    "runCount": "{tenants} tenant(s), {vaults} coffre(s).",
     "tenantVaults": "Coffres de {tenant}",
-    "tenantNotifications": "Notifications de {tenant}"
+    "tenantNotifications": "Notifications de {tenant}",
+    "runTenants": "1 tenant | {n} tenants",
+    "runVaults": "1 coffre | {n} coffres"
   },
   "vault": {
     "overview": "Vue d'ensemble",
@@ -445,7 +470,9 @@
     "revokedHidden": "1 clé révoquée masquée | {n} clés révoquées masquées",
     "manageKeys": "Gérer les clés",
     "recent": "Modifié en dernier",
-    "browse": "Parcourir les notes"
+    "browse": "Parcourir les notes",
+    "missing": "Aucun coffre ici : il n'existe pas, ou il ne vous est pas ouvert.",
+    "missingTitle": "Coffre introuvable"
   },
   "filter": {
     "label": "Filtrer",
@@ -476,5 +503,14 @@
       "unsyncable": "1 fichier non synchronisable | {n} fichiers non synchronisables",
       "failed": "1 fichier non écrit | {n} fichiers non écrits"
     }
+  },
+  "people": {
+    "unnamed": "sans nom · {id}"
+  },
+  "forbidden": {
+    "title": "Hors de votre rôle",
+    "ask": "Demandez à un gestionnaire de ce coffre, ou à un administrateur de son tenant.",
+    "toVault": "Retour au coffre",
+    "toHome": "Retour à l'accueil"
   }
 }

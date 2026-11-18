@@ -197,6 +197,22 @@ describe("my devices", () => {
     expect(cell).toMatch(/^campaign \(.+\), 01234567$/);
   });
 
+  it("says no device is live when every one is revoked, instead of an empty table", async () => {
+    vi.mocked(sdk.listDevices).mockResolvedValue({
+      data: [
+        device("d1", "old phone", "mobile", true),
+        device("d2", "old laptop", "desktop", true),
+      ],
+    } as never);
+    const { wrapper } = await page(DevicesPage);
+    await flushPromises();
+    expect(wrapper.find("[data-test=no-live]").text()).toContain("2 revoked");
+    expect(wrapper.find("table").exists()).toBe(false);
+    await wrapper.find("[data-test=show-revoked]").trigger("click");
+    expect(wrapper.findAll("tbody tr")).toHaveLength(2);
+    expect(wrapper.find("tbody").text()).toContain("mobile");
+  });
+
   it("shows a refused revocation", async () => {
     vi.mocked(sdk.listDevices).mockResolvedValue({
       data: [device("d2", "laptop")],

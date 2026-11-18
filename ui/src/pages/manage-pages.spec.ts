@@ -383,6 +383,27 @@ describe("tenant pages", () => {
     });
   });
 
+  it("tells a member the tenant's vaults are not theirs, with no form", async () => {
+    vi.mocked(sdk.me).mockResolvedValueOnce({
+      data: {
+        subject: "bob",
+        platformAdmin: false,
+        tenants: [{ slug: "jdr", role: "member" }],
+      },
+    } as never);
+    vi.mocked(sdk.listVaults).mockResolvedValue({
+      data: [vault("campaign", "jdr", "viewer")],
+    } as never);
+    const w = await at(
+      TenantVaultsPage,
+      "/manage/tenants/jdr/vaults",
+      "/manage/tenants/:t/vaults",
+    );
+    expect(w.find("[data-test=forbidden] h2").text()).toBe("Not for your role");
+    expect(w.find("form").exists()).toBe(false);
+    expect(w.find("table").exists()).toBe(false);
+  });
+
   it("creates a vault and deletes only one made through the API", async () => {
     vi.mocked(sdk.listVaults).mockResolvedValue({
       data: [

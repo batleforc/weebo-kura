@@ -373,9 +373,10 @@ describe("deliveries page", () => {
       "/manage/tenants/jdr/notifications/r1",
       "/manage/tenants/:t/notifications/:n",
     );
-    expect(w.find("[data-test=forbidden]").text()).toBe(
-      "Your role does not allow this page.",
-    );
+    const forbidden = w.find("[data-test=forbidden]");
+    expect(forbidden.find("h2").text()).toBe("Not for your role");
+    expect(forbidden.text()).toContain("Your role does not allow this page.");
+    expect(forbidden.find("a").attributes("href")).toContain("/vaults");
     expect(w.text()).not.toContain("No delivery yet");
   });
 });
