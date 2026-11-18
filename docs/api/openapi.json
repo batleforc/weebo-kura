@@ -2693,6 +2693,77 @@
         ]
       }
     },
+    "/v1/vaults/{v}/sync": {
+      "get": {
+        "tags": [
+          "vaults"
+        ],
+        "summary": "The devices syncing a vault: every one for its managers and the tenant's\nadmins, the caller's own for anyone else who reads it.",
+        "operationId": "vault_sync",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "At most 1,000 devices, by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeviceSync"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A scoped token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault, or not readable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/v1/vaults/{v}/tokens": {
       "get": {
         "tags": [
@@ -3443,6 +3514,89 @@
           },
           "revoked": {
             "type": "boolean"
+          },
+          "vaults": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeviceVault"
+            },
+            "description": "The vaults this device caught up on (RFC 0006), for the caller's own\ndevices only."
+          }
+        }
+      },
+      "DeviceSync": {
+        "type": "object",
+        "description": "One device on one vault.",
+        "required": [
+          "device",
+          "name",
+          "profile",
+          "revoked",
+          "resync"
+        ],
+        "properties": {
+          "behind": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Notes it may read changed since; absent until it finished a pass or\nwhen `resync` is set. Capped at 1,001, read as \"1,000+\"."
+          },
+          "caughtUpAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339; absent until the device finished a pass."
+          },
+          "device": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The owner's subject: only in a manager's or tenant admin's answer."
+          },
+          "profile": {
+            "type": "string"
+          },
+          "pushedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resync": {
+            "type": "boolean",
+            "description": "The vault lost history since: the device runs a full resync next."
+          },
+          "revoked": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DeviceVault": {
+        "type": "object",
+        "description": "One vault a device follows, and when it last caught up on it.",
+        "required": [
+          "vault",
+          "caughtUpAt"
+        ],
+        "properties": {
+          "caughtUpAt": {
+            "type": "string",
+            "description": "RFC 3339."
+          },
+          "vault": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },

@@ -399,6 +399,8 @@
       "keys": "Des clés d'accès pour scripts et agents : limitées à des dossiers, en lecture ou écriture, à des adresses, et dans le temps. Le secret n'est affiché qu'une fois.",
       "vaultsTitle": "Coffres",
       "vaults": "Les propriétaires et administrateurs du tenant créent des coffres et suppriment ceux créés ici ; les coffres déclarés en configuration se changent là-bas.",
+      "devicesTitle": "Appareils",
+      "devices": "Sur l'aperçu d'un coffre, les appareils qui le synchronisent : depuis quand chacun est à jour, de combien de notes il est en retard, et son dernier envoi. Un gestionnaire voit ceux de tous, un membre les siens.",
       "notificationsTitle": "Notifications",
       "notifications": "Envoyer les événements d'un tenant (un coffre modifié, une clé qui expire bientôt, un appareil révoqué…) à un webhook, signés par un secret que vous pouvez changer."
     }
@@ -448,5 +450,23 @@
   "filter": {
     "label": "Filtrer",
     "none": "Rien ne correspond à « {q} »."
+  },
+  "sync": {
+    "title": "Appareils qui le synchronisent",
+    "mine": "Vos appareils sur ce coffre",
+    "empty": "Aucun appareil n'a encore synchronisé ce coffre. Installez le plugin Obsidian pour commencer.",
+    "failed": "Les appareils de ce coffre n'ont pas pu être chargés.",
+    "device": "Appareil",
+    "caughtUp": "À jour depuis",
+    "behindCol": "Retard",
+    "pushed": "Dernier envoi",
+    "current": "à jour",
+    "never": "pas encore",
+    "resync": "resynchronisation complète nécessaire",
+    "behind": "1 note | {n} notes",
+    "behindMore": "{n}+ notes",
+    "you": "vous",
+    "handed": "« À jour » veut dire que le serveur a transmis chaque changement à l'appareil ; un fichier que l'appareil n'a pas pu écrire compte quand même.",
+    "vaults": "Coffres"
   }
 }

@@ -170,6 +170,33 @@ describe("my devices", () => {
     expect(router.currentRoute.value.name).toBe("signin");
   });
 
+  it("names the vaults each device follows, dated when one lags", async () => {
+    vi.mocked(sdk.listVaults).mockResolvedValue({
+      data: [
+        {
+          id: "v1",
+          name: "campaign",
+          tenant: "dev",
+          role: "viewer",
+          managedBy: "config",
+        },
+      ],
+    } as never);
+    const d = {
+      ...device("d2", "laptop"),
+      lastSeen: "2026-11-18T10:00:00Z",
+      vaults: [
+        { vault: "v1", caughtUpAt: "2026-10-01T10:00:00Z" },
+        { vault: "0123456789ab", caughtUpAt: "2026-11-18T09:59:00Z" },
+      ],
+    };
+    vi.mocked(sdk.listDevices).mockResolvedValue({ data: [d] } as never);
+    const { wrapper } = await page(DevicesPage);
+    await flushPromises();
+    const cell = wrapper.find("[data-test=vaults]").text();
+    expect(cell).toMatch(/^campaign \(.+\), 01234567$/);
+  });
+
   it("shows a refused revocation", async () => {
     vi.mocked(sdk.listDevices).mockResolvedValue({
       data: [device("d2", "laptop")],

@@ -180,7 +180,7 @@ onMounted(async () => {
             </template>
             <template v-else-if="q === 'manage'">
               <dl class="grid gap-2">
-                <div v-for="k in ['access', 'keys', 'vaults', 'notifications']" :key="k">
+                <div v-for="k in ['access', 'keys', 'vaults', 'devices', 'notifications']" :key="k">
                   <dt class="meta font-bold">{{ t(`help.manage.${k}Title`) }}</dt>
                   <dd>{{ t(`help.manage.${k}`) }}</dd>
                 </div>

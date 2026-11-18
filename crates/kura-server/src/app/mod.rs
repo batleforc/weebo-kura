@@ -260,6 +260,7 @@ fn v1_router() -> OpenApiRouter<SharedState> {
         .routes(routes!(vaults::list_vaults, vaults::create_vault))
         .routes(routes!(vaults::delete_vault))
         .routes(routes!(vaults::list_bindings))
+        .routes(routes!(sync_state::vault_sync))
         .routes(routes!(vaults::put_binding, vaults::delete_binding))
         .routes(routes!(changes::get_changes))
         .routes(routes!(changes::get_entries))
@@ -515,6 +516,7 @@ pub mod notifications;
 pub mod reader;
 pub mod search;
 pub mod space;
+pub mod sync_state;
 pub mod tokens;
 pub mod ui;
 pub mod vaults;

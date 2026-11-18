@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import { signOut, withDevice } from "@/api/client";
 import { listDevices, revokeDevice } from "@/api/generated/sdk.gen";
-import type { Device } from "@/api/generated/types.gen";
+import type { Device, DeviceVault } from "@/api/generated/types.gen";
 import { messageOf } from "@/api/problem";
 import { useSession } from "@/auth/session";
 import AsyncState from "@/components/ui/AsyncState.vue";
@@ -12,10 +12,13 @@ import ConfirmRow from "@/components/ui/ConfirmRow.vue";
 import RevokedToggle from "@/components/ui/RevokedToggle.vue";
 import StateMark from "@/components/ui/StateMark.vue";
 import { ago, when } from "@/reader/time";
+import { useVaults } from "@/vaults";
 
 const { t, locale } = useI18n();
 const router = useRouter();
 const session = useSession();
+const vaultStore = useVaults();
+const DAY = 86_400_000;
 const devices = ref<Device[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
@@ -61,13 +64,29 @@ async function signOutHere(): Promise<void> {
   await router.replace({ name: "signin" });
 }
 
+/** A vault by name; its own date when it lags the device by over a day (RFC 0006 §4.5). */
+function followed(
+  d: Device,
+  f: DeviceVault,
+): { name: string; lag: string | null } {
+  const v = vaultStore.list.find((x) => x.id === f.vault);
+  const lagging = Date.parse(d.lastSeen) - Date.parse(f.caughtUpAt) > DAY;
+  return {
+    name: v ? v.name : f.vault.slice(0, 8),
+    lag: lagging ? ago(f.caughtUpAt, locale.value) : null,
+  };
+}
+
 function state(d: Device): string {
   if (d.revoked) return t("devices.revoked");
   return d.id === session.device()
     ? t("devices.thisBrowser")
     : t("devices.active");
 }
-onMounted(load);
+onMounted(() => {
+  void vaultStore.load().catch(() => undefined);
+  void load();
+});
 </script>
 
 <template>
@@ -88,6 +107,7 @@ onMounted(load);
             <th scope="col">{{ t("devices.name") }}</th>
             <th scope="col">{{ t("devices.kind") }}</th>
             <th scope="col">{{ t("devices.lastSeen") }}</th>
+            <th scope="col">{{ t("sync.vaults") }}</th>
             <th scope="col">{{ t("devices.state") }}</th>
             <th scope="col"><span class="sr-only">{{ t("devices.revoke") }}</span></th>
           </tr>
@@ -98,6 +118,10 @@ onMounted(load);
             <td>{{ d.name }}</td>
             <td>{{ d.profile }}</td>
             <td><time :datetime="d.lastSeen" :title="when(d.lastSeen, locale)">{{ ago(d.lastSeen, locale) }}</time></td>
+            <td data-test="vaults">
+              <template v-for="(f, i) in d.vaults ?? []" :key="f.vault"><template v-if="i">, </template>{{ followed(d, f).name }}<span v-if="followed(d, f).lag" class="text-ink-dim"> ({{ followed(d, f).lag }})</span></template>
+              <template v-if="!d.vaults?.length">—</template>
+            </td>
             <td><StateMark :kind="d.revoked ? 'gone' : 'live'" :word="state(d)" /></td>
             <td>
               <button
@@ -122,7 +146,7 @@ onMounted(load);
           </tr>
           <ConfirmRow
             v-if="confirming?.id === d.id"
-            :colspan="5"
+            :colspan="6"
             :question="t('devices.confirmRevoke', { name: d.name })"
             :action="t('devices.confirm')"
             @confirm="revoke(d)"

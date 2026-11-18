@@ -61,9 +61,22 @@ pub struct Device {
     /// The owner's subject, shown only to a tenant admin for others' devices.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
+    /// The vaults this device caught up on (RFC 0006), for the caller's own
+    /// devices only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vaults: Vec<DeviceVault>,
 }
 
-fn rfc3339(t: time::OffsetDateTime) -> String {
+/// One vault a device follows, and when it last caught up on it.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceVault {
+    pub vault: Uuid,
+    /// RFC 3339.
+    pub caught_up_at: String,
+}
+
+pub(super) fn rfc3339(t: time::OffsetDateTime) -> String {
     t.format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_default()
 }
@@ -79,6 +92,7 @@ fn device(r: &sqlx::postgres::PgRow, owner: Option<String>) -> Result<Device, sq
             .try_get::<Option<time::OffsetDateTime>, _>("revoked_at")?
             .is_some(),
         owner,
+        vaults: Vec::new(),
     })
 }
 
@@ -233,6 +247,14 @@ pub async fn list_devices(
         .iter()
         .map(|r| device(r, None))
         .collect::<Result<Vec<_>, _>>()?;
+    for (d, vault, at) in super::sync_state::my_device_vaults(&state, &sub).await? {
+        if let Some(own) = out.iter_mut().find(|o| o.id == d) {
+            own.vaults.push(DeviceVault {
+                vault,
+                caught_up_at: rfc3339(at),
+            });
+        }
+    }
     let mut seen: std::collections::HashSet<Uuid> = out.iter().map(|d| d.id).collect();
     for m in members(&state, &caller.caller)?
         .iter()

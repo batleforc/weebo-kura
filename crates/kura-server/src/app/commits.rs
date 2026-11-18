@@ -438,7 +438,15 @@ pub async fn post_commit(
         };
         let retry = attempt < MERGE_ATTEMPTS;
         match decide(&cx, &merges, retry).await? {
-            Decided::Done(r) => return Ok(Json(r)),
+            Decided::Done(r) => {
+                // RFC 0006: a device's push to the notes; a token records nothing.
+                if let Writer::Device(d) = &caller
+                    && !space.is_config()
+                {
+                    super::sync_state::pushed(&state, a.tenant, v, d.device).await;
+                }
+                return Ok(Json(r));
+            }
             Decided::HeadMoved => attempt = attempt.saturating_add(1),
         }
     }

@@ -15,6 +15,7 @@ import type {
   EntryState,
   TokenView,
 } from "@/api/generated/types.gen";
+import VaultDevices from "@/components/VaultDevices.vue";
 import { useMe } from "@/me";
 import { ago, when } from "@/reader/time";
 import { noteName } from "@/reader/tree";
@@ -121,5 +122,7 @@ onMounted(async () => {
       </ul>
       <RouterLink :to="`/vaults/${id}/notes`">{{ t("vault.browse") }}</RouterLink>
     </section>
+
+    <VaultDevices v-if="vault" :vault="id" :manages="manages" />
   </div>
 </template>

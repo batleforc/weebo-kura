@@ -399,6 +399,8 @@
       "keys": "Access keys for scripts and agents: limited to folders, read or write, to addresses, and to a lifetime. The secret is shown once.",
       "vaultsTitle": "Vaults",
       "vaults": "Tenant owners and admins create vaults and delete the ones made here; vaults declared in configuration change there.",
+      "devicesTitle": "Devices",
+      "devices": "On a vault's overview, the devices that sync it: when each last caught up, how many notes it is behind, and its last push. A manager sees everyone's, a member their own.",
       "notificationsTitle": "Notifications",
       "notifications": "Send a tenant's events (a vault changed, a key about to expire, a device revoked…) to a webhook, signed with a secret you can rotate."
     }
@@ -448,5 +450,23 @@
   "filter": {
     "label": "Filter",
     "none": "Nothing matches “{q}”."
+  },
+  "sync": {
+    "title": "Devices syncing it",
+    "mine": "Your devices on this vault",
+    "empty": "No device has synced this vault yet. Install the Obsidian plugin to start.",
+    "failed": "Could not load the devices of this vault.",
+    "device": "Device",
+    "caughtUp": "Caught up",
+    "behindCol": "Behind",
+    "pushed": "Last push",
+    "current": "up to date",
+    "never": "not yet",
+    "resync": "full resync needed",
+    "behind": "1 note | {n} notes",
+    "behindMore": "{n}+ notes",
+    "you": "you",
+    "handed": "Caught up means the server handed the device every change; a file the device could not write still counts.",
+    "vaults": "Vaults"
   }
 }

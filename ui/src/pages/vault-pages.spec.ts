@@ -66,6 +66,7 @@ vi.mock("@/api/generated/sdk.gen", () => ({
     },
   })),
   registerDevice: vi.fn(async () => ({ data: { id: "dev" } })),
+  vaultSync: vi.fn(async () => ({ data: [] })),
 }));
 
 import VaultLayout from "./VaultLayout.vue";
@@ -144,6 +145,60 @@ describe("a vault's page", () => {
       "NewSessions/",
       "Old",
     ]);
+  });
+
+  it("shows a manager where each device stands, most behind first", async () => {
+    vi.mocked(sdk.vaultSync).mockResolvedValueOnce({
+      data: [
+        {
+          device: "d1",
+          name: "laptop",
+          profile: "desktop",
+          revoked: false,
+          resync: false,
+          behind: 0,
+          caughtUpAt: "2026-11-18T10:00:00Z",
+        },
+        {
+          device: "d2",
+          name: "pixel",
+          profile: "mobile",
+          owner: "bob",
+          revoked: false,
+          resync: false,
+          behind: 212,
+          caughtUpAt: "2026-10-15T10:00:00Z",
+        },
+        {
+          device: "d3",
+          name: "tablet",
+          profile: "mobile",
+          owner: "carol",
+          revoked: false,
+          resync: false,
+        },
+      ],
+    } as never);
+    const w = await open("manager");
+    const rows = w.findAll("[data-test=sync] tbody tr").map((r) => r.text());
+    expect(rows[0]).toContain("pixel");
+    expect(rows[0]).toContain("bob");
+    expect(rows[0]).toContain("212 notes");
+    expect(rows[1]).toContain("you");
+    expect(rows[1]).toContain("up to date");
+    expect(rows[2]).toContain("not yet");
+  });
+
+  it("tells a reader with no device on the vault how to start", async () => {
+    const w = await open("viewer");
+    expect(w.text()).toContain("Your devices on this vault");
+    expect(w.text()).toContain("No device has synced this vault yet");
+  });
+
+  it("says when the devices could not be loaded", async () => {
+    vi.mocked(sdk.vaultSync).mockRejectedValueOnce(new Error("boom"));
+    const w = await open("viewer");
+    expect(w.text()).toContain("Could not load the devices of this vault.");
   });
 
   it("counts a tenant admin as a manager of the tenant's vaults", async () => {

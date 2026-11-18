@@ -676,6 +676,15 @@ pub async fn delete_binding(
     .bind(subject.value())
     .execute(&mut *tx)
     .await?;
+    // RFC 0006 question 3: a person unbound leaves the vault's device list. A
+    // group's members are not known here; theirs stay until purged (§18).
+    if subject.kind() == "user" {
+        sqlx::query("SELECT kura_device_sync_forget($1, $2)")
+            .bind(v)
+            .bind(subject.value())
+            .execute(&mut *tx)
+            .await?;
+    }
     crate::notifier::record(
         &state,
         &mut tx,

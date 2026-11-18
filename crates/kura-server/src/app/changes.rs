@@ -70,6 +70,7 @@ async fn open(
         Head,
         Vec<String>,
         String,
+        Uuid,
     ),
     ApiError,
 > {
@@ -86,7 +87,13 @@ async fn open(
         head_seq: row.try_get("head_seq")?,
         horizon_seq: row.try_get("horizon_seq")?,
     };
-    Ok((tx, head, ra.scope.like_patterns(), space.namespace))
+    Ok((
+        tx,
+        head,
+        ra.scope.like_patterns(),
+        space.namespace,
+        ra.access.tenant,
+    ))
 }
 
 fn response(
@@ -132,7 +139,7 @@ pub async fn get_changes(
 ) -> Result<Json<ChangesResponse>, ApiError> {
     let q = query(q)?;
     let since = i64::try_from(q.since).map_err(|_| ApiError::of(ProblemType::HistoryRewound))?;
-    let (mut tx, head, under, ns) = open(&state, &reader, v, q.space.as_deref()).await?;
+    let (mut tx, head, under, ns, tenant) = open(&state, &reader, v, q.space.as_deref()).await?;
     // The server lost history this device has seen (§6.3, decision 32).
     if q.epoch.is_some_and(|e| e != head.epoch) || since > head.head_seq {
         return Err(ApiError::of(ProblemType::HistoryRewound));
@@ -163,7 +170,17 @@ pub async fn get_changes(
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
-    Ok(Json(response(&head, &rows, |h| h.seq.to_string())?))
+    let page = response(&head, &rows, |h| h.seq.to_string())?;
+    // The last page of a pass of the notes: the device now holds the head
+    // (RFC 0006 §4.2). A token or the configuration space records nothing.
+    if page.next.is_none()
+        && ns == "notes"
+        && let Some((_, device)) = reader.device()
+    {
+        super::sync_state::caught_up(&state, tenant, v, device, head.epoch, head.head_seq, &under)
+            .await;
+    }
+    Ok(Json(page))
 }
 
 /// Every live entry, by id: what `kura attach` matches local files against.
@@ -185,7 +202,7 @@ pub async fn get_entries(
     q: Result<Query<EntriesQuery>, QueryRejection>,
 ) -> Result<Json<ChangesResponse>, ApiError> {
     let q = query(q)?;
-    let (mut tx, head, under, ns) = open(&state, &reader, v, q.space.as_deref()).await?;
+    let (mut tx, head, under, ns, _) = open(&state, &reader, v, q.space.as_deref()).await?;
     let rows = sqlx::query(concat!(
         head_select!(),
         " WHERE e.vault_id = $1 AND NOT e.deleted AND ($2::uuid IS NULL OR e.id > $2) AND e.path_key LIKE ANY($4) AND e.namespace = $5 ORDER BY e.id LIMIT $3"

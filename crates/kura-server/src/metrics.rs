@@ -71,6 +71,8 @@ pub struct Metrics {
     pub quota_used_ratio: GaugeVec,
     /// `503` answers from a failed dependency; the log line names it.
     pub unavailable_total: IntCounter,
+    /// Device sync state not recorded (RFC 0006 §10.1); sync went on.
+    pub device_sync_write_failures_total: IntCounter,
     /// Tenants and vaults removed with `Delete`, in their grace period.
     pub deletions_scheduled: IntGauge,
     /// When the last bucket copy finished (0: never), for its alert.
@@ -230,6 +232,11 @@ impl Metrics {
         let unavailable_total =
             IntCounter::new("unavailable_total", "503 answers from a failed dependency")?;
         registry.register(Box::new(unavailable_total.clone()))?;
+        let device_sync_write_failures_total = IntCounter::new(
+            "device_sync_write_failures_total",
+            "Device sync state not recorded; sync went on",
+        )?;
+        registry.register(Box::new(device_sync_write_failures_total.clone()))?;
         let deletions_scheduled = IntGauge::new(
             "deletions_scheduled",
             "Tenants and vaults removed with Delete, in their grace period",
@@ -292,6 +299,7 @@ impl Metrics {
             dedup_ratio,
             quota_used_ratio,
             unavailable_total,
+            device_sync_write_failures_total,
             deletions_scheduled,
             backup_last_success_timestamp_seconds,
             storage_refreshed_timestamp_seconds,

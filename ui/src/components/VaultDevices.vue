@@ -1,0 +1,130 @@
+<script setup lang="ts">
+/**
+ * The devices syncing a vault (RFC 0006 §4.5): every one, owners named, for
+ * its managers; the caller's own for anyone else. The server decides which.
+ */
+import { computed, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
+
+import { withDevice } from "@/api/client";
+import { vaultSync } from "@/api/generated/sdk.gen";
+import type { DeviceSync } from "@/api/generated/types.gen";
+import { messageOf } from "@/api/problem";
+import AsyncState from "@/components/ui/AsyncState.vue";
+import RevokedToggle from "@/components/ui/RevokedToggle.vue";
+import StateMark from "@/components/ui/StateMark.vue";
+import TableFilter from "@/components/ui/TableFilter.vue";
+import { matching } from "@/filter";
+import { ago, when } from "@/reader/time";
+import { byDistance, type Standing, standing } from "@/sync";
+
+const props = defineProps<{ vault: string; manages: boolean }>();
+const { t, locale } = useI18n();
+const rows = ref<DeviceSync[]>([]);
+const loading = ref(true);
+const error = ref<string | null>(null);
+const showRevoked = ref(false);
+const query = ref("");
+const revokedCount = computed(() => rows.value.filter((d) => d.revoked).length);
+const shown = computed(() =>
+  byDistance(
+    matching(
+      showRevoked.value ? rows.value : rows.value.filter((d) => !d.revoked),
+      query.value,
+      (d) => [d.name, d.owner ?? ""],
+    ),
+  ),
+);
+
+async function load(): Promise<void> {
+  loading.value = true;
+  error.value = null;
+  try {
+    rows.value = await withDevice(
+      async (headers) =>
+        (
+          await vaultSync({
+            headers,
+            path: { v: props.vault },
+            throwOnError: true,
+          })
+        ).data,
+    );
+  } catch (e) {
+    error.value = messageOf(e);
+  } finally {
+    loading.value = false;
+  }
+}
+
+const marks: Record<Standing["kind"], "live" | "waiting" | "off" | "refused"> =
+  {
+    current: "live",
+    behind: "waiting",
+    never: "off",
+    resync: "refused",
+  };
+
+function word(s: Standing): string {
+  switch (s.kind) {
+    case "current":
+      return t("sync.current");
+    case "never":
+      return t("sync.never");
+    case "resync":
+      return t("sync.resync");
+    case "behind":
+      return s.more
+        ? t("sync.behindMore", { n: s.n })
+        : t("sync.behind", { n: s.n }, s.n);
+  }
+}
+
+onMounted(load);
+</script>
+
+<template>
+  <section aria-labelledby="devices" class="col-span-full flex flex-col gap-2">
+    <h2 id="devices" class="label border-b border-rule pb-2">{{ manages ? t("sync.title") : t("sync.mine") }}</h2>
+    <AsyncState
+      :loading="loading"
+      :error="error"
+      :empty="rows.length === 0"
+      :empty-message="t('sync.empty')"
+      :title="t('sync.failed')"
+      @retry="load"
+    >
+      <TableFilter v-if="manages" v-model="query" :empty="shown.length === 0" />
+      <div class="relative overflow-x-auto" tabindex="0">
+      <table class="w-full text-left" data-test="sync">
+        <thead>
+          <tr>
+            <th scope="col">{{ t("sync.device") }}</th>
+            <th v-if="manages" scope="col">{{ t("devices.owner") }}</th>
+            <th scope="col">{{ t("sync.caughtUp") }}</th>
+            <th scope="col">{{ t("sync.behindCol") }}</th>
+            <th v-if="manages" scope="col">{{ t("sync.pushed") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="d in shown" :key="d.device" class="border-t border-rule-soft" :data-device="d.device">
+            <td>{{ d.name }}<span v-if="d.revoked" class="ml-2 text-ink-dim">({{ t("devices.revoked") }})</span></td>
+            <td v-if="manages" :title="d.owner ?? undefined">{{ d.owner ?? t("sync.you") }}</td>
+            <td>
+              <time v-if="d.caughtUpAt" :datetime="d.caughtUpAt" :title="when(d.caughtUpAt, locale)">{{ ago(d.caughtUpAt, locale) }}</time>
+              <template v-else>—</template>
+            </td>
+            <td><StateMark :kind="marks[standing(d).kind]" :word="word(standing(d))" /></td>
+            <td v-if="manages">
+              <time v-if="d.pushedAt" :datetime="d.pushedAt" :title="when(d.pushedAt, locale)">{{ ago(d.pushedAt, locale) }}</time>
+              <template v-else>—</template>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+      <p class="text-ink-dim">{{ t("sync.handed") }}</p>
+      <RevokedToggle v-model="showRevoked" :count="revokedCount" />
+    </AsyncState>
+  </section>
+</template>

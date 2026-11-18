@@ -450,6 +450,23 @@ sets no cookie. `/app` is served with a Content-Security-Policy that allows
 scripts from Kura's origin only and connections to Kura and the identity
 provider, and with `frame-ancestors 'none'`.
 
+### Sync state (RFC 0006)
+
+For each device and each vault it syncs, the server keeps one row, written
+from the device's own calls: when it last finished a pull (the last page of
+`GET /v1/vaults/{v}/changes`) and up to which head, and when it last
+committed. Nothing new is sent by the client, and no history is kept: each
+pull overwrites the row, at most once a minute unless the vault moved.
+`GET /v1/vaults/{v}/sync` returns them: every device of the vault, owner
+named, to its managers and the tenant's admins; their own devices to
+everyone else who reads it; a `404` to anyone else. "Behind" counts the
+notes the device may read that changed since, up to 1,000. This is personal
+data (when a person synced a vault): the rows go with the device when it is
+purged, with the vault when it is deleted, and with a `user:` binding when
+it is removed. A group binding removed leaves its members' rows until their
+devices are purged. A failed write never fails the pull; it counts
+`kura_device_sync_write_failures_total`.
+
 ## 8. Signals
 
 | Signal | Where |
@@ -468,6 +485,7 @@ provider, and with `frame-ancestors 'none'`.
 | `kura_vault_call_duration_seconds{outcome}` | Vault Transit calls |
 | `kura_resync_total{outcome}` | `410` answers: devices running a full resync |
 | `kura_unavailable_total` | `503` answers from a failed dependency; the `warn` log line names it |
+| `kura_device_sync_write_failures_total` | sync state rows not written (RFC 0006); the pull or commit went on, the `warn` log line names the tenant |
 | `kura_chunk_bytes_stored`, `kura_dedup_ratio`, `kura_quota_used_ratio` (by `tenant`) | storage, refreshed every minute |
 | `kura_deletions_scheduled` | tenants and vaults removed with `Delete`, in their grace period |
 | `kura_backup_last_success_timestamp_seconds`, `kura_storage_refreshed_timestamp_seconds` | the last bucket copy; the last storage refresh |
