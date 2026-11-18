@@ -21,6 +21,11 @@ tasks:
     cmds:
       - perf/run.sh perf/k6/scenarios/03_resync.js
 
+  perf:run:sync-state:
+    desc: "k6 04: the vault's device list with its behind counts (RFC 0006), read by 5 devices for PERF_DURATION (1m); p95 under 100 ms enforced"
+    cmds:
+      - perf/run.sh perf/k6/scenarios/04_sync_state.js
+
   perf:run:all:
     desc: Run every k6 scenario in sequence; threshold violations are reported but do not stop the suite
     cmds:

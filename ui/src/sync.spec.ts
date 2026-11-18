@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DeviceSync } from "@/api/generated/types.gen";
-import { byDistance, standing } from "./sync";
+import { byDistance, leftovers, standing } from "./sync";
 
 const d = (name: string, extra: Partial<DeviceSync>): DeviceSync => ({
   device: name,
@@ -9,6 +9,23 @@ const d = (name: string, extra: Partial<DeviceSync>): DeviceSync => ({
   revoked: false,
   resync: false,
   ...extra,
+});
+
+describe("leftovers", () => {
+  it("keeps the non-zero counts, pending first", () => {
+    const r = {
+      pending: 2,
+      conflicts: 0,
+      unsyncable: 1,
+      failed: 0,
+      at: "2026-11-18T10:00:00Z",
+    };
+    expect(leftovers(r)).toEqual([
+      { key: "pending", n: 2 },
+      { key: "unsyncable", n: 1 },
+    ]);
+    expect(leftovers({ ...r, pending: 0, unsyncable: 0 })).toEqual([]);
+  });
 });
 
 describe("standing", () => {

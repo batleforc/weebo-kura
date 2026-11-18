@@ -438,6 +438,10 @@ export default class KuraPlugin extends Plugin {
         const c = vault.chunking;
         const options = JSON.stringify({ device: s.device, vault: s.vault, ...c, maxFileSize: s.maxFileMiB * 1024 * 1024, dryRun, allowDeletions });
         const notes = await core.sync(host, api.remote(s.vault), state, options);
+        // RFC 0006 phase 3: the console shows what this run left undone; a
+        // failed report never fails the sync.
+        const counts = isRecord(notes) && isRecord(notes.report) && isRecord(notes.report.counts) ? notes.report.counts : null;
+        if (!dryRun && counts !== null) void api.report(s.vault, counts).catch(() => undefined);
         // Not on every note sync (review 2026-11-15 #20); the 5-minute timer
         // finds it due, a few seconds early at most.
         if (!dryRun && vault.configSync.length > 0 && Date.now() - this.configSyncedAt >= CONFIG_EVERY_MS) {

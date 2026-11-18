@@ -524,6 +524,14 @@ async fn sync_one(
             Err(other) => return Err(Fail::local(other)),
         }
     };
+    // RFC 0006 phase 3: the console shows what this run left undone. A
+    // device only (a token has no row), never on a dry run, best effort.
+    if !dry_run
+        && scoped(ctx).is_none()
+        && let Err(e) = api.report(a.id, &r.counts()).await
+    {
+        eprintln!("note: {name}: the console was not told this run's state ({e}).");
+    }
     // The words of the §4.5 mocks.
     match r.resynced.as_deref() {
         Some("history_rewound") => {

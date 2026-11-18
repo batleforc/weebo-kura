@@ -263,3 +263,69 @@ async fn behind_counts_only_the_device_scope() {
     let (_, list) = gm.sync(&e, &v).await;
     assert!(row(&list, &pia.device).is_null(), "{list}");
 }
+
+/// Phase 3 (question 2): a device reports its last run as four counts, read
+/// back in the vault's list; anything but four bounded counts is refused, and
+/// a stranger's report is a 404 like the rest.
+#[tokio::test]
+async fn a_device_reports_its_last_run_as_counts() {
+    let Some(e) = env(module_path!()).await else {
+        return;
+    };
+    let v = vault_id(&e, "knowledge").await;
+    let gm = who(&e, "gm", &["maxime-admins"]).await;
+    let bob = who(&e, "bob", &["maxime-members"]).await;
+    let uri = format!("/v1/vaults/{v}/sync/report");
+    let counts = json!({ "pending": 3, "conflicts": 1, "unsyncable": 2, "failed": 0 });
+    let (st, b) = bob.call(&e, "PUT", &uri, Some(counts)).await;
+    assert_eq!(st, StatusCode::NO_CONTENT, "{b}");
+    let (_, list) = gm.sync(&e, &v).await;
+    let r = &row(&list, &bob.device)["report"];
+    assert_eq!(
+        (
+            &r["pending"],
+            &r["conflicts"],
+            &r["unsyncable"],
+            &r["failed"]
+        ),
+        (&json!(3), &json!(1), &json!(2), &json!(0)),
+        "{list}"
+    );
+    assert!(r["at"].is_string());
+
+    // Paths are not counts: an unknown field is refused, as is a huge count.
+    let (st, b) = bob
+        .call(&e, "PUT", &uri, Some(json!({ "pending": 0, "conflicts": 0, "unsyncable": 0, "failed": 0, "paths": ["a.md"] })))
+        .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{b}");
+    let (st, _) = bob
+        .call(
+            &e,
+            "PUT",
+            &uri,
+            Some(json!({ "pending": 2_000_000, "conflicts": 0, "unsyncable": 0, "failed": 0 })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    let olga = who(&e, "olga", &["other-members"]).await;
+    let (st, _) = olga
+        .call(
+            &e,
+            "PUT",
+            &uri,
+            Some(json!({ "pending": 0, "conflicts": 0, "unsyncable": 0, "failed": 0 })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    let (st, _) = e
+        .call(
+            "PUT",
+            &uri,
+            &format!("{}example", kura_core::token::PREFIX),
+            None,
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+}

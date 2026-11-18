@@ -9,7 +9,7 @@
 | Co-author | Claude Opus 5.5 |
 | Created | 2026-11-18 |
 | Supersedes | — |
-| Touches | `crates/kura-server` (migration `0027_device_sync.sql`, `app/changes.rs`, `app/commits.rs`, `app/devices.rs`, `app/vaults.rs`, new `app/sync_state.rs`, `app/mod.rs`, `limits.rs`, `metrics.rs`, `tests/sync_state.rs`), `ui/` (`src/sync.ts`, `src/components/VaultDevices.vue`, `src/pages/VaultOverview.vue`, `src/pages/DevicesPage.vue`, `src/pages/HelpPage.vue`, locales), `docs/api/openapi.json`, `docs/operator.md` |
+| Touches | `crates/kura-core` (`wire.rs`, `sync.rs`), `crates/kura-cli` (`api.rs`, `commands.rs`), `crates/kura-wasm`, `plugin/` (`main.ts`, `remote.ts`), `crates/kura-server` (migrations `0027_device_sync.sql` and `0028_device_sync_report.sql`, `app/changes.rs`, `app/commits.rs`, `app/devices.rs`, `app/vaults.rs`, new `app/sync_state.rs`, `app/mod.rs`, `limits.rs`, `metrics.rs`, `tests/sync_state.rs`), `ui/` (`src/sync.ts`, `src/components/VaultDevices.vue`, `src/pages/VaultOverview.vue`, `src/pages/DevicesPage.vue`, `src/pages/HelpPage.vue`, locales), `tests/heavy/devices.sh`, `perf/k6/scenarios/04_sync_state.js`, `docs/api/openapi.json`, `docs/operator.md` |
 | Risk | medium |
 
 ---
@@ -527,7 +527,7 @@ display.
 | # | Question | Decision |
 | --- | --- | --- |
 | 1 | Does a vault manager who is not a tenant admin see owners? | **Yes, on that vault only.** Chosen by the owner on 2026-11-18, as recommended: the manager already sees bindings and history authors, and without owners the table cannot answer motivation 2. |
-| 2 | Phase 2: the client's local state? | **Later, as its own change (phase 3).** Chosen by the owner on 2026-11-18: this landing is the server's facts only; the counts need a wire field, the plugin and the CLI. |
+| 2 | Phase 2: the client's local state? | **Counts only, reported by the plugin and the CLI after each run (phase 3).** As recommended; first deferred, then built the same day at the owner's request (§18.7). |
 | 3 | Removed from a vault, rows kept? | **Deleted with a `user:` binding, in its transaction.** As recommended. A group binding's members are not known to the server; theirs stay until the device is purged (§18 D4). |
 | 4 | How is "behind" measured? | **Entries under the owner's scope with `last_seq` past the caught-up seq, capped at 1,000.** A seq gap counts revisions and folders the owner cannot read (T5). |
 | 5 | When is "caught up" written? | **On the last page of a pass only.** A middle page proves nothing about the head. |
@@ -633,4 +633,52 @@ resync row ship as drawn, with `StateMark` marks: up to date (live), behind
 (waiting), not yet (off), full resync needed (refused). A manager's own
 devices read "you" in the owner column. The Devices page's Vaults column
 ships as drawn. The table gains the filter of the other back-office tables.
+
+### 18.7 Phase 3 and the proofs, landed the same day
+
+**Phase 3 (question 2).** `kura_core::wire::SyncCounts` (`pending`,
+`conflicts`, `unsyncable`, `failed`; unknown fields refused) and
+`Report::counts()`, one definition for both clients: pending is what a
+refused push kept plus what lay outside the caller's write folders.
+`PUT /v1/vaults/{v}/sync/report` (a device, any reader of the vault, 60 a
+minute, each count at most 1,000,000) stores them in the row with
+`reported_at` (migration `0028`); `GET /sync` returns them as `report`. The
+CLI sends them after each `kura sync` of the notes, never on a dry run nor
+with a scoped token, and prints a `note:` when the server did not take them;
+the plugin sends them after each run of the notes, and a failure is ignored.
+The vault overview gains a "Last run" column ("2 changes not sent · 1 file
+cannot sync", "nothing left", or "—" for a client that does not report).
+
+| # | Section | Divergence | Reason |
+| --- | --- | --- | --- |
+| D11 | §4.4 | One more route, `PUT /v1/vaults/{v}/sync/report` | Question 2's decision; the device writes only its own row, keyed by `DeviceCaller` |
+| D12 | §7.1 | A new input from the device: four integers, bounded and closed (`deny_unknown_fields`), never a path | A client could lie about its own counts; it can only mislead the console about itself, which it already could by not syncing |
+| D13 | §4.5 | The owner column shows the OIDC subject, as the tenant's Devices page already does | Kura stores no display name for another person; with Authentik's hashed `sub` the column is an opaque id. Naming people is its own change |
+
+**§6.P, now observed (supersedes D7).** `tests/heavy/devices.sh` against
+the dev stack (`task dev:stack`, `RELEASE=1 task dev:run`), with the `kura`
+CLI of this tree, alice (tenant owner) and bob (member), vault `notes`:
+
+1. bob's `kura attach notes` with a file named `Q3: plan.md`: his row is up
+   to date and carries `report.unsyncable = 1`; no owner is named to him.
+2. alice attaches three notes: bob is 3 behind with no call from him, and
+   alice sees his owner and her own push.
+3. bob syncs: 0 behind; alice's device is absent from his list.
+4. **Refusal**: bob on `elsewhere` (tenant `other`) and on an unknown id
+   gets `404`, also for a report; no row exists on `elsewhere`.
+5. **Refusal**: a scoped token gets `403` on the list and on the report.
+6. **Refusal**: a report carrying `paths` gets `400`.
+
+`tests/heavy/sync.sh` and `authz.sh` pass unchanged on the same stack. The
+middle-page case (D8) stays covered by reading only.
+
+**§10.3, now measured (supersedes D9).** `task perf:run:sync-state`
+(`perf/k6/scenarios/04_sync_state.js`, release build, 5 devices reading the
+list of `notes` for 30 s): p95 6.92 ms, 0 failures of 150 requests. The
+worst case, run as `EXPLAIN ANALYZE` of `kura_vault_sync` in a rolled-back
+transaction on a disabled 10,000-note perf vault with every row at
+`caught_up_seq = 0` (each count reaching its cap of 1,001): 8.6 ms for 20
+devices, 61.6 ms for 197. About 0.3 ms a device at the cap; a vault would
+need over 1,500 devices all far behind to pass a second, and the list stops
+at 1,000 rows.
 

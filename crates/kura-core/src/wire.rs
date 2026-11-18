@@ -165,6 +165,23 @@ pub struct CommitResponse {
     pub results: Vec<OpResult>,
 }
 
+/// `PUT /vaults/{v}/sync/report` (RFC 0006 phase 3): what the device's last
+/// run left on its side, as counts only, never paths.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct SyncCounts {
+    /// Local changes not sent: refused by role or quota, or outside what the
+    /// caller may write.
+    pub pending: u32,
+    /// Conflict files the run created.
+    pub conflicts: u32,
+    /// Local files that cannot sync (a name or size rule).
+    pub unsyncable: u32,
+    /// Remote files the device could not write; retried next run.
+    pub failed: u32,
+}
+
 /// `GET /vaults/{v}/changes` and `GET /vaults/{v}/entries`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

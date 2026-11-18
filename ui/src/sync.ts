@@ -1,5 +1,5 @@
 // Where a device stands on a vault (RFC 0006), as the console words it.
-import type { DeviceSync } from "@/api/generated/types.gen";
+import type { DeviceReport, DeviceSync } from "@/api/generated/types.gen";
 
 /** Above this, the server stopped counting: "1,000+". */
 export const BEHIND_CAP = 1000;
@@ -19,6 +19,15 @@ export function standing(d: DeviceSync): Standing {
     n: Math.min(d.behind, BEHIND_CAP),
     more: d.behind > BEHIND_CAP,
   };
+}
+
+/** What a device's last run left undone, in the order a person acts on it. */
+export function leftovers(
+  r: DeviceReport,
+): { key: "pending" | "conflicts" | "unsyncable" | "failed"; n: number }[] {
+  return (["pending", "conflicts", "unsyncable", "failed"] as const)
+    .map((key) => ({ key, n: r[key] }))
+    .filter((x) => x.n > 0);
 }
 
 /** How far from the head, for sorting: a resync first, then most behind. */

@@ -467,6 +467,14 @@
     "behindMore": "{n}+ notes",
     "you": "vous",
     "handed": "« À jour » veut dire que le serveur a transmis chaque changement à l'appareil ; un fichier que l'appareil n'a pas pu écrire compte quand même.",
-    "vaults": "Coffres"
+    "vaults": "Coffres",
+    "lastRun": "Dernier passage",
+    "clean": "rien en suspens",
+    "left": {
+      "pending": "1 modification non envoyée | {n} modifications non envoyées",
+      "conflicts": "1 conflit | {n} conflits",
+      "unsyncable": "1 fichier non synchronisable | {n} fichiers non synchronisables",
+      "failed": "1 fichier non écrit | {n} fichiers non écrits"
+    }
   }
 }

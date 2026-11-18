@@ -3,13 +3,16 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use kura_api::{TenantRole, VaultRole};
+use kura_core::wire::SyncCounts;
 use serde::{Deserialize, Serialize};
 use sqlx::Row as _;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::SharedState;
+use super::body::Body;
 use super::device::DeviceCaller;
 use super::devices::rfc3339;
 use crate::problem::{ApiError, Problem, ProblemType};
@@ -37,7 +40,26 @@ pub struct DeviceSync {
     pub resync: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pushed_at: Option<String>,
+    /// What the device's last run left on its side (phase 3); absent until
+    /// a client that reports has run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<DeviceReport>,
 }
+
+/// The counts a device reported, and when.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceReport {
+    pub pending: u32,
+    pub conflicts: u32,
+    pub unsyncable: u32,
+    pub failed: u32,
+    /// RFC 3339.
+    pub at: String,
+}
+
+/// Above this, a count is a client's mistake, not a vault (§7.3).
+const COUNT_MAX: u32 = 1_000_000;
 
 /// Run one recording statement in its own transaction. A failure is logged
 /// and counted, never returned: the record informs, sync must not depend on
@@ -105,6 +127,70 @@ pub async fn pushed(state: &SharedState, tenant: Uuid, vault: Uuid, device: Uuid
     record(state, tenant, q).await;
 }
 
+/// Report what this device's last run left on its side: counts only, never
+/// paths (RFC 0006 phase 3). A device's own row; a scoped token is refused.
+#[utoipa::path(
+    put,
+    path = "/vaults/{v}/sync/report",
+    tag = "vaults",
+    params(("v" = Uuid, Path, description = "Vault id"), ("X-Kura-Device" = Uuid, Header, description = "This device")),
+    request_body = SyncCounts,
+    responses(
+        (status = 204, description = "Recorded"),
+        (status = 400, description = "Not four counts, or one over 1,000,000", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "A scoped token", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "No such vault, or not readable", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("bearer_token" = [])),
+)]
+pub async fn put_report(
+    State(state): State<SharedState>,
+    caller: DeviceCaller,
+    Path(v): Path<Uuid>,
+    Body(c): Body<SyncCounts>,
+) -> Result<StatusCode, ApiError> {
+    let snap = state
+        .snapshot()
+        .ok_or(ApiError::of(ProblemType::Unavailable))?;
+    let access = authz::require_role(
+        &state.db,
+        &snap,
+        &caller.caller.principal,
+        v,
+        VaultRole::Viewer,
+    )
+    .await?;
+    if [c.pending, c.conflicts, c.unsyncable, c.failed]
+        .iter()
+        .any(|n| *n > COUNT_MAX)
+    {
+        return Err(ApiError::with_detail(
+            ProblemType::InvalidRequest,
+            "a count is over 1,000,000",
+        ));
+    }
+    let as_i32 = |n: u32| i32::try_from(n).unwrap_or(i32::MAX);
+    let mut tx = db::begin_tenant(&state.db, access.tenant, None).await?;
+    sqlx::query(
+        "INSERT INTO device_sync (vault_id, tenant_id, device_id, pending, conflicts, unsyncable, failed, reported_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+         ON CONFLICT (vault_id, device_id) DO UPDATE
+         SET pending = EXCLUDED.pending, conflicts = EXCLUDED.conflicts,
+             unsyncable = EXCLUDED.unsyncable, failed = EXCLUDED.failed, reported_at = now()",
+    )
+    .bind(v)
+    .bind(access.tenant)
+    .bind(caller.device)
+    .bind(as_i32(c.pending))
+    .bind(as_i32(c.conflicts))
+    .bind(as_i32(c.unsyncable))
+    .bind(as_i32(c.failed))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// The devices syncing a vault: every one for its managers and the tenant's
 /// admins, the caller's own for anyone else who reads it.
 #[utoipa::path(
@@ -168,9 +254,26 @@ pub async fn vault_sync(
             pushed_at: r
                 .try_get::<Option<time::OffsetDateTime>, _>("pushed_at")?
                 .map(rfc3339),
+            report: report(r)?,
         });
     }
     Ok(Json(out))
+}
+
+fn report(r: &sqlx::postgres::PgRow) -> Result<Option<DeviceReport>, sqlx::Error> {
+    let Some(at) = r.try_get::<Option<time::OffsetDateTime>, _>("reported_at")? else {
+        return Ok(None);
+    };
+    let n = |c: &str| -> Result<u32, sqlx::Error> {
+        Ok(u32::try_from(r.try_get::<Option<i32>, _>(c)?.unwrap_or_default()).unwrap_or_default())
+    };
+    Ok(Some(DeviceReport {
+        pending: n("pending")?,
+        conflicts: n("conflicts")?,
+        unsyncable: n("unsyncable")?,
+        failed: n("failed")?,
+        at: rfc3339(at),
+    }))
 }
 
 /// The vaults each of the caller's devices caught up on, for `GET /devices`.

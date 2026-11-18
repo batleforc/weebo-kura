@@ -17,6 +17,8 @@ pub const LIMITS: &[(&str, &str, u32)] = &[
     ("GET", "/v1/me", 60),
     ("GET", "/v1/vaults/{v}/bindings", 60),
     ("GET", "/v1/vaults/{v}/sync", 60),
+    // One report per sync run; the plugin runs at most every few seconds.
+    ("PUT", "/v1/vaults/{v}/sync/report", 60),
     ("GET", "/v1/tenants/{t}/notifications", 60),
     ("POST", "/v1/tenants/{t}/notifications", 10),
     ("PUT", "/v1/tenants/{t}/notifications/{n}", 10),

@@ -467,6 +467,12 @@ it is removed. A group binding removed leaves its members' rows until their
 devices are purged. A failed write never fails the pull; it counts
 `kura_device_sync_write_failures_total`.
 
+After each run, the plugin and the CLI also send four counts for the
+console (`PUT /v1/vaults/{v}/sync/report`): changes not sent, conflicts
+created, files that cannot sync, files not written. Counts only, never a
+path; a body with any other field is refused. A client that does not send
+them shows "—" in the "Last run" column.
+
 ## 8. Signals
 
 | Signal | Where |

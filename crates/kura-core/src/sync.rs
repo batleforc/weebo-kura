@@ -268,6 +268,25 @@ pub struct Report {
     pub resynced: Option<String>,
 }
 
+impl Report {
+    /// What this run left undone, for the console (RFC 0006 phase 3).
+    #[must_use]
+    pub fn counts(&self) -> crate::wire::SyncCounts {
+        let n = |len: usize| u32::try_from(len).unwrap_or(u32::MAX);
+        let refused = if self.refused.is_some() {
+            self.pushed
+        } else {
+            0
+        };
+        crate::wire::SyncCounts {
+            pending: n(refused.saturating_add(self.not_writable.len())),
+            conflicts: n(self.conflicts.len()),
+            unsyncable: n(self.unsyncable.len()),
+            failed: n(self.failed.len()),
+        }
+    }
+}
+
 /// Whether a vault path may be written by this caller.
 pub type Writable = Box<dyn Fn(&str) -> bool + Send + Sync>;
 
@@ -1397,5 +1416,32 @@ impl<R: Remote> Remote for Prefetch<'_, R> {
         start: u64,
     ) -> Result<ChangesResponse, RemoteError> {
         self.remote.changes(since, epoch, start).await
+    }
+}
+
+#[cfg(test)]
+mod counts_tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_push_counts_what_it_kept() {
+        let r = Report {
+            pushed: 3,
+            refused: Some(RemoteError::Unavailable("quota".into())),
+            not_writable: vec!["a.md".into()],
+            unsyncable: vec![("b?.md".into(), "name".into())],
+            ..Report::default()
+        };
+        let c = r.counts();
+        assert_eq!(
+            (c.pending, c.conflicts, c.unsyncable, c.failed),
+            (4, 0, 1, 0)
+        );
+        // Pushed and not refused: nothing pending.
+        let ok = Report {
+            pushed: 3,
+            ..Report::default()
+        };
+        assert_eq!(ok.counts().pending, 0);
     }
 }

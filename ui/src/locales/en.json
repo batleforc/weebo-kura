@@ -467,6 +467,14 @@
     "behindMore": "{n}+ notes",
     "you": "you",
     "handed": "Caught up means the server handed the device every change; a file the device could not write still counts.",
-    "vaults": "Vaults"
+    "vaults": "Vaults",
+    "lastRun": "Last run",
+    "clean": "nothing left",
+    "left": {
+      "pending": "1 change not sent | {n} changes not sent",
+      "conflicts": "1 conflict | {n} conflicts",
+      "unsyncable": "1 file cannot sync | {n} files cannot sync",
+      "failed": "1 file not written | {n} files not written"
+    }
   }
 }

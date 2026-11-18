@@ -261,6 +261,7 @@ fn v1_router() -> OpenApiRouter<SharedState> {
         .routes(routes!(vaults::delete_vault))
         .routes(routes!(vaults::list_bindings))
         .routes(routes!(sync_state::vault_sync))
+        .routes(routes!(sync_state::put_report))
         .routes(routes!(vaults::put_binding, vaults::delete_binding))
         .routes(routes!(changes::get_changes))
         .routes(routes!(changes::get_entries))

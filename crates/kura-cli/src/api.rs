@@ -396,6 +396,21 @@ impl Api {
         self.exchange(r).await.map(drop)
     }
 
+    /// What this device's last run left undone, as counts (RFC 0006 phase 3).
+    pub async fn report(
+        &self,
+        vault: Uuid,
+        counts: &kura_core::wire::SyncCounts,
+    ) -> Result<(), RemoteError> {
+        let r = self
+            .req(
+                reqwest::Method::PUT,
+                &format!("/vaults/{vault}/sync/report"),
+            )
+            .json(counts);
+        self.exchange(r).await.map(drop)
+    }
+
     /// A single-use ticket for the vault's notifications (§6.3).
     pub async fn ticket(&self, vault: Uuid) -> Result<String, RemoteError> {
         #[derive(Deserialize)]

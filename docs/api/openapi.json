@@ -2764,6 +2764,87 @@
         ]
       }
     },
+    "/v1/vaults/{v}/sync/report": {
+      "put": {
+        "tags": [
+          "vaults"
+        ],
+        "summary": "Report what this device's last run left on its side: counts only, never\npaths (RFC 0006 phase 3). A device's own row; a scoped token is refused.",
+        "operationId": "put_report",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncCounts"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded"
+          },
+          "400": {
+            "description": "Not four counts, or one over 1,000,000",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A scoped token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault, or not readable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/v1/vaults/{v}/tokens": {
       "get": {
         "tags": [
@@ -3524,6 +3605,43 @@
           }
         }
       },
+      "DeviceReport": {
+        "type": "object",
+        "description": "The counts a device reported, and when.",
+        "required": [
+          "pending",
+          "conflicts",
+          "unsyncable",
+          "failed",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "RFC 3339."
+          },
+          "conflicts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "pending": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "unsyncable": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "DeviceSync": {
         "type": "object",
         "description": "One device on one vault.",
@@ -3571,6 +3689,17 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "report": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DeviceReport",
+                "description": "What the device's last run left on its side (phase 3); absent until\na client that reports has run."
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "resync": {
@@ -4235,6 +4364,43 @@
             }
           }
         }
+      },
+      "SyncCounts": {
+        "type": "object",
+        "description": "`PUT /vaults/{v}/sync/report` (RFC 0006 phase 3): what the device's last\nrun left on its side, as counts only, never paths.",
+        "required": [
+          "pending",
+          "conflicts",
+          "unsyncable",
+          "failed"
+        ],
+        "properties": {
+          "conflicts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Conflict files the run created.",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Remote files the device could not write; retried next run.",
+            "minimum": 0
+          },
+          "pending": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Local changes not sent: refused by role or quota, or outside what the\ncaller may write.",
+            "minimum": 0
+          },
+          "unsyncable": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Local files that cannot sync (a name or size rule).",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       },
       "TenantMembership": {
         "type": "object",

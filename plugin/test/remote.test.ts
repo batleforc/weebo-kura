@@ -31,6 +31,16 @@ describe("the API client", () => {
     expect(always.waits).toHaveLength(4);
   });
 
+  it("reports a run's counts to the vault, as JSON", async () => {
+    let call: { url: string; method: string | undefined; body: unknown } | null = null;
+    const { a } = api((u, init) => {
+      call = { url: u, method: init.method, body: init.body };
+      return Promise.resolve(new Response(null, { status: 204 }));
+    });
+    await a.report("v1", { pending: 0, conflicts: 1, unsyncable: 2, failed: 0 });
+    expect(call).toEqual({ url: "https://kura.test/v1/vaults/v1/sync/report", method: "PUT", body: '{"pending":0,"conflicts":1,"unsyncable":2,"failed":0}' });
+  });
+
   it("maps refusals to problems and outages to errors", async () => {
     await expect(api(() => Promise.resolve(json(403, { type: "/v1/problems/insufficient_role", detail: "editor required" }))).a.vaults())
       .rejects.toMatchObject({ status: 403, kind: "insufficient_role", detail: "editor required" });

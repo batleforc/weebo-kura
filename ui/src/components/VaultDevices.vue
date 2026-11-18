@@ -16,7 +16,7 @@ import StateMark from "@/components/ui/StateMark.vue";
 import TableFilter from "@/components/ui/TableFilter.vue";
 import { matching } from "@/filter";
 import { ago, when } from "@/reader/time";
-import { byDistance, type Standing, standing } from "@/sync";
+import { byDistance, leftovers, type Standing, standing } from "@/sync";
 
 const props = defineProps<{ vault: string; manages: boolean }>();
 const { t, locale } = useI18n();
@@ -103,6 +103,7 @@ onMounted(load);
             <th v-if="manages" scope="col">{{ t("devices.owner") }}</th>
             <th scope="col">{{ t("sync.caughtUp") }}</th>
             <th scope="col">{{ t("sync.behindCol") }}</th>
+            <th scope="col">{{ t("sync.lastRun") }}</th>
             <th v-if="manages" scope="col">{{ t("sync.pushed") }}</th>
           </tr>
         </thead>
@@ -115,6 +116,11 @@ onMounted(load);
               <template v-else>—</template>
             </td>
             <td><StateMark :kind="marks[standing(d).kind]" :word="word(standing(d))" /></td>
+            <td data-test="last-run">
+              <template v-if="!d.report">—</template>
+              <span v-else-if="!leftovers(d.report).length" :title="when(d.report.at, locale)">{{ t("sync.clean") }}</span>
+              <span v-else :title="when(d.report.at, locale)" class="text-copper">{{ leftovers(d.report).map((x) => t(`sync.left.${x.key}`, { n: x.n }, x.n)).join(" · ") }}</span>
+            </td>
             <td v-if="manages">
               <time v-if="d.pushedAt" :datetime="d.pushedAt" :title="when(d.pushedAt, locale)">{{ ago(d.pushedAt, locale) }}</time>
               <template v-else>—</template>

@@ -142,6 +142,14 @@ async fn the_cli_syncs_two_devices_and_maps_exit_codes() {
     std::fs::write(fa.join("Q3: budget.md"), "x").unwrap();
     assert_eq!(code(commands::sync_cmd(&a, None, true, false).await), 4);
     assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 4);
+    // RFC 0006 phase 3: the run's counts reached the server, no path with them.
+    let reported: (Option<i32>, Option<i32>) = sqlx::query_as(
+        "SELECT s.unsyncable, s.pending FROM device_sync s JOIN device d ON d.id = s.device_id WHERE d.name = 'desk-a'",
+    )
+    .fetch_one(&e.t.owner)
+    .await
+    .unwrap();
+    assert_eq!(reported, (Some(1), Some(0)));
     assert_eq!(
         code(commands::sync_cmd(&a, Some("other"), false, false).await),
         3

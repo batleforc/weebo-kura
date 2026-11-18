@@ -103,6 +103,11 @@ export class Api {
     throw new Error("the server registered no device");
   }
 
+  /** What this device's last run left undone, as counts only (RFC 0006 phase 3). */
+  async report(vault: string, counts: Record<string, unknown>): Promise<void> {
+    await this.send(`/vaults/${vault}/sync/report`, { method: "PUT", json: counts });
+  }
+
   async ticket(vault: string): Promise<string> {
     const v = await this.json(`/vaults/${vault}/events/ticket`, { method: "POST" });
     if (isRecord(v) && typeof v.ticket === "string") return v.ticket;

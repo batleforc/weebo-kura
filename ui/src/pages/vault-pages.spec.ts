@@ -166,6 +166,13 @@ describe("a vault's page", () => {
           owner: "bob",
           revoked: false,
           resync: false,
+          report: {
+            pending: 2,
+            conflicts: 0,
+            unsyncable: 1,
+            failed: 0,
+            at: "2026-10-15T10:00:00Z",
+          },
           behind: 212,
           caughtUpAt: "2026-10-15T10:00:00Z",
         },
@@ -184,6 +191,11 @@ describe("a vault's page", () => {
     expect(rows[0]).toContain("pixel");
     expect(rows[0]).toContain("bob");
     expect(rows[0]).toContain("212 notes");
+    expect(w.findAll("[data-test=last-run]").map((c) => c.text())).toEqual([
+      "2 changes not sent · 1 file cannot sync",
+      "—",
+      "—",
+    ]);
     expect(rows[1]).toContain("you");
     expect(rows[1]).toContain("up to date");
     expect(rows[2]).toContain("not yet");

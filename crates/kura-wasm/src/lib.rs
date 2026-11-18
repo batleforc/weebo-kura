@@ -433,6 +433,8 @@ fn report(r: &Report) -> Value {
         "failed": r.failed,
         "refused": r.refused.as_ref().map(problem),
         "resynced": r.resynced,
+        // RFC 0006 phase 3: what the host reports to the console.
+        "counts": r.counts(),
     })
 }
 
