@@ -26,6 +26,18 @@ tasks:
     cmds:
       - perf/run.sh perf/k6/scenarios/04_sync_state.js
 
+  perf:chunks:
+    desc: "RFC 0001 PR 2.6: deduplication, chunks and batch calls per chunking setting, and zstd -3's gain, on a COPY of a real vault (read only, nothing sent) (usage: task perf:chunks DIR=/path/to/copy)"
+    requires:
+      vars: [DIR]
+    cmds:
+      - cargo run -q --release -p kura-core --example chunk_stats -- "{{.DIR}}"
+      - |
+        # Decision 38: above 20% saved, a follow-up RFC picks a codec. Per file,
+        # as the server would store each chunk (most notes are one chunk).
+        find "{{.DIR}}" -type f -not -path '*/.*' -exec sh -c 'for f; do echo "$(stat -c %s "$f") $(zstd -3 -q -c -- "$f" | wc -c)"; done' _ {} + \
+          | awk '{o+=$1; c+=$2} END {if (o == 0) {print "zstd -3: no file"; exit} printf "zstd -3: %d -> %d bytes, %.1f%% saved (decision 38 threshold: 20%%)\n", o, c, (o-c)*100/o}'
+
   perf:run:all:
     desc: Run every k6 scenario in sequence; threshold violations are reported but do not stop the suite
     cmds:
