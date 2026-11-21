@@ -467,7 +467,7 @@ since `kura sync` syncs `.obsidian` as `desktop` [R1]. Vault
 
 **Deliberately untouched**, so reviewers do not go looking:
 
-- `crates/kura-server/migrations/0015_config_spaces.sql` — the RLS policy
+- `crates/kura-server/migrations/0001_init.sql` — the RLS policy
   that hides another member's configuration [R7] is relied on, not changed.
 - `plugin/src/plugins.ts` — the per-device consent to run plugin code [R8]
   is not read or shown.
@@ -731,7 +731,7 @@ test reads configuration from a web device), phase 2 only adds.
 | R4 | `crates/kura-server/src/app/reader.rs:74-122` (`sees_contents`: subject transaction, `row_number() OVER (PARTITION BY …)` without order, `n <= 200`, the Rust filter, the 5 s timeout note at `:86`); `app/chunks.rs:429, 715, 821, 911` (every content route through it) | `833a813` | §1, §2.3, §5.2, §7.5, §7.6 |
 | R5 | `crates/kura-core/src/config.rs:12-31` (`category`, `synced`) | `833a813` | §2.1, §4.2, §6.1 |
 | R6 | RFC 0003 §6.2 and §7.1 T7, T8, T14 (Implemented) | `833a813` | §2.2, §2.3, T4 |
-| R7 | `crates/kura-server/migrations/0015_config_spaces.sql:9-24` (`owner_sub`, the `entry_path` index at `:17`, the `app_tenant` policy at `:22-24`) | `833a813` | §2.3, T1, §7.5 |
+| R7 | `crates/kura-server/migrations/0001_init.sql` (`owner_sub`, the `entry_path` index, the `app_tenant` policy) | `833a813` | §2.3, T1, §7.5 |
 | R8 | `plugin/src/plugins.ts:17-20` (consent kept in the plugin's `data.json`) | `833a813` | non-goals, §7.6 |
 | R9 | `crates/kura-server/src/app/vaults.rs:44-45` (`config_sync`), `docs/api/openapi.json` `Vault.configSync`, `Vault.paths` | `833a813` | §3, §4.1, §6.3 |
 | R10 | `ui/src/reader/content.ts:20-36, 64-110` (`call` with `cache: "no-store"`, `fileBytes`) | `833a813` | T2, §6.3, §9 |

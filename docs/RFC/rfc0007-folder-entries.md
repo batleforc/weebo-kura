@@ -380,7 +380,7 @@ All code references at commit `15f99e0`.
 | --- | --- | --- | --- |
 | R1 | `plugin/src/host.ts:72-94` (`list`: recurses folders, returns files) | `15f99e0` | §1, §2.1 |
 | R2 | `crates/kura-core/src/wire.rs:60-86` (`Operation::Put`, `Delete`; a rename is a `put`) | `15f99e0` | §1, §3, §7.1 |
-| R3 | `crates/kura-server/migrations/0007_sync.sql:28,48` (`entry_path` unique live path; `CHECK (deleted = (blob_hash IS NULL))`) | `15f99e0` | §1, §4.2, §6.2 |
+| R3 | `crates/kura-server/migrations/0001_init.sql` (`entry_path` unique live path; `CHECK (deleted = (blob_hash IS NULL))`) | `15f99e0` | §1, §4.2, §6.2 |
 | R4 | `ui/src/reader/tree.ts:13-33` (`buildTree` from entry paths) | `15f99e0` | §1, §2.2 |
 | R5 | `crates/kura-server/src/app/space.rs:26-32,71` (the notes space and the configuration categories) | `15f99e0` | §3, §4.3 |
 | R6 | `crates/kura-core/src/path.rs:56,198` (`VaultPath::parse`; dot-segments refused) | `15f99e0` | §4.2, §4.3, §7.3 |
@@ -394,7 +394,7 @@ All code references at commit `15f99e0`.
 ### 18.1 What shipped
 
 The three phases together: the `folder` operation and the `folder` flag
-(`kura-core::wire`), migration `0030_folder_entries.sql`, the commit engine
+(`kura-core::wire`), the migration (`0001_init.sql` since the squash, formerly `0030_folder_entries.sql`), the commit engine
 (`app/commits.rs`), `folders=true` on `changes` and `entries`, the core's
 folder push and pull (`sync.rs`), the CLI host (`fs.rs`), the wasm bridge,
 the plugin host (`host.ts`), and the console tree (`tree.ts`,

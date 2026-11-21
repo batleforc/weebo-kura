@@ -9,7 +9,7 @@
 | Co-author | Claude Fable 5.2 |
 | Created | 2026-11-15 |
 | Supersedes | — (revisits RFC 0001 decision 10 and its non-goal "write access for agents") |
-| Touches | `crates/kura-server` (`authz.rs`, `app/reader.rs`, `app/tokens.rs`, `app/commits.rs`, `app/chunks.rs`, `app/changes.rs`, `app/search.rs`, `app/device.rs`, `app/devices.rs`, `app/vaults.rs`, `app/admin.rs`, `app/space.rs`, `limits.rs`, `metrics.rs`, `problem.rs`, `db.rs`, migration `0020`, `tests/tokens.rs`, `tests/cli.rs`), `crates/kura-api` (`spec.rs`, `reason.rs`), `crates/kura-core` (`scope.rs`, `sync.rs`), `crates/kura-cli` (`main.rs`, `commands.rs`, `api.rs`), `fuzz/fuzz_targets/fuzz_scoped_token.rs`, `tests/heavy/keys.sh`, `tests/heavy/authz.sh`, `dev/config/tenants.yaml`, `docs/operator.md`, `docs/api/openapi.json` (no `reconcile/`: D1 of the plan [R23]) |
+| Touches | `crates/kura-server` (`authz.rs`, `app/reader.rs`, `app/tokens.rs`, `app/commits.rs`, `app/chunks.rs`, `app/changes.rs`, `app/search.rs`, `app/device.rs`, `app/devices.rs`, `app/vaults.rs`, `app/admin.rs`, `app/space.rs`, `limits.rs`, `metrics.rs`, `problem.rs`, `db.rs`, migration (formerly `0020`), `tests/tokens.rs`, `tests/cli.rs`), `crates/kura-api` (`spec.rs`, `reason.rs`), `crates/kura-core` (`scope.rs`, `sync.rs`), `crates/kura-cli` (`main.rs`, `commands.rs`, `api.rs`), `fuzz/fuzz_targets/fuzz_scoped_token.rs`, `tests/heavy/keys.sh`, `tests/heavy/authz.sh`, `dev/config/tenants.yaml`, `docs/operator.md`, `docs/api/openapi.json` (no `reconcile/`: D1 of the plan [R23]) |
 | Risk | high |
 
 > **Reference material**, about 6,500 words. For the decision, read §1, §3,
@@ -360,7 +360,7 @@ vault lock.
 
 ## 6. Detailed design
 
-### 6.1 Data model (migration `0020_token_scopes.sql`)
+### 6.1 Data model (migration `0001_init.sql` since the squash, formerly `0020_token_scopes.sql`)
 
 - `scoped_token` gains `name text` and `scopes jsonb NOT NULL`, with
   `CHECK (jsonb_array_length(scopes) BETWEEN 1 AND 16)`. Existing rows are
@@ -386,9 +386,9 @@ vault lock.
   binary and accepts a newer one on purpose [R20]. It gains the reverse
   check for migrations that are not safe to roll back: a one-row table
   `schema_floor (min_binary_migration)`, and a binary whose newest
-  migration is below it refuses to serve. `0020` leaves the floor alone
-  (the `'/'` value above already fails closed); RFC 0005's `0021` raises
-  it (decision 11).
+  migration is below it refuses to serve. The token-scopes change (formerly `0020`) leaves the floor alone
+  (the `'/'` value above already fails closed); RFC 0005's `paths` change (formerly `0021`) raises
+  it (decision 11; in the squashed `0001_init.sql` the floor is set to 1 and still guards the rollback).
 
 ### 6.2 `authz::PathScope` and the read side
 
@@ -596,7 +596,7 @@ query per call, bounded by the 1,000 hashes a call may carry.
 Row-level security by tenant, the vault lock, content addressing checked
 before storage (`hash_mismatch`), quota, the address list failing closed
 when `trustedProxies` is empty, and revocation with the creator's grant
-(migrations `0013`, `0019`) are relied on and not weakened.
+(formerly migrations `0013`, `0019`) are relied on and not weakened.
 
 ---
 
@@ -691,7 +691,7 @@ unchanged; `task perf:run:commit` must show no regression (§14).
   `scopedTokens` field at validation, so, as RFC 0001 §13 requires, the
   release is fully rolled out before any document uses it, and the field is
   removed before a rollback.
-- **Migration**: `0020` backfills `scopes` from `path_prefix`; existing tokens
+- **Migration**: the migration (formerly `0020`) backfills `scopes` from `path_prefix`; existing tokens
   keep their id, secret and behaviour. Reversible: the old columns stay.
 - **Operator prerequisites**: none beyond RFC 0001's `trustedProxies`.
 - **Rollback**: an older binary ignores `scopes`. Single-folder read tokens
@@ -759,7 +759,7 @@ None.
 
 | Phase | Content |
 | --- | --- |
-| 1 | Migration `0020` (`scopes`, `name`, legacy `'/'`, `schema_floor` and its check), `PathScope`, the eight read sites, `scopes` in the token API and CLI flags `--read`/`--name`. Tests T7, T8 and the read half of §14. Useful alone: multi-folder read tokens. |
+| 1 | Migration (formerly `0020`) (`scopes`, `name`, legacy `'/'`, `schema_floor` and its check), `PathScope`, the eight read sites, `scopes` in the token API and CLI flags `--read`/`--name`. Tests T7, T8 and the read half of §14. Useful alone: multi-folder read tokens. |
 | 2 | `scopedTokens.write` in `kura-api` and the reconciler, `Writer`, `token_upload` and its purge, the possession rule, the commit checks, the metric. Tests T1 to T6, T9, T10. Nothing writes until a tenant opts in. |
 | 3 | `kura-cli` with `KURA_TOKEN` and `--write`; `tests/heavy/keys.sh`; operator docs and the bot recipe. |
 
@@ -775,12 +775,12 @@ with the routes they protect, never after.
 | R1 | `crates/kura-server/src/app/tokens.rs:27-42` (`MAX_DAYS`, `CreateToken`), `:78-108` (`check_prefix`, `check_cidrs`), `:110-126` (`manage`), `:227` (audit event) | `d1bad91` | §2.1, §4.3, §7.3, T10 |
 | R2 | `crates/kura-server/src/app/reader.rs:24-45` (`KeyCaller`, `ReadAccess`), `:70-118` (`sees_contents`), `:141-158` (`Reader`), `:168-229` (`verify_key`), `:249-267` (token is viewer, other vault is 404), `:280` (`subject`) | `d1bad91` | §2, §5, §6.3, §6.4, §7 |
 | R3 | `crates/kura-server/src/app/device.rs:31` (`refuse_key_on_write` in `DeviceCaller`) | `d1bad91` | §2.2, §5.2, T4 |
-| R4 | `crates/kura-server/migrations/0013_scoped_tokens.sql` (table, `CHECK (mode = 'read')`, lookup, purge at 30 days) | `d1bad91` | §2.2, §6.1, §9 |
+| R4 | `crates/kura-server/migrations/0001_init.sql` (table, `CHECK (mode = 'read')`, lookup, purge at 30 days) | `d1bad91` | §2.2, §6.1, §9 |
 | R5 | `crates/kura-server/src/authz.rs:477-512` (`key_access`, always `Viewer`) | `d1bad91` | §2.2, §6.3 |
 | R6 | RFC 0001 (Accepted): §3 non-goals, §4.3 warnings, §6.2 scoped tokens, decisions 10 and 30, T16, T19 | `docs/RFC/rfc0001-init-project.md` at `d1bad91` | §2.3, §4.3, §12 |
 | R7 | `crates/kura-server/src/authz.rs:411-435` (`fold`, `visible_under_prefix`, `like_prefix`) | `d1bad91` | §4.2, §5.1, §7.3 |
 | R8 | `crates/kura-core/src/path.rs:34` (`EmptySegment`: "the path is absolute or has an empty name") | `d1bad91` | §6.1, T8 |
-| R9 | `crates/kura-server/migrations/0007_sync.sql:32-67` (`revision.device_id` without foreign key, `commit_record` key, 7-day purge) | `d1bad91` | §6.1, §6.3 |
+| R9 | `crates/kura-server/migrations/0001_init.sql` (`revision.device_id` without foreign key, `commit_record` key, 7-day purge) | `d1bad91` | §6.1, §6.3 |
 | R10 | `grep -rn "prefix_key\|like_prefix\|\.sees(\|sees_content" crates/kura-server/src`, run 2026-11-15 | `d1bad91` | §6.2 inventory |
 | R11 | `crates/kura-server/src/app/space.rs:65-75` (`resolve`: a token never reads configuration) | `d1bad91` | §6.3 |
 | R12 | `crates/kura-server/src/app/chunks.rs:101-135` (`missing_chunks`, vault-wide), `:155-174` (`put_chunk`, `204`) | `d1bad91` | §6.4, T3 |
@@ -814,7 +814,7 @@ This RFC was `In review` and never formally `Accepted`: every question of
 
 | Phase | Commit | Content |
 | --- | --- | --- |
-| 1 | `b1854d5` [R21] | Migration `0020` (`name`, `scopes`, legacy `'/'`, a trigger filling both for an older binary's insert, `schema_floor` read by `db::check_schema`), `PathScope`, the read sites on `LIKE ANY`, `visible_under_prefix` and `like_prefix` removed, `name` and `scopes` in the token API |
+| 1 | `b1854d5` [R21] | Migration (formerly `0020`) (`name`, `scopes`, legacy `'/'`, a trigger filling both for an older binary's insert, `schema_floor` read by `db::check_schema`), `PathScope`, the read sites on `LIKE ANY`, `visible_under_prefix` and `like_prefix` removed, `name` and `scopes` in the token API |
 | 2 | `b1854d5` [R21] | `scopedTokens.write`, `Writer` in `app/reader.rs`, `token_upload` and its daily purge, the possession rule, the path checks on the commit, `kura_token_writes_total{outcome}`, `token_write_disabled`, the `TokenWriteDisabled` condition |
 | 3 | `b1854d5` [R21] | `kura token create --name --read --write`, the `r:`/`w:` list, `KURA_TOKEN` and `--token-file` for `attach` and `sync`, the local refusal, `tests/heavy/keys.sh`, the operator guide and the bot recipe |
 | Gaps | `49e1b7d` [R22] | D6 closed: the token line of `kura sync`, the scope rules moved to `kura_core::scope` (feature `scope`, shared by server, CLI and fuzz build), `fuzz_scoped_token` extended |

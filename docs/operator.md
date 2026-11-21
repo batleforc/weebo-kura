@@ -220,29 +220,9 @@ restricted binding says. `GET /v1/admin/status` warns with
 value the tenant maps to `owner` or `admin`. `GET /v1/vaults` shows each
 caller the folders they read (`paths`).
 
-The schema of this release (migration `0021`) may not be served by an older
-binary, which would read a restricted binding as the whole vault: such a
-binary refuses to start against it. Roll forward, never back.
-
-The one exception is a binary from before RFC 0004 (scoped tokens), which
-has no schema floor check: it would start, and show every restricted viewer
-the whole vault. Before rolling back that far, list the restricted bindings
-as the database owner (row-level security does not apply to it), then
-delete them or turn them into what the old binary should grant:
-
-```sql
-SELECT t.slug AS tenant, v.namespace, v.name AS vault,
-       b.subject_kind, b.subject, b.managed_by, cardinality(b.paths) AS folders
-FROM role_binding b
-JOIN vault v ON v.id = b.vault_id
-JOIN tenant t ON t.id = b.tenant_id
-WHERE b.paths IS NOT NULL
-ORDER BY 1, 2, 3, 4, 5;
-```
-
-The query must return no row before the old binary starts. A binding
-declared in files (`managed_by = config`) comes back at the next reconcile:
-remove its `paths` from the files too.
+The schema of this release may not be served by an older binary, which
+would read a restricted binding as the whole vault: such a binary refuses to
+start against it (`schema_floor`). Roll forward, never back.
 
 The Access page of a vault marks a restricted binding that the tenant role
 widens "effective: whole vault", and a bound folder under which no note

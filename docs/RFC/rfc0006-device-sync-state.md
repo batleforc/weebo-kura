@@ -9,7 +9,7 @@
 | Co-author | Claude Opus 5.5 |
 | Created | 2026-11-18 |
 | Supersedes | — |
-| Touches | `crates/kura-core` (`wire.rs`, `sync.rs`), `crates/kura-cli` (`api.rs`, `commands.rs`), `crates/kura-wasm`, `plugin/` (`main.ts`, `remote.ts`), `crates/kura-server` (migrations `0027_device_sync.sql` and `0028_device_sync_report.sql`, `app/changes.rs`, `app/commits.rs`, `app/devices.rs`, `app/vaults.rs`, new `app/sync_state.rs`, `app/mod.rs`, `limits.rs`, `metrics.rs`, `tests/sync_state.rs`), `ui/` (`src/sync.ts`, `src/components/VaultDevices.vue`, `src/pages/VaultOverview.vue`, `src/pages/DevicesPage.vue`, `src/pages/HelpPage.vue`, locales), `tests/heavy/devices.sh`, `perf/k6/scenarios/04_sync_state.js`, `docs/api/openapi.json`, `docs/operator.md` |
+| Touches | `crates/kura-core` (`wire.rs`, `sync.rs`), `crates/kura-cli` (`api.rs`, `commands.rs`), `crates/kura-wasm`, `plugin/` (`main.ts`, `remote.ts`), `crates/kura-server` (the migration (`0001_init.sql` since the squash, formerly `0027_device_sync.sql` and `0028_device_sync_report.sql`), `app/changes.rs`, `app/commits.rs`, `app/devices.rs`, `app/vaults.rs`, new `app/sync_state.rs`, `app/mod.rs`, `limits.rs`, `metrics.rs`, `tests/sync_state.rs`), `ui/` (`src/sync.ts`, `src/components/VaultDevices.vue`, `src/pages/VaultOverview.vue`, `src/pages/DevicesPage.vue`, `src/pages/HelpPage.vue`, locales), `tests/heavy/devices.sh`, `perf/k6/scenarios/04_sync_state.js`, `docs/api/openapi.json`, `docs/operator.md` |
 | Risk | medium |
 
 ---
@@ -250,7 +250,7 @@ flowchart TD
 
 ## 6. Detailed design
 
-### 6.1 Data model (migration `0027_device_sync.sql`)
+### 6.1 Data model (migration `0001_init.sql` since the squash, formerly `0027_device_sync.sql`)
 
 ```sql
 CREATE TABLE device_sync (
@@ -442,7 +442,7 @@ audit` is unchanged.
 | --- | --- | --- | --- |
 | Upsert fails (lock, DB hiccup) | the counter, `warn` log | **fail open on recording**: the pull still answers; the row is stale | next pass writes it |
 | `/sync` query slow on a large vault | request latency | capped counts; the overview section shows its own error | none needed |
-| Server rolled back below `0027` | — | the table stays, unread | roll forward |
+| Server rolled back below the release that added `device_sync` | — | the table stays, unread | roll forward |
 
 Failing open is right here: the record is informational, and refusing a
 pull because a dashboard row could not be written would break sync for a
@@ -490,7 +490,7 @@ display.
 
 - **Default behaviour**: recording starts with the deploy; every device shows
   "not yet" until its next full pass.
-- **Migration**: `0027` is additive; the floor check of RFC 0004 is not
+- **Migration**: the migration is additive; the floor check of RFC 0004 is not
   involved since no authorization data changes.
 - **Operator prerequisites**: none.
 - **Rollback**: an older binary ignores the table; rows stay until the next
@@ -559,15 +559,15 @@ All code references at commit `4d04302`.
 | R3 | `crates/kura-server/src/app/vaults.rs:457-480` (`list_bindings`, manager or tenant admin) | `4d04302` | §2.2, §7.2 |
 | R4 | `crates/kura-core/src/sync.rs:245-268` (`Report`) | `4d04302` | §2.4, question 2 |
 | R5 | `crates/kura-server/src/app/events.rs:227` (`state.hub.enter(device)`: sockets held in this replica's memory) | `4d04302` | §3, §12 |
-| R6 | `crates/kura-server/migrations/0013_scoped_tokens.sql:19,54` (`last_used_at`) | `4d04302` | §3 |
+| R6 | `crates/kura-server/migrations/0001_init.sql` (`last_used_at`) | `4d04302` | §3 |
 | R7 | `crates/kura-core/src/wire.rs:172-181` (`ChangesResponse.head_seq`, `next`) | `4d04302` | §4.2 |
 | R8 | `crates/kura-server/src/app/changes.rs:115-127` (vault routes: path `Uuid`, 404 for no vault) | `4d04302` | §4.3, T2 |
 | R9 | `crates/kura-server/src/db.rs:178-185` (`REPEATABLE READ READ ONLY` snapshot) | `4d04302` | §5.1, §7.6 |
-| R10 | `crates/kura-server/migrations/0009_events.sql:3-25` (`ws_ticket` RLS pattern) | `4d04302` | §6.1 |
-| R11 | `crates/kura-server/migrations/0022_web_profile.sql:15-16` (180/30-day purge) | `4d04302` | §6.1, §9 |
+| R10 | `crates/kura-server/migrations/0001_init.sql` (`ws_ticket` RLS pattern) | `4d04302` | §6.1 |
+| R11 | `crates/kura-server/migrations/0001_init.sql` (180/30-day purge) | `4d04302` | §6.1, §9 |
 | R12 | `crates/kura-server/src/app/reader.rs:134-140` (scoped tokens refused off `Reader`/`Writer`) | `4d04302` | §6.P.5, §7.2 |
 | R13 | `crates/kura-server/src/app/device.rs:18-21` (`DeviceCaller.device`) | `4d04302` | T4 |
-| R14 | `crates/kura-server/migrations/0007_sync.sql:27-28` (`entry_changes` index) | `4d04302` | §10.3 |
+| R14 | `crates/kura-server/migrations/0001_init.sql` (`entry_changes` index) | `4d04302` | §10.3 |
 | R15 | `crates/kura-server/tests/sync.rs:653` (`a_pull_during_commits_never_passes_an_unseen_change`) | `4d04302` | §14 |
 
 ---
@@ -576,7 +576,7 @@ All code references at commit `4d04302`.
 
 ### 18.1 What shipped
 
-Phases 1 and 2 together: migration `0027_device_sync.sql`, the recording in
+Phases 1 and 2 together: the migration (formerly `0027_device_sync.sql`), the recording in
 `get_changes` and `post_commit`, `GET /v1/vaults/{v}/sync` (60 a minute),
 `vaults` on `GET /v1/devices`, the cleanup on a `user:` binding's removal,
 the counter, the vault overview's Devices section and the Devices page's
@@ -642,7 +642,7 @@ ships as drawn. The table gains the filter of the other back-office tables.
 refused push kept plus what lay outside the caller's write folders.
 `PUT /v1/vaults/{v}/sync/report` (a device, any reader of the vault, 60 a
 minute, each count at most 1,000,000) stores them in the row with
-`reported_at` (migration `0028`); `GET /sync` returns them as `report`. The
+`reported_at` (migration, formerly `0028`); `GET /sync` returns them as `report`. The
 CLI sends them after each `kura sync` of the notes, never on a dry run nor
 with a scoped token, and prints a `note:` when the server did not take them;
 the plugin sends them after each run of the notes, and a failure is ignored.
@@ -684,7 +684,7 @@ at 1,000 rows.
 
 ### 18.8 Owners by name, and the browser proof (supersedes D13)
 
-Migration `0029` keeps the owner's `name` (else `preferred_username`) claim
+The migration (formerly `0029`) keeps the owner's `name` (else `preferred_username`) claim
 on each device, from the owner's own token: written at registration,
 refreshed with `last_seen`, cut to 128 characters
 (`Principal::display_name`, shared with `GET /me`). `GET /devices` and

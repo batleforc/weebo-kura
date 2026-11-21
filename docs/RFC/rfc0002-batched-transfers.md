@@ -553,11 +553,11 @@ None.
 | R9 | Plan, phase 3 review S8 | `85e4fe9` | whole-file memory limit |
 | R10 | RFC 0001 §13 protocol compatibility (`rfc0001-init-project.md:1021`) | Accepted 2026-11-14 | additive `/v1`, `X-Kura-Client` |
 | R11 | RFC 0001 decision 38; `docs/readme.md` planned RFCs | `85e4fe9` | compression is its own RFC |
-| R12 | `crates/kura-server/migrations/0005_chunks.sql:13` (`chunk.size` ≤ 4,194,304); `changes` page of 1,000 (plan PR 3.3) | `85e4fe9` | 4 MiB per chunk; 1,000-item pages |
+| R12 | `crates/kura-server/migrations/0001_init.sql` (`chunk.size` ≤ 4,194,304); `changes` page of 1,000 (plan PR 3.3) | `85e4fe9` | 4 MiB per chunk; 1,000-item pages |
 | R13 | `task dump-spec`, `task openapi:check` (`.tasks/` and plan PR 1.3) | `85e4fe9` | spec regeneration and drift gate |
-| R14 | `crates/kura-server/migrations/0005_chunks.sql:9-19` | `85e4fe9` | budget from `chunk.size` before fetch |
+| R14 | `crates/kura-server/migrations/0001_init.sql` | `85e4fe9` | budget from `chunk.size` before fetch |
 | R15 | `crates/kura-server/src/app/mod.rs:241-258` (body limits) | `85e4fe9` | where the 128 KiB limit goes |
-| R16 | `crates/kura-server/migrations/0015_config_spaces.sql:21-24`; plan D70 | `85e4fe9` | subject RLS on `entry`; known-bytes residual |
+| R16 | `crates/kura-server/migrations/0001_init.sql`; plan D70 | `85e4fe9` | subject RLS on `entry`; known-bytes residual |
 | R17 | `crates/kura-server/Cargo.toml:11-12` | `85e4fe9` | `futures-util`, `bytes` already present |
 | R18 | `deploy/helm/kura/files/alerts.yaml` (corrupt chunk alert); plan PR 6.3 | `85e4fe9` | existing alert covers corruption |
 | R19 | `crates/kura-cli/src/api.rs:78-87`; `plugin/src/remote.ts:44-51` | `85e4fe9` | both clients wait out `429`/`503` per `Retry-After` |

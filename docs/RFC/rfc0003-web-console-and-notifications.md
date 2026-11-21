@@ -9,7 +9,7 @@
 | Co-author | Claude Fable 5.2 |
 | Created | 2026-11-15 |
 | Supersedes | — (revisits RFC 0001's non-goal "a web UI") |
-| Touches | `ui/` (new), `crates/kura-server` (`app/mod.rs`, `app/me.rs`, `app/ui.rs`, `app/vaults.rs`, `app/devices.rs`, `app/device.rs`, `app/space.rs`, `app/notifications.rs`, `app/commits.rs`, `app/tokens.rs`, `app/reader.rs`, `notifier.rs`, `net.rs`, `config.rs`, `limits.rs`, `metrics.rs`, `problem.rs`, `db.rs`, `lib.rs`, `main.rs`, `store/crypto.rs`, `store/keys.rs`, migrations `0022`, `0023`, `0024`, `tests/console.rs`, `tests/notifications.rs`), `crates/kura-core` (`webhook.rs`, feature `webhook`), `fuzz/` (`fuzz_webhook_target`), `Containerfile`, `Containerfile.hardened`, `deploy/helm/kura` (`values.yaml`, `templates/`, `files/alerts.yaml`), `deploy/alerts/tests.yaml`, `dev/`, `.tasks/`, `tests/heavy/console.sh`, `tests/heavy/notify.sh`, `docs/` (`operator.md`, `readme.md`, `api/openapi.json`, `RFC/assets/`) |
+| Touches | `ui/` (new), `crates/kura-server` (`app/mod.rs`, `app/me.rs`, `app/ui.rs`, `app/vaults.rs`, `app/devices.rs`, `app/device.rs`, `app/space.rs`, `app/notifications.rs`, `app/commits.rs`, `app/tokens.rs`, `app/reader.rs`, `notifier.rs`, `net.rs`, `config.rs`, `limits.rs`, `metrics.rs`, `problem.rs`, `db.rs`, `lib.rs`, `main.rs`, `store/crypto.rs`, `store/keys.rs`, the migration (`0001_init.sql` since the squash, formerly `0022`, `0023`, `0024`), `tests/console.rs`, `tests/notifications.rs`), `crates/kura-core` (`webhook.rs`, feature `webhook`), `fuzz/` (`fuzz_webhook_target`), `Containerfile`, `Containerfile.hardened`, `deploy/helm/kura` (`values.yaml`, `templates/`, `files/alerts.yaml`), `deploy/alerts/tests.yaml`, `dev/`, `.tasks/`, `tests/heavy/console.sh`, `tests/heavy/notify.sh`, `docs/` (`operator.md`, `readme.md`, `api/openapi.json`, `RFC/assets/`) |
 | Risk | high |
 
 > **Reference material**, about 11,800 words. For the decision, read §1, §3,
@@ -692,7 +692,7 @@ creation and now points inside is refused at send time.**
   bans its whole session, in `register_device` and in `require_device`
   [R9][R12], so the next sign-in, and the plugin or CLI approved in the same
   Authentik session, would be refused (decision 24).
-- `devices::Profile` [R9] gains `Web`, and migration `0022_web_profile.sql`
+- `devices::Profile` [R9] gains `Web`, and the migration (`0001_init.sql` since the squash, formerly `0022_web_profile.sql`)
   widens the
   table's `CHECK (profile IN ('desktop', 'mobile'))` [R28].
   `register_device` returns the caller's
@@ -713,7 +713,7 @@ creation and now points inside is refused at send time.**
   and returns `BindingView` rows [R1] plus the tenant role's grant as a
   read-only row.
 
-### 6.4 Notifications (migration `0023_notifications.sql`)
+### 6.4 Notifications (the migration, formerly `0024_notifications.sql`)
 
 - `notification_rule`: id, tenant, optional vault, name, `events text[]`,
   channel kind, the URL and the signing secret **sealed** (§7.4), the URL's
@@ -1067,8 +1067,9 @@ condition. Versions are the latest published on 2026-11-15 [R20].
 - **Default behaviour**: `ui` and `notifications` absent: no page, no event,
   no outbound request. `GET /me` and `GET …/bindings` exist regardless; they
   expose nothing new to their callers.
-- **Migration**: `0022` (phase 1) adds the `web` profile value and the
-  sign-out state; `0023` (phase 3) adds three tables;
+- **Migration**: the migration (`0001_init.sql` since the squash) adds the
+  `web` profile value and the sign-out state (formerly `0022`, phase 1) and
+  three tables (formerly `0024`, phase 3);
   reversible by dropping them (rules are lost).
 - **Operator prerequisites**: in Authentik, a public OAuth provider
   `kura-web` with redirect URI `https://<host>/app/callback` and the
@@ -1195,9 +1196,9 @@ None.
 
 | Phase | Content |
 | --- | --- |
-| 1 | `GET /me`, `GET …/bindings`, `Profile::Web` (migration `0022`) with reuse per `sid`, sign-out and the 30-day purge; `ui` settings, static serving with its headers; `ui/` scaffold on the stack of §6.1: sign-in with the session module, the manifest and service worker, shell, My vaults, My devices; Containerfile stage; `task audit` and tests for `ui/`. Tests T7 to T12 and T14. Useful alone: a member sees vaults and revokes devices. |
+| 1 | `GET /me`, `GET …/bindings`, `Profile::Web` (formerly migration `0022`) with reuse per `sid`, sign-out and the 30-day purge; `ui` settings, static serving with its headers; `ui/` scaffold on the stack of §6.1: sign-in with the session module, the manifest and service worker, shell, My vaults, My devices; Containerfile stage; `task audit` and tests for `ui/`. Tests T7 to T12 and T14. Useful alone: a member sees vaults and revokes devices. |
 | 2 | Back office on existing routes: Access, Keys, tenant Devices, platform Status, vault create and delete. §6.P observations 1 to 3. |
-| 3 | Notifications server side: migration `0023`, the guarded client and its fuzz target, events at their sites, worker, routes, metrics, alerts. Off by default. Tests T1 to T6, T13. |
+| 3 | Notifications server side: migration (formerly `0023`), the guarded client and its fuzz target, events at their sites, worker, routes, metrics, alerts. Off by default. Tests T1 to T6, T13. |
 | 4 | Notifications pages; §6.P observations 4 to 8; operator docs for the receiver contract. |
 
 Each phase leaves the tree green. The address guard, the signature and the
@@ -1224,7 +1225,7 @@ and the device binding land in phase 1 with the first page.
 | R12 | `crates/kura-server/src/app/device.rs:57-64` (`require_session`), `:66-113` (`require_device`) | `d1bad91` | §6.2, T14, question 13 |
 | R13 | `crates/kura-server/src/app/caller.rs:11-14`, `:32-55` (`Caller`) | `d1bad91` | §6.3 |
 | R14 | `crates/kura-server/src/authz.rs:18-63` (`memberships`), `:357-374` (`check_binding`) | `d1bad91` | §6.3 |
-| R15 | `crates/kura-server/migrations/0014_search.sql:36-48` (`index_job`), RFC 0001 §6.7 (`FOR UPDATE SKIP LOCKED`) | `d1bad91` | §6.4 |
+| R15 | `crates/kura-server/migrations/0001_init.sql` (`index_job`), RFC 0001 §6.7 (`FOR UPDATE SKIP LOCKED`) | `d1bad91` | §6.4 |
 | R16 | `crates/kura-server/src/lib.rs:30-61` (`background`) | `d1bad91` | §6.4 |
 | R17 | `reqwest` 0.13.5 source: `src/async_impl/client.rs:1392` (`redirect`), `:1436` (`no_proxy`), `:2327` (`dns_resolver`); `:1911` (`add_root_certificate`); `src/redirect.rs:58` (`Policy::none`) | crate version 0.13.5, read 2026-11-15 | §6.5 |
 | R18 | `crates/kura-server/src/auth/keys.rs:33-43` (`safe_endpoint`) | `d1bad91` | §6.5 |
@@ -1237,7 +1238,7 @@ and the device binding land in phase 1 with the first page.
 | R25 | `crates/kura-server/src/app/events.rs:62-76` (`Notice`) | `d1bad91` | §12 |
 | R26 | `deploy/helm/kura/templates/networkpolicy.yaml:2-3` ("Egress stays open") | `d1bad91` | §12 |
 | R27 | `weebo-skillsagent/skills/batlehub-design/SKILL.md:49` (provenance: upstream `2336695`, `docs/.vitepress/theme/tokens.css`) | `weebo-skillsagent` at `76839d7` | decision 4 |
-| R28 | `crates/kura-server/migrations/0001_phase1_identity.sql:83` (`CHECK (profile IN ('desktop', 'mobile'))`) | `d1bad91` | §6.2, §13 |
+| R28 | `crates/kura-server/migrations/0001_init.sql` (`CHECK (profile IN ('desktop', 'mobile'))`) | `d1bad91` | §6.2, §13 |
 | R29 | `grep -rn "add_root_certificate\|ca_file\|caFile\|SSL_CERT" crates/kura-server/src`, run 2026-11-15: no match | `d1bad91` | §13, decision 15 |
 | R30 | `weebo-notify-v2`: `web/package.json:21-50` (versions), `web/src/auth/pkce.ts` and `pkce.spec.ts`, `web/src/auth/session.ts:1-6` (access token in memory, refresh token in `sessionStorage`, ADR-0020) | `weebo-notify-v2` at `d29d330`, read 2026-11-15 | §6.1, §6.2, §8, §12 |
 | R31 | `proxy-cache`: `ui/src/design/tokens.css`, `ui/src/router/index.ts:160-180` (page gated on its declared verb, refused when missing), `ui/src/components/ui/` (`async-state` and siblings) | `proxy-cache` at `e5fc1376`, read 2026-11-15 | §6.1 |
@@ -1245,14 +1246,14 @@ and the device binding land in phase 1 with the first page.
 | R33 | `tests/heavy/console.sh` against the dev Authentik (`ghcr.io/goauthentik/server:2026.8.3`, provider `kura-web` of `dev/authentik/blueprints/kura.yaml`): every check `ok`; notes: no family revocation, no CORS header on the revocation answer, a code exchanged without PKCE, no `sid` once the Authentik session has ended | run 2026-11-17, working tree on `a4d3ddd` | §4.2, §6.2, §6.P, T9, T14, §13, decisions 13 and 25 to 27 |
 | R34 | `goauthentik/authentik`, `authentik/providers/oauth2/`: `utils.py:39-79` (`cors_allow`: scheme, host and port of each redirect URI), `views/token.py:57-63` and `:216-245` (rotation under `refresh_token_threshold`, a new `expires` at each rotation), `models.py:288-296` | tag `version/2026.8.3` (`e5a0d2f7572c`), read 2026-11-17 | §6.2, §13, decision 28 |
 | R35 | `b1854d5` feat: folder-scoped write tokens (RFC 0004) and the web console, phase 1 (RFC 0003) | 2026-11-17 | §18, phase 1 |
-| R36 | `c2449ce` feat: folder-restricted viewers and the web reader (RFC 0005): carries the phase 1 review fixes (migration `0023_signed_out_devices.sql`, `app/ui.rs`, `db.rs`, `tests/console.rs`, `tests/db.rs`) | 2026-11-17 | §18, phase 1 review |
+| R36 | `c2449ce` feat: folder-restricted viewers and the web reader (RFC 0005): carries the phase 1 review fixes (migration, formerly `0023_signed_out_devices.sql`, `app/ui.rs`, `db.rs`, `tests/console.rs`, `tests/db.rs`) | 2026-11-17 | §18, phase 1 review |
 | R37 | `6383e66` feat(ui): the back office of the web console (RFC 0003 phase 2) | 2026-11-17 | §18, phase 2 |
 | R38 | `62cdb46` feat: webhook notifications, server side (RFC 0003 phase 3) | 2026-11-17 | §18, phase 3 |
 | R39 | `a7e8e67` feat(ui): notification rules and deliveries in the console (RFC 0003 phase 4) | 2026-11-17 | §18, phase 4 |
 | R40 | `49e1b7d` feat: close the remaining gaps of RFC 0003, 0004 and 0005 | 2026-11-17 | §18, gaps |
 | R41 | `fda4845` chore: dated audit exceptions, and a suite vault apart from obsidian (`.tasks/security.yaml`) | 2026-11-17 | §18.5 |
 | R42 | [`rfc0003-implementation-plan.md`](rfc0003-implementation-plan.md): progress table and divergences D1 to D19 | working tree on `5a01ea4`, 2026-11-17 | §18 |
-| R44 | The change closing the landing gaps (§18.7): `app/ui.rs::check_dir`, migration `0026`, `notifier::{warn_rules_while_off, purge}`, `net::webhook_client_resolving`, `tests/notification_logs.rs`, `ui/build-checks.ts`, `ForbiddenState.vue`, `NotificationsPage.vue`; `task lint`, 283 Rust tests, 96 console tests and the six heavy suites green on the dev stack | 2026-11-17, the commit after `1c22fce` | §18.7 |
+| R44 | The change closing the landing gaps (§18.7): `app/ui.rs::check_dir`, migration (formerly `0026`), `notifier::{warn_rules_while_off, purge}`, `net::webhook_client_resolving`, `tests/notification_logs.rs`, `ui/build-checks.ts`, `ForbiddenState.vue`, `NotificationsPage.vue`; `task lint`, 283 Rust tests, 96 console tests and the six heavy suites green on the dev stack | 2026-11-17, the commit after `1c22fce` | §18.7 |
 | R43 | `ui/pnpm-lock.yaml`, `ui/node_modules/*/package.json` (resolved versions and licences), `Cargo.lock` (`tower-http` 0.7.1, `reqwest` 0.13.5, `url` 2.5.8, `rcgen` 0.14.10, `tokio-rustls` 0.26.6, `aws-lc-rs` 1.19.0), `Containerfile:35` (`node:24-trixie-slim` by digest) | working tree on `5a01ea4`, read 2026-11-17 | §18.5 |
 
 ---
@@ -1272,9 +1273,9 @@ it against the text above, which stays as written.
 | Phase | Commit | What |
 | --- | --- | --- |
 | Question 13 | `b1854d5` [R35] | The Authentik facts in `tests/heavy/console.sh`, decisions 25 to 28 (§15) |
-| 1 | `b1854d5` [R35], review fixes in `c2449ce` [R36] | `GET /me`, `GET …/bindings`, `Profile::Web` (migration `0022`), one web device per `sid`, `POST /devices/{d}/sign-out`, the 30-day purge, the configuration space refused to a web device, `ui` in `server.yaml`, `/app` with its headers and `/app/config.json`; `ui/` with the session module, sign-in, shell, My vaults, My devices, manifest and service worker; the Containerfile UI stage; `task ui:*` in `lint` and `audit`. The review added migration `0023` (a signed-out web device closes its sockets and leaves the lists), a `404` for a missing hashed asset, and a schema check over every migration |
+| 1 | `b1854d5` [R35], review fixes in `c2449ce` [R36] | `GET /me`, `GET …/bindings`, `Profile::Web` (formerly migration `0022`), one web device per `sid`, `POST /devices/{d}/sign-out`, the 30-day purge, the configuration space refused to a web device, `ui` in `server.yaml`, `/app` with its headers and `/app/config.json`; `ui/` with the session module, sign-in, shell, My vaults, My devices, manifest and service worker; the Containerfile UI stage; `task ui:*` in `lint` and `audit`. The review added migration (formerly `0023`) (a signed-out web device closes its sockets and leaves the lists), a `404` for a missing hashed asset, and a schema check over every migration |
 | 2 | `6383e66` [R37] | The back office on existing routes: Manage index, Access, Keys, members' devices, a tenant's vaults, platform Status; §6.P observations 1 to 3 |
-| 3 | `62cdb46` [R38] | `notifications` in `server.yaml`, migration `0024`, `kura_core::webhook` and `fuzz_webhook_target`, `net::webhook_client`, `notifier`, the six rule routes, events at their sites, four metrics, two alerts with promtool tests |
+| 3 | `62cdb46` [R38] | `notifications` in `server.yaml`, migration (formerly `0024`), `kura_core::webhook` and `fuzz_webhook_target`, `net::webhook_client`, `notifier`, the six rule routes, events at their sites, four metrics, two alerts with promtool tests |
 | 4 | `a7e8e67` [R39] | Notifications and Deliveries pages; operator guide for `notifications` and the receiver contract; §6.P observations 4, 5 and 7 in `tests/heavy/notify.sh` |
 | Gaps | `49e1b7d` [R40] | The HTML mocks of §4.5, the bundled fonts, the group list of Add access, observations 6 and 8 in the shell suite, the Helm values `server.ui`, `server.notifications` and `webhookCa` |
 
@@ -1322,9 +1323,9 @@ The divergences recorded by the plan [R42], in short:
 
 Found in the tree on landing and not in the plan's table:
 
-- **Migration numbers** (§6.4, §13, §16): the notifications are
-  `0024_notifications.sql`; `0023` is `0023_signed_out_devices.sql`, the
-  phase 1 review fix, which shipped inside RFC 0005's commit `c2449ce`
+- **Migration numbers** (§6.4, §13, §16): before the squash into
+  `0001_init.sql`, the notifications were `0024_notifications.sql`, and
+  `0023_signed_out_devices.sql` was the phase 1 review fix, which shipped inside RFC 0005's commit `c2449ce`
   [R36].
 - **§4.3, startup**: no check refuses a `ui.dir` that is missing or has no
   `index.html`; `main.rs` and `app::ui::UiSettings::new` do not look. The
@@ -1482,8 +1483,8 @@ test, closed the same day [R44]:
   `maintain`, `backup` and `check-chunks` with the console on need it too.
 - **The startup `WARN`** (§4.3): `notifier::warn_rules_while_off` logs
   `rules=N` once when notifications are off and rules are stored. Row-level
-  security forbids a cross-tenant count to the server's role, so migration
-  `0026` adds `kura_notification_rule_count()`, which returns a number only.
+  security forbids a cross-tenant count to the server's role, so the migration
+  (formerly `0026`) adds `kura_notification_rule_count()`, which returns a number only.
 - **Retention while off** (§9, found while closing the above): the 7-day
   purge of events and deliveries stopped with the notifier when
   `notifications.enabled` was false. `notifier::purge` now runs hourly

@@ -241,18 +241,9 @@ async fn schema_check_refuses_an_older_schema_only() {
         .await
         .unwrap();
     db::check_schema(&t.app).await.unwrap();
-    // One migration below the newest missing is refused too: a lower number
-    // added after a higher one was applied.
-    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 21")
-        .execute(&t.owner)
-        .await
-        .unwrap();
-    let e = db::check_schema(&t.app).await.unwrap_err();
-    assert!(
-        matches!(e, db::DbError::SchemaTooOld { missing: 21, .. }),
-        "{e}"
-    );
-    sqlx::query("DELETE FROM _sqlx_migrations")
+    // A migration of this binary missing is refused, even below the newest
+    // applied one (here the future one above).
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 1")
         .execute(&t.owner)
         .await
         .unwrap();

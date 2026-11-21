@@ -9,7 +9,7 @@
 | Co-author | Claude Fable 5.2 |
 | Created | 2026-11-15 |
 | Supersedes | — (keeps RFC 0001's non-goal "public sharing": every reader stays an authenticated member) |
-| Touches | `crates/kura-api` (`spec.rs`, `validate/`, `reason.rs`), `crates/kura-core` (`scope.rs`, `wire.rs`), `crates/kura-server` (`authz.rs`, `config.rs`, `db.rs`, `app/vaults.rs`, `app/reader.rs`, `app/commits.rs`, `app/ui.rs`, `reconcile/status.rs`, migrations `0021` and `0025`, `tests/viewers.rs`), `crates/kura-cli` (`commands.rs`), `ui/` (`src/reader/`, `src/pages/` Vaults, Browse, Search, History, Access, locales, `public/frame.css`, `e2e/reader.spec.ts`), `tests/heavy/reader.sh`, `dev/config/tenants.yaml`, `dev/authentik/blueprints/kura.yaml`, `docs/operator.md`, `docs/api/openapi.json`, `docs/RFC/assets/0005-reader.html` |
+| Touches | `crates/kura-api` (`spec.rs`, `validate/`, `reason.rs`), `crates/kura-core` (`scope.rs`, `wire.rs`), `crates/kura-server` (`authz.rs`, `config.rs`, `db.rs`, `app/vaults.rs`, `app/reader.rs`, `app/commits.rs`, `app/ui.rs`, `reconcile/status.rs`, the migration (`0001_init.sql` since the squash, formerly `0021` and `0025`), `tests/viewers.rs`), `crates/kura-cli` (`commands.rs`), `ui/` (`src/reader/`, `src/pages/` Vaults, Browse, Search, History, Access, locales, `public/frame.css`, `e2e/reader.spec.ts`), `tests/heavy/reader.sh`, `dev/config/tenants.yaml`, `dev/authentik/blueprints/kura.yaml`, `docs/operator.md`, `docs/api/openapi.json`, `docs/RFC/assets/0005-reader.html` |
 | Risk | high |
 
 > **Reference material**, about 6,500 words. For the decision, read §1, §3,
@@ -370,13 +370,14 @@ that link resolution never leaves the browser.
 - `validate()` adds the rows of §4.3 beside the existing "set exactly one"
   check of `spec.bindings[i]` [R7], with reason codes in the kit's shape.
 
-### 6.2 Data model (migration `0021_binding_paths.sql`)
+### 6.2 Data model (migration `0001_init.sql` since the squash, formerly `0021_binding_paths.sql`)
 
 - `role_binding` [R8] gains `paths text[]`, `NULL` for the whole vault, with
   `CHECK (paths IS NULL OR (role = 'viewer' AND cardinality(paths) BETWEEN 1
   AND 16))`. The constraint makes the invariant of §5.1 hold in the database,
   not only in the handlers.
-- `0021` sets `schema_floor.min_binary_migration` to 21 (RFC 0004 §6.1,
+- The migration sets `schema_floor.min_binary_migration` (to 1 in the squashed
+  `0001_init.sql`; formerly raised to 21 by `0021`) and it still guards the rollback (RFC 0004 §6.1,
   [R17]).
 - `kura_bindings_replace` [R8] reads `paths` from the reconciled JSON and
   sets it on insert and on update, so a configuration change of `paths`
@@ -667,14 +668,14 @@ per request: a 10,000-note vault is ten requests within the 60/min limit of
 ## 13. Rollout and compatibility
 
 - **Default behaviour**: no binding has `paths`; nothing changes.
-- **Migration**: `0021` adds a nullable column; reversible by dropping it.
+- **Migration**: the migration adds a nullable column; reversible by dropping it.
 - **Operator prerequisites**: an Authentik group for the players mapped to
   the tenant's `member` role; `search.enabled` for the search page; the
   application of RFC 0003 enabled.
 - **Rollback**: an older binary ignores `paths` and would show the whole
-  vault to restricted viewers, which **re-opens T1**. Migration `0021`
-  therefore raises the schema floor of RFC 0004 §6.1: any binary that has
-  the floor check and predates `0021` refuses to serve. RFC 0004 phase 1,
+  vault to restricted viewers, which **re-opens T1**. The migration
+  therefore sets the schema floor of RFC 0004 §6.1: any binary that has
+  the floor check and predates it refuses to serve. RFC 0004 phase 1,
   which lands first (decision 3), is the oldest release with that check, so
   it is the oldest a deployment can roll back to without thought. A binary
   from before RFC 0004 has no check: rolling back that far needs the
@@ -724,7 +725,7 @@ per request: a 10,000-note vault is ten requests within the 60/min limit of
 | 1 | Do players have accounts, and do they see the whole vault? | **Authentik accounts, a `viewer` binding limited to folders.** Chosen by the owner on 2026-11-15; no anonymous access. |
 | 2 | A new role, or folders on `viewer`? | **Folders on `viewer`.** Reuses the scope type of RFC 0004 and its eight enforcement sites. |
 | 3 | Does RFC 0004 phase 1 land first? | **Yes.** It brings `PathScope`, the list-aware read sites and the schema floor check. |
-| 4 | How is the rollback of T1 guarded? | **By the schema floor, raised by `0021` and checked at startup, not by a runbook alone.** The runbook step remains only for a binary older than RFC 0004 phase 1 (§13). |
+| 4 | How is the rollback of T1 guarded? | **By the schema floor, set by the migration and checked at startup, not by a runbook alone.** The runbook step remains only for a binary older than RFC 0004 phase 1 (§13). |
 | 5 | Is listing all entries acceptable for the tree? | **Yes until measured: a `prefix` query on `GET …/entries` is added only if the first load of 10,000 notes exceeds 2 s in phase 3.** |
 | 6 | French and English from day one? | **Yes, for the whole web application.** The players are French speakers; the CLI and the plugin stay English. |
 | 7 | Does a restricted viewer see who wrote a revision? | **Yes.** Same tenant; a token shows its name. |
@@ -741,7 +742,7 @@ None.
 
 | Phase | Content |
 | --- | --- |
-| 1 | The filter first: migration `0021`, `VaultAccess.scope`, `Reader::access` for devices, `GET /vaults` `paths`, the route gate test. No way to set `paths` yet, so every scope is the whole vault and nothing changes. Tests T1, T2, T5, T10 with rows written by the tests. |
+| 1 | The filter first: the migration, `VaultAccess.scope`, `Reader::access` for devices, `GET /vaults` `paths`, the route gate test. No way to set `paths` yet, so every scope is the whole vault and nothing changes. Tests T1, T2, T5, T10 with rows written by the tests. |
 | 2 | The field: `spec::Binding.paths`, `validate()`, `kura_bindings_replace`, `put_binding`, the warning. Tests T3, T4; §6.P observations 2, 4, 5, 7 with `curl` and `kura-cli`. Useful alone: restricted viewers through Obsidian and the CLI. |
 | 3 | The reader pages in `ui/` with the renderer, HTML mocks from the design system, French and English. Tests T6 to T9; §6.P observations 1, 3, 6. |
 
@@ -761,7 +762,7 @@ accepted by a server that does not filter would be T1.
 | R5 | `crates/kura-server/src/app/mod.rs:132-140` (`config_warnings` gauge from the snapshot), `crates/kura-server/src/reconcile/status.rs:32-41` (`warnings`: objects whose `Ready` is not `True`) | `d1bad91` | §4.3 |
 | R6 | `crates/kura-server/src/app/chunks.rs:345-367` (`get_chunk`, plaintext, `Cache-Control`), `:605-630` (`get_blob`, manifest), `:710`, `:794` (batches) | `d1bad91` | §5.3, §6.5, T8 |
 | R7 | `crates/kura-api/src/spec.rs:183-192` (`Binding`), `crates/kura-api/src/validate/mod.rs:209` (bindings loop) | `d1bad91` | §6.1 |
-| R8 | `crates/kura-server/migrations/0001_phase1_identity.sql:63-72` (`role_binding`), `0017_bindings_keep_ids.sql` (`kura_bindings_replace`) | `d1bad91` | §6.2 |
+| R8 | `crates/kura-server/migrations/0001_init.sql` (`role_binding`), `kura_bindings_replace` (same file) | `d1bad91` | §6.2 |
 | R9 | `crates/kura-server/src/authz.rs:357-409` (`check_binding`) | `d1bad91` | §6.3 |
 | R10 | `grep -rn "VaultRole::Viewer" crates/kura-server/src/app`, run 2026-11-15: `events.rs:102`, `:262`, `vaults.rs:215` outside `Reader` | `d1bad91` | §6.4 |
 | R11 | `crates/kura-server/src/app/events.rs:62-76` (`Notice`), `crates/kura-server/src/notify.rs:16-18` (payloads never a path) | `d1bad91` | §6.4, T5 |
@@ -794,10 +795,10 @@ detail and the divergence table D1 to D8; this section is the delta.
 
 | Phase | Commit | What |
 | --- | --- | --- |
-| 1 | `c2449ce` [R18] | Migration `0021` (`role_binding.paths` with its `CHECK`, `schema_floor` raised to 21, `kura_bindings_replace` carrying `paths` and keeping ids); `VaultAccess.paths` and its scope in `vault_accesses`, widest grant wins; `Reader::access` copying a person's scope into `ReadAccess`; `GET /vaults` with `paths` |
+| 1 | `c2449ce` [R18] | Migration (formerly `0021`, now in `0001_init.sql`) (`role_binding.paths` with its `CHECK`, `schema_floor` set (formerly raised to 21), `kura_bindings_replace` carrying `paths` and keeping ids); `VaultAccess.paths` and its scope in `vault_accesses`, widest grant wins; `Reader::access` copying a person's scope into `ReadAccess`; `GET /vaults` with `paths` |
 | 2 | `c2449ce` [R18] | `spec::Binding.paths`, `validate::check_paths`, `put_binding` and `list_bindings` with `paths` (a role raised clears them), the `RestrictedBindingWidened` warning counted by `kura_config_warnings`; `docs/operator.md` "Viewers restricted to folders" |
 | 3 | `c2449ce` [R18] | The reader pages in `ui/` (vaults, browse and read, search, history), the renderer, the sandboxed frame and its hashed bridge (`frame-csp.txt`), French and English; `tests/heavy/reader.sh` and `ui/e2e/reader.spec.ts` |
-| Gaps | `49e1b7d` [R19] | Revision authors (migration `0025`, `RevisionInfo.author`) shown in History; the route gate test; tenant `jdr` in the dev stack, so search and the §6.P setup are as written; the HTML mock `docs/RFC/assets/0005-reader.html` with the design system's tokens; the scope rules moved to `kura_core::scope`, shared by server and CLI (RFC 0004) |
+| Gaps | `49e1b7d` [R19] | Revision authors (migration, formerly `0025`, `RevisionInfo.author`) shown in History; the route gate test; tenant `jdr` in the dev stack, so search and the §6.P setup are as written; the HTML mock `docs/RFC/assets/0005-reader.html` with the design system's tokens; the scope rules moved to `kura_core::scope`, shared by server and CLI (RFC 0004) |
 
 ### 18.2 Divergences from the text
 
@@ -816,8 +817,8 @@ Recorded in the plan [R20], in one line each:
   vault route of `limits::LIMITS` as a restricted viewer.
 - **D4** (§6.P observation 3): first not observed (search off on the dev
   tenant), then closed by tenant `jdr` with search on; see §18.3.
-- **D5** (§4.5, History authors): first absent, then closed by migration
-  `0025` and `RevisionInfo.author`, a key's or a device's name, never a
+- **D5** (§4.5, History authors): first absent, then closed by the migration
+  (formerly `0025`) and `RevisionInfo.author`, a key's or a device's name, never a
   subject.
 - **D6** (§6.P setup): first run on a `campaign` vault of the dev tenant,
   then closed by tenant `jdr` (groups `jdr-mj`, `jdr-players`) as written.
