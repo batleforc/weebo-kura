@@ -18,7 +18,7 @@ kura-core = { path = "crates/kura-core" }
 kura-cli = { path = "crates/kura-cli" }
 # weebo-operator-kit, pinned by tag (RFC 0001 §4.1, decision 49; plan P1).
 weebo-kit-api = { git = "https://github.com/batleforc/weebo-operator-kit", tag = "v0.31.0" }
-weebo-kit-domain = { git = "https://github.com/batleforc/weebo-operator-kit", tag = "v0.31.0" }
+weebo-kit-domain = { git = "https://github.com/batleforc/weebo-operator-kit", tag = "v0.32.0" }
 # The kit's version, with the Kubernetes version it leaves to the application (plan P2).
 k8s-openapi = { version = "0.28", features = ["v1_36"] }
 # The CRDs of KuraTenant and KuraVault (kura-api's `crd` feature, kura-crdgen),
