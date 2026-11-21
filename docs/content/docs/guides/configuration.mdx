@@ -1,0 +1,233 @@
+---
+title: Server Configuration
+description: Every key of server.yaml, the environment variables and the kura-server subcommands, with their defaults and effects.
+---
+
+`kura-server` reads two kinds of configuration:
+
+- **`server.yaml`**: the deployment's own settings (identity provider, Vault,
+  ports, console, webhooks). It is read once, at start. A change needs a
+  restart; the Helm chart restarts the pods for you when it changes.
+- **The tenant and vault documents** (`KuraTenant`, `KuraVault`) in the
+  directory named by `KURA_CONFIG_DIR`. They are re-read live. See
+  [Tenants and vaults](/docs/guides/tenants-and-vaults).
+
+This page covers the first, the environment variables and the subcommands.
+
+## How the file is checked
+
+- Unknown keys are refused, at every level. A typo stops the server with the
+  path of the bad key, instead of being ignored.
+- The file is YAML; keys are camelCase.
+- On top of the types, the loader checks:
+  - `oidc.issuer` is an `https://` URL with a host;
+  - `oidc.discovery`, when set, is an `https://` URL;
+  - `oidc.audiences` has at least one entry and none is empty;
+  - `oidc.algorithms` has at least one entry;
+  - `notifications.webhook.allowedCidrs` holds no `0.0.0.0/0` or `::/0`;
+  - when `ui.enabled` is true: `ui.oidc.clientId` is also in
+    `oidc.audiences`, and `ui.oidc.discovery`, when set, is an `https://` URL.
+- At start, a few more checks stop the process: with `ui.enabled`, `ui.dir`
+  must hold an `index.html`; with `notifications.enabled`, a `caFile` must be
+  readable and hold at least one certificate.
+
+## A complete example
+
+```yaml title="server.yaml"
+oidc:
+  issuer: https://auth.example.org/
+  discovery: https://auth.example.org/application/o/kura-cli/
+  audiences: [kura-cli, kura-plugin, kura-web]
+  algorithms: [RS256]
+  platformAdmin: { claim: groups, value: kura-platform-admins }
+trustedProxies: [10.42.0.0/16]
+cors:
+  allowedOrigins: [app://obsidian.md, capacitor://localhost, http://localhost]
+listen: { api: 0.0.0.0:8080, metrics: 0.0.0.0:9090 }
+vault:
+  address: https://vault.vault:8200
+  kubernetesAuth: { mount: kubernetes, role: kura }
+  secrets: { database: mv/data/kura/database, bucket: mv/data/kura/bucket }
+  transit: { mount: transit }
+maintenance:
+  window: "01:00-05:00"
+ui:
+  enabled: true
+  dir: /usr/share/kura/ui
+  oidc:
+    clientId: kura-web
+    discovery: https://auth.example.org/application/o/kura-web/
+  plugin:
+    clientId: kura-plugin
+    discovery: https://auth.example.org/application/o/kura-plugin/
+notifications:
+  enabled: true
+  webhook:
+    allowedCidrs: []
+    caFile: /etc/kura/webhook-ca/ca.pem
+```
+
+## `oidc` (required)
+
+How the server checks access tokens. See [Authentik](/docs/guides/authentik)
+for how each key maps to Authentik.
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `oidc.issuer` | string, `https://` URL | required | The expected `iss` of every token. The discovery document must name the same issuer (a trailing `/` is ignored). |
+| `oidc.discovery` | string, `https://` URL | the issuer | Where the discovery document is, when it is not under the issuer. With Authentik's global issuer mode, set it to one application's URL. The server reads the JWKS and the userinfo endpoint from it. |
+| `oidc.audiences` | list of strings | required, not empty | The accepted `aud` values: one OAuth client id per client type (CLI, plugin, console). |
+| `oidc.algorithms` | list | `[RS256]` | The signature algorithms a token may use: `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `ES256`, `ES384`, `EdDSA`. `none` does not exist and cannot be configured. |
+| `oidc.platformAdmin.claim` | string | required | The token claim that marks a platform admin. |
+| `oidc.platformAdmin.value` | string | required | The value of that claim (a string, or one element of a list). A platform admin may read `GET /v1/admin/status`. |
+
+The server reaches the identity provider with a 5 second timeout and follows
+no redirect. The discovery document's JWKS and userinfo endpoints must be
+`https`.
+
+## `trustedProxies`
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `trustedProxies` | list of CIDRs | `[]` | The proxies allowed to name the client address in `X-Forwarded-For`. Empty: forwarding headers are ignored and the peer address is used. |
+
+Set it to the pod CIDR of your ingress controller. The client address matters
+for audit logs and [scoped tokens](/docs/guides/scoped-tokens):
+behind a proxy, a scoped token is checked against the address the proxy
+reports.
+
+## `cors`
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `cors.allowedOrigins` | list of strings | `[app://obsidian.md, capacitor://localhost, http://localhost]` | Origins a browser may call the API from. The default is the three origins of the Obsidian plugin (desktop, mobile). |
+
+Setting `cors` replaces the whole list, so keep the three plugin origins.
+CORS is not the access control here: every call carries a bearer token, never
+a cookie.
+
+## `listen`
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `listen.api` | `host:port` | `0.0.0.0:8080` | The API, the probes and the web console. |
+| `listen.metrics` | `host:port` | `0.0.0.0:9090` | Prometheus metrics. Never expose it through the ingress. |
+
+When you set `listen`, give both keys. The Helm chart always sets `listen`
+itself (see [What the chart renders](#what-the-chart-renders)).
+
+## `vault`
+
+Without `vault`, the server needs `KURA_DATABASE_URL` and has no object
+storage: uploads cannot work. In a cluster, always set it.
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `vault.address` | string | required | The Vault (or OpenBao) URL. |
+| `vault.kubernetesAuth.mount` | string | required | The mount of the Kubernetes auth method. |
+| `vault.kubernetesAuth.role` | string | required | The role the server logs in as, with its service account token. |
+| `vault.secrets.database` | string | required | KV v2 path of the database secret, in the form `<mount>/data/<path>`. It holds `url`, the `kura_app` connection URL. |
+| `vault.secrets.bucket` | string | required | KV v2 path of the bucket secret: `endpoint`, `bucket`, `region` (default `us-east-1`), `accessKeyId`, `secretAccessKey`. |
+| `vault.transit.mount` | string | `transit` | The Transit mount holding one key per tenant, named `kura-<tenant>`. |
+
+The server renews its Vault login and re-reads the database secret every 5
+minutes, so a password rotation reaches new connections without a restart.
+The bucket secret is read at start. The full Vault setup is in
+[Install](/docs/guides/install).
+
+## `maintenance`
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `maintenance.window` | string `HH:MM-HH:MM`, UTC | `01:00-05:00` | When retention, garbage collection and the `Delete` purge run. Equal ends (`00:00-00:00`) mean all day. A window may cross midnight (`22:30-02:00`). |
+
+Inside the window, each replica tries one pass an hour, and only one pass runs
+at a time. `kura-server maintain` runs a pass at once, outside the window.
+
+## `ui`
+
+The web console, served under `/app`. Absent, or `enabled: false`: `/app`
+answers `404`. See [Web console](/docs/guides/web-console).
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `ui.enabled` | bool | `false` | Serve the console. |
+| `ui.dir` | path | `/usr/share/kura/ui` | Where the built console is. The default is where the image puts it. |
+| `ui.oidc.clientId` | string | required when `ui` is present | The console's public OAuth client. Must also be in `oidc.audiences`. |
+| `ui.oidc.discovery` | `https://` URL | `oidc.discovery`, else the issuer | The console's own discovery document. With Authentik, use the console application's: Authentik answers a browser's cross-origin request with the origins of that application's redirect URIs only. |
+| `ui.plugin.clientId` | string | `kura-plugin` | The plugin client the console's "Open in Obsidian" link hands over. Must also be in `oidc.audiences`. |
+| `ui.plugin.discovery` | `https://` URL | `oidc.discovery`, else the issuer | Where the plugin discovers the identity provider (with Authentik, the plugin's own application). |
+
+`ui.oidc` is required as soon as `ui` appears, even with `enabled: false`.
+
+## `notifications`
+
+Webhooks. Absent, or `enabled: false`: no delivery worker runs, and the
+notification rule routes answer `409`. See
+[Notifications](/docs/guides/notifications).
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `notifications.enabled` | bool | `false` | Run the delivery worker and accept rules. |
+| `notifications.webhook.allowedCidrs` | list of CIDRs | `[]` | Private ranges a webhook may reach. Empty: public addresses only. `0.0.0.0/0` and `::/0` are refused. |
+| `notifications.webhook.caFile` | path | none | An extra trust root (PEM bundle) used for webhooks only, for a receiver behind a private CA. |
+
+With notifications off, the server logs a warning at start if rules are still
+stored.
+
+## Environment variables
+
+| Variable | Read by | Value |
+| --- | --- | --- |
+| `KURA_CONFIG_DIR` | serve (required) | The directory of tenant and vault documents. |
+| `KURA_DATABASE_URL` | migrate, reset-epochs, check-chunks (required); serve, maintain, backup (optional) | A PostgreSQL URL. `migrate` and `reset-epochs` always use it, as the database owner. `check-chunks` needs the owner's URL here. For the other commands it overrides the URL read from Vault, which is meant for local runs. |
+| `KURA_VAULT_TOKEN` | every command that reads `vault` | A Vault token used instead of Kubernetes auth. For local runs. |
+| `KURA_BACKUP_ENDPOINT`, `KURA_BACKUP_BUCKET`, `KURA_BACKUP_ACCESS_KEY_ID`, `KURA_BACKUP_SECRET_ACCESS_KEY` | backup (required) | The second bucket the backup copies to. |
+| `KURA_BACKUP_REGION` | backup | Its region; `us-east-1` when unset. |
+| `RUST_LOG` | serve | The log filter; `info` by default. Logs are JSON. |
+
+## Subcommands
+
+```text
+kura-server [--config <server.yaml>]
+kura-server migrate
+kura-server dump-spec
+kura-server maintain [--config <server.yaml>]
+kura-server reset-epochs
+kura-server backup [--config <server.yaml>]
+kura-server check-chunks --sample <n> [--config <server.yaml>]
+```
+
+The config path defaults to `/etc/kura/server.yaml`. There is no `serve`
+word: running `kura-server` with no subcommand, or with only `--config`,
+starts the server. Anything else prints the usage and exits with an error.
+
+| Command | What it does |
+| --- | --- |
+| *(none)* | Starts the server: binds the API and metrics ports, connects to Vault, PostgreSQL and object storage, refuses a database schema older than itself, then serves until `SIGTERM` or Ctrl-C. |
+| `migrate` | Applies the database migrations with `KURA_DATABASE_URL` (the database owner), prints `migrations applied` and exits. The chart runs it in a Job. |
+| `dump-spec` | Prints the OpenAPI document as JSON and exits. Needs no configuration. |
+| `maintain` | Runs one maintenance pass now (retention, garbage collection, the `Delete` purge) and exits. If another pass or a backup holds the lock, it prints so and exits. |
+| `reset-epochs` | After a restore: gives every vault a new epoch, so every device resyncs and pushes back what the restore lost. Run as the owner. |
+| `backup` | Copies every new object to the second bucket (`KURA_BACKUP_*`) under the backup lock, and prints the point in time to recover PostgreSQL to. |
+| `check-chunks --sample <n>` | Decrypts `n` random chunks and checks their address; fails if any is bad. Needs the owner's `KURA_DATABASE_URL`. |
+
+Backups and restores are described in
+[Backup and restore](/docs/guides/backup-and-restore).
+
+## What the chart renders
+
+In the Helm chart, the `server` value is rendered as `server.yaml` as it is,
+with two changes:
+
+- `listen` is always set to `{ api: 0.0.0.0:8080, metrics: 0.0.0.0:9090 }`,
+  whatever you put there.
+- When `webhookCa.secretName` is set, the Secret is mounted under
+  `/etc/kura/webhook-ca/` and `notifications.webhook.caFile` is set to
+  `/etc/kura/webhook-ca/<webhookCa.key>`.
+
+The chart also sets `KURA_CONFIG_DIR=/etc/kura/config`, where the `documents`
+value is mounted, and starts the server with
+`--config /etc/kura/server/server.yaml`. A change to `server` or `webhookCa`
+restarts the pods; a change to `documents` does not. See
+[Helm values](/docs/reference/helm-values).

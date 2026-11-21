@@ -1,0 +1,67 @@
+---
+title: Problem Types
+description: Every error type the kura-server API returns, with its HTTP status and when it happens.
+---
+
+Every error of the API is a JSON document of type `application/problem+json`
+(RFC 9457). Its `type` is a relative URI, `/v1/problems/<name>`, that never
+changes between releases: match on it, not on the text. The `title` is the
+name with spaces instead of underscores. A `detail` field is added only when
+it helps you fix the request; the internal cause of a failure goes to the
+server log, never to the response. The list below is the `ProblemType` enum
+of
+[`crates/kura-server/src/problem.rs`](https://github.com/batleforc/weebo-kura/blob/main/crates/kura-server/src/problem.rs).
+
+## The body
+
+```json title="A 422 answer"
+{
+  "type": "/v1/problems/quota_exceeded",
+  "title": "quota exceeded",
+  "status": 422,
+  "detail": "storage quota of 10737418240 bytes reached"
+}
+```
+
+`429` and `503` answers carry a `Retry-After` header (seconds) and no
+`detail`. A `503` always asks for 5 seconds.
+
+## Every type
+
+| Type | Status | Title | When it happens |
+| --- | --- | --- | --- |
+| `/v1/problems/invalid_request` | 400 | invalid request | A body, query or path parameter that does not parse or breaks a rule (for example an `idempotencyKey` outside 1 to 128 visible ASCII characters, or a token's `cidrs` list not 1 to 32 ranges). |
+| `/v1/problems/invalid_token` | 401 | invalid token | No `Authorization: Bearer` header, an access token that fails verification, a token with neither `sid` nor `auth_time`, or a scoped token that is malformed, unknown, expired, revoked, or whose grant (the binding or claim that allowed it) is gone. |
+| `/v1/problems/device_revoked` | 401 | device revoked | The `X-Kura-Device` names a revoked device, or a device is used, or registered, from a revoked session. |
+| `/v1/problems/device_unknown` | 401 | device unknown | `X-Kura-Device` is missing or not a UUID, or names a device that does not exist, was purged, belongs to another user, or is a web device that signed out. |
+| `/v1/problems/insufficient_role` | 403 | insufficient role | Your role on the vault or tenant does not allow the call. Also: a scoped token on a route that does not accept tokens ("scoped tokens are read only"), and any content write from the web console's device ("the console does not write content"). |
+| `/v1/problems/address_not_allowed` | 403 | address not allowed | A scoped token used from a client address outside its CIDR list. |
+| `/v1/problems/not_found` | 404 | not found | The object does not exist, or you may not know it exists (another tenant's vault, a vault outside a token's own). |
+| `/v1/problems/search_disabled` | 409 | search disabled | A search on a vault whose tenant has not turned search on. |
+| `/v1/problems/token_write_disabled` | 409 | token write disabled | Issuing a token with a `write` rule in a tenant without `scopedTokens.write`. |
+| `/v1/problems/notifications_disabled` | 409 | notifications disabled | A notification rule route while `notifications.enabled` is false in `server.yaml`. |
+| `/v1/problems/cursor_expired` | 410 | cursor expired | The device asks for changes from before the vault's horizon (deleted entries were purged since), or pushes onto an entry purged while it was away. The device runs a full resync. |
+| `/v1/problems/history_rewound` | 410 | history rewound | The vault's epoch differs from the one the device knows, or the device's cursor is past the server's head: the server lost history the device has seen (after a restore or a database failover). The device pushes back what the server lacks, deleting nothing. |
+| `/v1/problems/payload_too_large` | 413 | payload too large | A body over the route's limit: 64 KiB for most routes, up to 4 MiB for chunks (see [Body limits](/docs/reference/api#body-limits)). |
+| `/v1/problems/invalid_path` | 422 | invalid path | A commit names a forbidden path, or a folder operation where only files are allowed (configuration categories). |
+| `/v1/problems/hash_mismatch` | 422 | hash mismatch | An uploaded chunk whose BLAKE3 hash is not its address; a manifest whose hash, chunks or size do not match; a commit naming a file version not uploaded or of another size; or a scoped token naming content it did not upload itself ("content not uploaded by this token"). |
+| `/v1/problems/idempotency_conflict` | 422 | idempotency conflict | A commit reuses an idempotency key of the same device with a different body. |
+| `/v1/problems/quota_exceeded` | 422 | quota exceeded | An upload would pass the tenant's storage quota, or a user registers a 21st live device ("at most 20 live devices; revoke one first"). |
+| `/v1/problems/client_too_old` | 426 | client too old | The `X-Kura-Client` header names `kura-cli` or `kura-plugin` below 0.1.0, or with a version that does not parse. A client that sends no header is not checked. |
+| `/v1/problems/rate_limited` | 429 | rate limited | Over a route's rate limit, or a `chunks/batch` call while the replica already builds 8. See [Rate limits](/docs/reference/rate-limits). |
+| `/v1/problems/unavailable` | 503 | unavailable | A dependency failed: PostgreSQL, object storage, Vault or Authentik. The server log line at `warn` names it. |
+
+## Denials are audited
+
+Six types refuse a caller: `invalid_token`, `device_revoked`,
+`device_unknown`, `insufficient_role`, `address_not_allowed` and
+`not_found`. Each one is logged once under the log target `audit` (problem,
+route template, client address, claimed device) and counted in
+`kura_authz_denied_total`, labelled with the type's name. The `410` types
+are counted in `kura_resync_total` and `503` in `kura_unavailable_total`
+(see [Metrics](/docs/reference/metrics)).
+
+## In the CLI
+
+The `kura` CLI turns a problem type into an exit code: see
+[CLI reference](/docs/reference/cli#exit-codes).

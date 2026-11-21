@@ -1,0 +1,302 @@
+---
+title: Install
+description: Prepare the cluster, Vault and PostgreSQL, install the Helm chart, check that Kura runs, and declare the first tenant and vault.
+---
+
+This guide installs `kura-server` on Kubernetes with the Helm chart. It takes
+you from an empty namespace to a first vault people can sync with the
+Obsidian plugin.
+
+## What the cluster needs first
+
+| Need | Why |
+| --- | --- |
+| The [CloudNativePG](https://cloudnative-pg.io/) operator | The chart creates a two-instance PostgreSQL cluster with it (`cnpg.enabled`, on by default). You can bring your own PostgreSQL instead. |
+| Vault or OpenBao, with the Kubernetes auth method, a KV v2 mount and a Transit mount | The server logs in with its service account, reads the database and bucket credentials from KV, and wraps each vault's data key with a per-tenant Transit key. OpenBao has the same API. |
+| An S3-compatible bucket | Encrypted chunks and files are stored there. A **second** bucket, elsewhere, holds the backup copy. |
+| Authentik | Every person signs in with it. See [Authentik](/docs/guides/authentik). |
+| An ingress controller | The chart's Ingress uses the class `traefik` by default (`ingress.className`). |
+| A DNS name and its TLS Secret | `ingress.host` and `ingress.tlsSecret`. |
+| The Prometheus Operator CRDs | For the ServiceMonitor and the PrometheusRule. Turn off `monitoring.serviceMonitor.enabled` and `monitoring.prometheusRule.enabled` if you do not have them. |
+
+The image is `ghcr.io/batleforc/kura-server` (linux/amd64). It runs as UID
+65532 with a read-only root filesystem.
+
+## Install
+
+<Steps>
+<Step>
+
+### Prepare Vault
+
+Kura expects a KV v2 mount (named `mv` in the examples and the policy) and a
+Transit mount (named `transit`, the default of `vault.transit.mount`).
+
+```bash
+vault secrets enable -path=mv kv-v2
+vault secrets enable transit
+```
+
+**The bucket secret.** Store the bucket's credentials. `region` is optional
+(`us-east-1` when absent).
+
+```bash
+vault kv put -mount=mv kura/bucket \
+  endpoint=https://s3.example.org bucket=kura region=us-east-1 \
+  accessKeyId=<key id> secretAccessKey=<secret>
+```
+
+**The database secret.** It holds one key, `url`: the connection URL of the
+`kura_app` role (created in the next step). Choose its password now; you set
+the same password on the role after the install.
+
+```bash
+vault kv put -mount=mv kura/database \
+  url='postgres://kura_app:<password>@<postgres host>:5432/kura'
+```
+
+With the chart's CloudNativePG cluster (`cnpg.name: kura-db`), the host is the
+cluster's read-write Service, `kura-db-rw.<namespace>.svc`.
+
+**One Transit key per tenant**, named `kura-<tenant>`. Create it before the
+tenant's first upload. The server never creates, configures or deletes a key.
+
+```bash
+vault write -f transit/keys/kura-maxime
+```
+
+**The policy.** Load
+[`deploy/vault/kura-server.hcl`](https://github.com/batleforc/weebo-kura/blob/main/deploy/vault/kura-server.hcl).
+It allows only `read` on the two KV secrets and `datakey`, `decrypt` and
+`rewrap` on the keys `kura-*`: no delete, no key configuration. Edit the mount
+names in it if yours differ from `mv` and `transit`.
+
+```bash
+vault policy write kura-server deploy/vault/kura-server.hcl
+```
+
+**The Kubernetes auth role.** With the Kubernetes auth method configured for
+your cluster, create the role `kura` bound to the service account `kura` in
+Kura's namespace. The server renews its login every 5 minutes, so give the
+role a token TTL of **at least 10 minutes**.
+
+```bash
+vault write auth/kubernetes/role/kura \
+  bound_service_account_names=kura \
+  bound_service_account_namespaces=kura \
+  policies=kura-server \
+  token_ttl=1h
+```
+
+</Step>
+<Step>
+
+### Understand the database roles
+
+Kura uses two PostgreSQL roles:
+
+- **The owner** (`kura_owner` in the chart's cluster) owns every table and
+  runs the migrations.
+- **`kura_app`** is the role the server connects with: never superuser,
+  never `BYPASSRLS`, so row-level security applies to every query. It has a
+  5 second `statement_timeout` and `lock_timeout`, and a 10 second
+  `idle_in_transaction_session_timeout`.
+
+[`bootstrap-roles.sql`](https://github.com/batleforc/weebo-kura/blob/main/deploy/helm/kura/files/bootstrap-roles.sql)
+creates `kura_app`. With `cnpg.enabled`, the chart runs it for you at the
+cluster's creation (`bootstrap.initdb.postInitApplicationSQLRefs`), with the
+database `kura` and the owner `kura_owner`. With your own PostgreSQL, run it
+once as a superuser before the first migration, and set
+`migrate.databaseUrlSecret` to a Secret holding the owner's URL.
+
+The script sets no password: you set it after the install (last part of the
+"Install the chart" step).
+
+</Step>
+<Step>
+
+### Plan the backups
+
+Kura needs three backups: PostgreSQL, the bucket, and Vault. The chart
+**refuses to render** without the first two:
+
+- `cnpg.backup.destinationPath` (when the chart creates the cluster): the
+  CloudNativePG barman backups, on a location other than the Kura bucket,
+  with `cnpg.backup.credentialsSecret` holding `ACCESS_KEY_ID` and
+  `ACCESS_SECRET_KEY`;
+- `backup.enabled: true`: a CronJob running `kura-server backup`, with
+  `backup.targetSecret` holding `KURA_BACKUP_ENDPOINT`, `KURA_BACKUP_BUCKET`,
+  `KURA_BACKUP_REGION`, `KURA_BACKUP_ACCESS_KEY_ID` and
+  `KURA_BACKUP_SECRET_ACCESS_KEY`.
+
+For a test install, or if you back up by other means, set
+`backupsWaived: true`. Vault snapshots are yours to schedule. See
+[Backup and restore](/docs/guides/backup-and-restore).
+
+</Step>
+<Step>
+
+### Write your values
+
+A minimal `values.yaml`. Replace the hosts, the CIDR and the group names with
+yours.
+
+```yaml title="values.yaml"
+server:
+  oidc:
+    issuer: https://auth.example.org/
+    discovery: https://auth.example.org/application/o/kura-cli/
+    audiences: [kura-cli, kura-plugin]
+    platformAdmin: { claim: groups, value: kura-platform-admins }
+  # The ingress controller's pod CIDR, so client addresses survive the proxy.
+  trustedProxies: [10.42.0.0/16]
+  vault:
+    address: https://vault.vault:8200
+    kubernetesAuth: { mount: kubernetes, role: kura }
+    secrets: { database: mv/data/kura/database, bucket: mv/data/kura/bucket }
+    transit: { mount: transit }
+
+# At least one tenant: the server is not ready without one.
+documents:
+  tenants.yaml: |
+    apiVersion: kura.weebo.io/v1alpha1
+    kind: KuraTenant
+    metadata: { name: maxime }
+    spec:
+      claimMappings:
+        claim: groups
+        roles: { owner: [kura-maxime-owners], admin: [], member: [kura-maxime] }
+      vaultNamespaces: [maxime]
+
+ingress:
+  host: kura.example.org
+  tlsSecret: kura-tls
+
+networkPolicy:
+  ingressNamespace: traefik       # where the ingress controller runs
+  monitoringNamespace: monitoring # where Prometheus runs
+
+cnpg:
+  backup:
+    destinationPath: s3://kura-db-backups/kura
+    endpointURL: https://s3.example.org
+    credentialsSecret: kura-db-backup
+
+backup:
+  enabled: true
+  targetSecret: kura-backup-target
+```
+
+Every key of `server` is described in
+[Server configuration](/docs/guides/configuration); every chart value in
+[Helm values](/docs/reference/helm-values).
+
+</Step>
+<Step>
+
+### Install the chart
+
+The chart is published as an OCI artifact. Pick the release version
+(`<x.y.z>`) and install:
+
+```bash
+helm install kura oci://ghcr.io/batleforc/weebo-kura/charts/kura \
+  --version <x.y.z> -n kura --create-namespace -f values.yaml
+```
+
+The chart creates the service account `kura`, the CloudNativePG cluster, two
+server replicas, the Ingress, NetworkPolicies, a disruption budget, and the
+monitoring objects.
+
+**The migration Job.** After the install, and before every upgrade, a Helm
+hook Job `kura-migrate-<revision>` runs `kura-server migrate` with the
+owner's URL (the CloudNativePG Secret `kura-db-app`, or
+`migrate.databaseUrlSecret`). It runs after the install because the database
+and its owner Secret only exist then. Until it has run, the server refuses the
+empty schema and its pods restart. The Job is deleted once it succeeds.
+
+<Callout type="warn" title="Do not wait for readiness">
+Do not pass `--wait` to the first `helm install`: the pods only become ready
+after the migration, and the migration hook runs after the install.
+</Callout>
+
+**Set the `kura_app` password.** Once the CloudNativePG cluster runs, give
+`kura_app` the password you stored in Vault, as a superuser or with a
+CloudNativePG managed role:
+
+```sql
+ALTER ROLE kura_app PASSWORD '<password>';
+```
+
+The server re-reads the database secret every 5 minutes, so you can rotate
+this password later without a restart.
+
+</Step>
+<Step>
+
+### Check that it runs
+
+```bash
+kubectl -n kura get pods,jobs
+kubectl -n kura logs deploy/kura
+```
+
+- **Liveness**: `GET /healthz` answers as soon as the process runs.
+- **Readiness**: `GET /readyz` answers `200` once a configuration of tenant
+  and vault documents is loaded, `503` before. It never checks a shared
+  dependency.
+- Logs are JSON. A line `kura-server started` gives the API and metrics
+  addresses. A configuration error stops the process with the file and the
+  key at fault, such as `oidc.issuer: must be an https:// URL`.
+- A refused document is logged at `warn` as `file#index field.path: message`.
+
+The API answers on `https://<ingress.host>/`. Metrics (port 9090) are never
+routed by the Ingress.
+
+</Step>
+<Step>
+
+### Add the first vault
+
+Create the tenant's Transit key if you have not (`kura-<tenant>`), then add a
+`KuraVault` to `documents` in the tenant's namespace and run `helm upgrade`.
+The documents are re-read live: the pods do not restart.
+
+```yaml title="values.yaml"
+documents:
+  tenants.yaml: |
+    ...
+  vaults.yaml: |
+    apiVersion: kura.weebo.io/v1alpha1
+    kind: KuraVault
+    metadata: { name: knowledge, namespace: maxime }
+    spec:
+      tenantRef: { name: maxime }
+      bindings:
+        - { role: editor, claimValue: kura-maxime }
+```
+
+A tenant `admin` can also create vaults through the API, the CLI or the web
+console. See [Tenants and vaults](/docs/guides/tenants-and-vaults), and the
+[CRD IDE](/docs/ide) to compose the documents.
+
+</Step>
+<Step>
+
+### Point users to the plugin
+
+People in the mapped groups can now install the plugin and sign in. Send them
+to [Obsidian plugin](/docs/guides/obsidian-plugin), with the server URL
+(`https://<ingress.host>`) and the sign-in URL of the plugin's Authentik
+application (for example
+`https://auth.example.org/application/o/kura-plugin/`). For scripts and
+terminals, see the [CLI guide](/docs/guides/cli).
+
+</Step>
+</Steps>
+
+## Next
+
+- Turn on the web console: [Web console](/docs/guides/web-console).
+- Set up alerts: [Monitoring](/docs/guides/monitoring).
+- Upgrade later: [Upgrades](/docs/guides/upgrades).

@@ -424,7 +424,7 @@
     "devices": {
       "title": "J'ai perdu un appareil, ou je suis sur un ordinateur partagé",
       "p1": "Chaque navigateur et chaque Obsidian qui se connecte est un appareil. Mes appareils liste les vôtres, avec leur dernière activité.",
-      "p2": "Un portable ou un téléphone perdu ? Révoquez-le là : il s'arrête à sa prochaine requête. Sur un ordinateur partagé, laissez « Rester connecté » décoché et déconnectez-vous en partant : la déconnexion révoque ce navigateur."
+      "p2": "Un portable ou un téléphone perdu ? Révoquez-le là : il s'arrête à sa prochaine requête. Sur un ordinateur partagé, laissez « Rester connecté » décoché et déconnectez-vous en partant : la déconnexion coupe l'accès de ce navigateur."
     },
     "trouble": {
       "title": "Le plugin n'apparaît pas, ou le lien ne fait rien",

@@ -6,8 +6,15 @@ license.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+[features]
+# CustomResource and JsonSchema on the specs: the CRDs kura-crdgen writes to
+# deploy/crd/ (the server reads the documents without them).
+crd = ["dep:kube", "dep:schemars", "k8s-openapi/schemars"]
+
 [dependencies]
 k8s-openapi = { workspace = true }
+kube = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_norway = { workspace = true }

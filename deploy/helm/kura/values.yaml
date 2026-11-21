@@ -75,8 +75,8 @@ resources:
   requests: { cpu: 100m, memory: 128Mi }
   limits: { memory: 512Mi }
 
-# The migration Job runs before every install and upgrade, as the database
-# owner (§13). Without cnpg.enabled, name the Secret holding the owner's URL.
+# The migration Job runs after the first install (the database exists only
+# then) and before every upgrade, as the database owner (§13). Without cnpg.enabled, name the Secret holding the owner's URL.
 migrate:
   databaseUrlSecret: { name: "", key: uri }
 

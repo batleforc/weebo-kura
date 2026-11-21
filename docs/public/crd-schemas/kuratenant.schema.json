@@ -1,0 +1,165 @@
+{
+  "apiVersion": "kura.weebo.io/v1alpha1",
+  "kind": "KuraTenant",
+  "scope": "Cluster",
+  "served": [
+    "v1alpha1"
+  ],
+  "description": "A tenant: who belongs to it, through which OIDC claim, and the limits its\nvaults share. Cluster-scoped; its `metadata.name` is the tenant's slug,\nused in API paths.",
+  "properties": {
+    "claimMappings": {
+      "description": "The OIDC claim whose values grant the tenant roles. Absent or empty:\nthe tenant has no members.",
+      "nullable": true,
+      "properties": {
+        "claim": {
+          "description": "The token claim to read, such as `groups`: a string or a list of strings.",
+          "type": "string"
+        },
+        "roles": {
+          "default": {
+            "admin": [],
+            "member": [],
+            "owner": []
+          },
+          "description": "The claim values granting each tenant role.",
+          "properties": {
+            "admin": {
+              "default": [],
+              "description": "Values granting `admin`: create and delete vaults, manage bindings,\nscoped tokens and notification rules.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "member": {
+              "default": [],
+              "description": "Values granting `member`: the vaults a binding opens to them.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "owner": {
+              "default": [],
+              "description": "Values granting `owner`: every right on the tenant and its vaults.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "claim"
+      ],
+      "type": "object"
+    },
+    "deletionPolicy": {
+      "default": "Orphan",
+      "description": "What removing this document does: `Orphan` (default) disables the\ntenant and keeps its data; `Delete` also deletes it after 30 days,\ncancelled if the document comes back.",
+      "enum": [
+        "Orphan",
+        "Delete"
+      ],
+      "type": "string"
+    },
+    "quota": {
+      "default": {},
+      "description": "Storage limits shared by the tenant's vaults. Absent fields: no limit.",
+      "properties": {
+        "maxFileSize": {
+          "anyOf": [
+            {
+              "minimum": 0
+            },
+            {
+              "pattern": "^[0-9]+(Ki|Mi|Gi|Ti|Ei)?$"
+            }
+          ],
+          "description": "The largest file a device may sync; larger ones stay local and are\nreported.",
+          "nullable": true
+        },
+        "storage": {
+          "anyOf": [
+            {
+              "minimum": 0
+            },
+            {
+              "pattern": "^[0-9]+(Ki|Mi|Gi|Ti|Ei)?$"
+            }
+          ],
+          "description": "Encrypted bytes the tenant may store, all vaults together. An upload\npast it is refused.",
+          "nullable": true
+        }
+      },
+      "type": "object"
+    },
+    "retention": {
+      "default": {},
+      "description": "How long history is kept, applied by the nightly maintenance pass.\nAbsent: every revision is kept, and deleted entries are purged after 90d.",
+      "properties": {
+        "deletedEntryTtl": {
+          "description": "A deleted entry stays restorable this long, then is purged. Absent: 90d.",
+          "nullable": true,
+          "pattern": "^[0-9]+[hd]$",
+          "type": "string"
+        },
+        "maxRevisionAge": {
+          "description": "Revisions older than this are pruned, an entry's head never.",
+          "nullable": true,
+          "pattern": "^[0-9]+[hd]$",
+          "type": "string"
+        },
+        "maxRevisionsPerEntry": {
+          "description": "At most this many revisions are kept per entry, the newest.",
+          "format": "uint32",
+          "minimum": 0,
+          "nullable": true,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "scopedTokens": {
+      "default": {
+        "write": false
+      },
+      "description": "What the tenant's scoped tokens may do beyond reading.",
+      "properties": {
+        "write": {
+          "default": false,
+          "description": "Absent: false. Tokens of the tenant may carry `write` rules\n(RFC 0004 §4.1); set back to false, their writes stop at once.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "search": {
+      "default": {
+        "enabled": false
+      },
+      "description": "Full-text search over the tenant's notes.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Absent: false. The index is plaintext, so indexing is opt-in.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "vaultNamespaces": {
+      "default": [],
+      "description": "The namespaces allowed to declare a `KuraVault` for this tenant.\nAbsent: no namespace may.",
+      "items": {
+        "maxLength": 63,
+        "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "type": "object"
+}

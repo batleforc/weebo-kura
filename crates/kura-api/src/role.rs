@@ -14,6 +14,7 @@ pub enum TenantRole {
 /// A role granted on one vault, by a binding. Ordered: a higher role
 /// includes every right of a lower one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum VaultRole {
     Viewer,

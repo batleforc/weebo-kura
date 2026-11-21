@@ -1,0 +1,96 @@
+---
+title: Upgrades
+description: Verify a release, upgrade the chart with its database migration, and know when a rollback is safe.
+---
+
+This page walks you through upgrading a Kura deployment: checking that the release is genuine, running the upgrade, and what happens to the database schema and to clients.
+
+## Before you upgrade
+
+Read the [CHANGELOG](https://github.com/batleforc/weebo-kura/blob/main/CHANGELOG.md) for every version between yours and the target. Look for notes that say a release must roll out everywhere before a setting is turned on, or that a migration cannot be rolled back.
+
+## Verify the release
+
+Every release is signed with cosign keyless, from the project's GitHub Actions workflow. Check the image, the chart and the release assets before you deploy them:
+
+```bash
+REPO=batleforc/weebo-kura
+VERSION=<x.y.z>
+
+# The image
+cosign verify \
+  --certificate-identity-regexp "^https://github.com/${REPO}/" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/batleforc/kura-server:${VERSION}
+
+# The chart
+cosign verify \
+  --certificate-identity-regexp "^https://github.com/${REPO}/" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/batleforc/weebo-kura/charts/kura:${VERSION}
+
+# The release assets (CLI archives, plugin files, SBOMs)
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp "^https://github.com/${REPO}/" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+sha256sum -c checksums.txt
+```
+
+For production, pin the image by digest (`image.digest` in the values) rather than by tag.
+
+## Upgrade with Helm
+
+```bash
+helm upgrade kura oci://ghcr.io/batleforc/weebo-kura/charts/kura \
+  --version <x.y.z> -n kura -f my-values.yaml
+```
+
+Before the new pods roll out, a Helm hook Job (`kura-migrate-<revision>`, hook `pre-upgrade`) runs `kura-server migrate` as the database owner. With the chart's CloudNativePG cluster, the owner's URL comes from the `<cnpg.name>-app` Secret; without it, set `migrate.databaseUrlSecret`. If the Job fails, Helm stops the upgrade and the running pods keep serving. The same Job also runs after the first install (`post-install`).
+
+The server pods themselves never migrate: they run as `kura_app`, which cannot change the schema.
+
+## How migrations stay safe
+
+Migrations follow **expand and contract**: a release only adds to the schema (new tables, new columns), and removes something only once no supported binary reads it. So, for a while, two binaries can serve the same database:
+
+- **A binary refuses a schema older than itself.** At start, the server checks that every migration it knows has been applied. If one is missing, it stops with `the database schema lacks migration … run kura-server migrate first`. This is why the migration Job runs before the rollout.
+- **A binary accepts a newer schema.** Migrations it does not know are ignored, so the old pods keep working while the new ones start, and a rollback to the previous release usually works.
+- **Unless the schema floor forbids it.** A migration that is not safe to roll back raises a floor, stored in the `schema_floor` table: the oldest binary, by its newest migration, that may serve this schema. A binary below the floor refuses to start with `the database schema needs a binary at migration … or newer … roll forward`.
+
+## Rolling back
+
+```bash
+helm rollback kura <revision> -n kura
+```
+
+A rollback reverts the pods, not the database: migrations are never undone.
+
+- If the previous binary starts, the rollback is done.
+- If it stops with "roll forward", the new schema has raised the floor. Fix the problem in a newer release instead. RFC 0005 is an example: an older binary would read a folder-restricted viewer binding as the whole vault, so the binary refuses to start.
+
+`kura-server` also refuses a configuration file with an unknown field. A setting added by a new release (such as `scopedTokens.write` from RFC 0004) stops an older binary from loading the documents: roll the release out everywhere before you use a new setting, and remove it before you roll back.
+
+## Tenant and vault documents keep working
+
+The `KuraTenant` and `KuraVault` documents (`kura.weebo.io/v1alpha1`) are read the same way after an upgrade; you do not need to rewrite them. The server re-reads them live, so you can change them at any time without a restart. The generated references show the current fields: [KuraTenant](/docs/crds/kuratenant), [KuraVault](/docs/crds/kuravault).
+
+## Clients
+
+Clients send their name and version in the `X-Kura-Client` header. The server keeps a minimum version per client (`kura-cli` and `kura-plugin`, both `0.1.0` today) and answers a client below it with `426 client_too_old`. A client that sends no header is not checked.
+
+- **Plugin**: each server image carries the plugin build of the same release. Users download it from the web console's **Help** page, which shows its version and size, or from the GitHub release (`main.js`, `manifest.json`, `styles.css`, also installable with BRAT).
+- **CLI**: `mise use -g github:batleforc/weebo-kura`, or the release archives.
+
+Upgrade the server first, then the clients.
+
+## After the upgrade
+
+- Check that every replica is ready (`kura_ready`, and the `KuraUnready` alert).
+- Look at `GET /v1/admin/status` as a platform admin for refused configuration or new warnings.
+
+<Cards>
+  <Card title="Install" href="/docs/guides/install">The first install.</Card>
+  <Card title="Monitoring" href="/docs/guides/monitoring">Signals to watch after an upgrade.</Card>
+  <Card title="Helm values" href="/docs/reference/helm-values">Every chart value.</Card>
+</Cards>

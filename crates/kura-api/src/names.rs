@@ -69,6 +69,21 @@ impl fmt::Display for DnsLabel {
     }
 }
 
+#[cfg(feature = "crd")]
+impl schemars::JsonSchema for DnsLabel {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "DnsLabel".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+            "maxLength": 63,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

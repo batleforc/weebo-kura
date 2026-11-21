@@ -1,0 +1,52 @@
+---
+title: Overview
+description: What Kura is, the parts it is made of, and where to start reading.
+---
+
+Kura syncs [Obsidian](https://obsidian.md) vaults across devices through a
+server you run. A note written on a laptop reaches a phone and a tablet within
+seconds; nothing goes through a third-party cloud.
+
+- **Self-hosted and multi-tenant.** One server holds the vaults of several
+  teams or families, each a tenant with its own members, quota and retention.
+- **Encrypted at rest.** Files are cut into chunks, deduplicated, and sealed
+  with a per-vault key that Vault or OpenBao wraps; the bucket only ever holds
+  ciphertext.
+- **Signed in through OIDC.** People sign in with Authentik, the same account
+  they use elsewhere; there is no Kura password, and a lost device is revoked
+  from the console.
+- **Never loses a note.** Every write is a revision. Concurrent edits merge or
+  keep both copies, and deleted notes stay restorable for the retention you
+  set.
+- **Declared as YAML.** Tenants and vaults are `KuraTenant` and `KuraVault`
+  documents, in the conventions of the weebo operators, ready to become custom
+  resources.
+
+## The parts
+
+| Part | What it does |
+| --- | --- |
+| `kura-server` | The API, the web console and the background work, in one container image |
+| Obsidian plugin | Syncs a vault from Obsidian, on desktop and mobile |
+| `kura` CLI | Syncs a folder from a terminal, creates scoped tokens, checks a vault |
+| Web console | Reads and searches vaults from a browser; managers handle bindings, tokens and notifications |
+| Helm chart | Deploys the server with its database, backups, monitoring and network policy |
+
+They are explained in [Architecture](/docs/concepts/architecture).
+
+## Where to start
+
+<Cards>
+  <Card title="Install" href="/docs/guides/install">
+    Run Kura on Kubernetes: what the cluster needs, Vault, Authentik, the chart.
+  </Card>
+  <Card title="Tenants and vaults" href="/docs/guides/tenants-and-vaults">
+    Declare who belongs where, and who may open which vault.
+  </Card>
+  <Card title="Obsidian plugin" href="/docs/guides/obsidian-plugin">
+    Install the plugin, sign in, and sync a vault.
+  </Card>
+  <Card title="How sync works" href="/docs/concepts/sync">
+    Revisions, conflicts, chunks: what happens to a note on its way.
+  </Card>
+</Cards>

@@ -1,0 +1,122 @@
+---
+title: How Sync Works
+description: How Kura stores files, orders changes, handles conflicts and recovers after a restore.
+---
+
+This page explains what happens when a device syncs a vault. You do not need it to use Kura, but it helps when you read a conflict file, a `410` answer or a metric.
+
+## Entries and revisions
+
+Every file or folder in a vault is an **entry**. An entry has a stable id, made by the client when the file first appears. A rename changes the entry's path, not its id, so the history follows the file.
+
+Each change to an entry is a **revision**: a new content, a new path, or a deletion. Revisions never change once written. Old revisions are pruned by the tenant's `retention` settings (`maxRevisionAge`, `maxRevisionsPerEntry`); the current version of a file, or its deletion, is never pruned.
+
+## The change log and the cursor
+
+The server keeps a change log per vault, ordered by a sequence number `seq`. The server assigns `seq` while it holds a lock on the vault, so numbers never go backwards.
+
+Each device keeps a **cursor** per vault: the vault's epoch (see below) and the last `seq` it has applied. A pull (`GET /v1/vaults/{v}/changes`) returns, page by page (1,000 entries a page), every entry changed after the cursor, in its current state only. The entries and the `head_seq` they are read against come from one database snapshot, so a client that moves its cursor never skips a change. An interrupted first sync resumes where it stopped.
+
+**Server time is the only clock.** File modification times on devices are only used to notice local changes. They never order anything.
+
+## Pushing changes
+
+A push is a **commit**: a list of operations (put a file, create a folder, delete an entry), each naming the **base revision** the device last saw. One commit holds at most 1,000 operations. Each commit carries an idempotency key, so a retry with the same body returns the same result instead of applying twice.
+
+For each operation the server decides:
+
+| Situation | Result |
+| --- | --- |
+| The base is the current head | Fast-forward: the push becomes the head |
+| A `.md` or `.txt` file changed on both sides, edits do not overlap | Merged: the three-way line merge becomes the head |
+| Overlapping edits, or another kind of file changed on both sides | Conflict: the head is kept, the push is stored as a conflict file beside it |
+| The base revision was pruned by retention | Handled as overlapping edits |
+| A delete of an entry edited since | The delete is dropped |
+| An edit of an entry deleted since | The edit wins and the entry comes back |
+| A rename or create onto a path already taken | The incoming entry gets a suffixed name, `name (2).md`, `name (3).md`, … |
+| The pushed content equals the head | Accepted as a no-op |
+
+Each operation comes back `accepted`, `merged` or `conflicted`. A conflict is a result, never an error: a client cannot lose an edit by retrying. A commit fails as a whole only on invalid input, such as a missing chunk, a refused path, a missing role or an exceeded quota.
+
+### Merges and conflict files
+
+The server merges only `.md` and `.txt` files, line by line, in UTF-8, up to 4 MiB and 20,000 lines per side. A `.canvas` or other JSON file is never merged, since a text merge could break it. A merge has a time budget of 2 seconds; past it, the push becomes a conflict file.
+
+A conflict file sits beside the original and carries the device name and date: `name (conflict <device> <date>).md`. The device renames its own copy to that name and writes the server's head under the original path, so both versions are kept on every device.
+
+## Chunks and blobs
+
+File content is stored as **chunks**:
+
+- A file is cut by content-defined chunking (FastCDC). The cut points depend on the content, so an edit in a large file changes only the chunks around the edit. The sizes come from the vault's `chunking` settings (by default 256 KiB minimum, 1 MiB average, 4 MiB maximum) and cannot change once the vault exists. Most notes are a single chunk.
+- A chunk's address is the BLAKE3 hash of its plaintext. The server recomputes the hash on upload and refuses a mismatch.
+- The same chunk is stored once per vault, whatever the number of files or versions that use it (deduplication).
+- A **blob** (manifest) is the ordered list of chunk hashes of one file version. A revision points to a blob.
+
+Before uploading, a device asks which chunks are missing and sends only those. Content is always stored before a commit points to it. On every read, the server checks the BLAKE3 hash of the decrypted chunk; a chunk that fails is counted (`kura_chunk_corrupt_total`), reported missing, and uploaded again by the next device that holds it.
+
+### Batched transfers
+
+To keep a first sync of a large vault fast, a device fetches and uploads in batches rather than one request per file (RFC 0002):
+
+- `POST /v1/vaults/{v}/blobs/batch` returns up to 1,000 manifests.
+- `POST /v1/vaults/{v}/chunks/batch` returns up to 4 MiB of chunks.
+- `POST /v1/vaults/{v}/chunks/upload` and `POST /v1/vaults/{v}/blobs/upload` store several at once.
+
+The batch routes allow 60 calls a minute each. A replica builds at most 8 chunk batches at once; past that it answers `429` with `Retry-After: 1`.
+
+## Paths
+
+A path is checked once at every boundary: the server checks what clients send, and clients check what the server sends before writing anything.
+
+- Relative, `/`-separated, Unicode NFC. A name read from a macOS disk is normalized to NFC first.
+- At most 255 bytes per name and 4,096 bytes in total.
+- Unique without regard to case: `Note.md` and `note.md` cannot both exist in a vault. The server computes the case-folded form.
+- A name may not be `.` or `..`, end with a dot or a space, or contain a control character, an invisible character, or any of `< > : " \ | ? *`.
+- A name like `NAME~1` is refused: Windows may resolve it to another file.
+- A name starting with a dot is not a note. `.obsidian`, `.trash`, `.git` and other dot-folders never sync as notes.
+
+A client that meets a path it cannot sync reports the file and the rule it breaks. It never renames it silently.
+
+## Deletes go to `.trash`
+
+A file deleted on another device is moved to the vault's `.trash` folder on this device, never removed from disk.
+
+## Folders
+
+Folders sync as entries of their own, empty ones included (RFC 0007): made, removed or renamed on one device, they follow on the others, and the console's tree shows them. A folder removed elsewhere leaves a device only when it holds nothing there; its files leave by their own deletions, to `.trash`.
+
+A client asks for folders with `folders=true` on its pulls. An older plugin or CLI is never sent a folder entry and keeps working.
+
+## The configuration space
+
+When a vault sets `configSync`, each user's `.obsidian` folder syncs in a separate space (decision 34):
+
+- One space per user and per device profile (`desktop` or `mobile`, from the device's registration). Configuration never travels between members, never to a scoped token, never into search.
+- Only the listed categories travel: plugin folders, snippets, themes and `hotkeys.json`. Never `community-plugins.json` (which plugins are enabled), the workspace files, or the Kura plugin itself.
+- The last write wins, with no conflict file, because Obsidian would load a conflict file as settings. Earlier versions stay in history.
+- A plugin received from another device, or a new version of one, is written disabled. It is enabled only when the user agrees on that device.
+- The configuration space has no folder entries.
+
+## Full resync: `410` answers
+
+Sometimes a cursor can no longer be used. The server then answers `410 Gone` and the device runs a **full resync**: it matches each local file to a server entry by the entry id and hash it recorded, never by path alone.
+
+| Answer | Why | What the resync does |
+| --- | --- | --- |
+| `410 cursor_expired` | The device was away longer than the tenant's `deletedEntryTtl` (90 days by default), and deletions it never saw were purged | Moves files deleted elsewhere to `.trash`; pushes local edits |
+| `410 history_rewound` | The vault's epoch changed: the server was restored from a backup, or a standby was promoted | Deletes nothing; pushes back what the server lost. A lost version comes back as a conflict file beside the older one |
+
+### Epochs
+
+Each vault has an **epoch**. It changes when PostgreSQL's system identifier or timeline changes (a failover or switchover), and when an operator runs `kura-server reset-epochs` after a restore. A cursor from another epoch gets `history_rewound`, so every device pushes back what the server lost and no write is silently dropped. Epoch changes are counted by `kura_vault_epoch_changes_total`.
+
+### The too-many-deletions guard
+
+A resync that would move more than 10% of the local files, or more than 50 files, to `.trash` stops and asks first. The CLI exits with code 3 when it cannot ask; `kura sync --yes` skips the question. The plugin asks once.
+
+<Cards>
+  <Card title="Architecture" href="/docs/concepts/architecture">The parts and how they talk.</Card>
+  <Card title="Backup and restore" href="/docs/guides/backup-and-restore">When epochs are reset on purpose.</Card>
+  <Card title="CLI guide" href="/docs/guides/cli">Sync, history and restore from a terminal.</Card>
+</Cards>

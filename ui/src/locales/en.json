@@ -424,7 +424,7 @@
     "devices": {
       "title": "I lost a device, or I am on a shared computer",
       "p1": "Each browser and each Obsidian that signs in is a device. My devices lists yours, with when each was last seen.",
-      "p2": "Lost a laptop or a phone? Revoke it there: it stops at its next request. On a shared computer, leave \"Stay signed in\" unchecked, and sign out when done: signing out revokes this browser."
+      "p2": "Lost a laptop or a phone? Revoke it there: it stops at its next request. On a shared computer, leave \"Stay signed in\" unchecked, and sign out when done: signing out ends this browser's access."
     },
     "trouble": {
       "title": "The plugin does not appear, or the link does nothing",

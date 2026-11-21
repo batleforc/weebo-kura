@@ -1,0 +1,41 @@
+# The documentation site (docs/): Fumadocs on Next.js with @weebo/operator-docs,
+# the weebo operators' shared format, exported statically to GitHub Pages.
+version: "3"
+
+tasks:
+  docs:deps:
+    desc: Install the docs site's pinned dependencies (pnpm, frozen lockfile) when missing
+    dir: docs
+    status:
+      - test -d node_modules
+    cmds:
+      - pnpm install --frozen-lockfile
+
+  docs:gen:
+    desc: "Regenerate the KuraTenant and KuraVault reference pages and schemas from deploy/crd (weebo-crd-docs; run by task recu)"
+    deps: [docs:deps]
+    dir: docs
+    cmds:
+      - pnpm --silent gen:crds
+
+  docs:
+    desc: Run the documentation site in dev mode (http://localhost:3000)
+    deps: [docs:deps]
+    dir: docs
+    cmds:
+      - pnpm dev
+
+  docs:build:
+    desc: "Lint, type-check and build the documentation site as a static export in docs/out (DOCS_BASE_PATH for a sub-path)"
+    deps: [docs:deps]
+    dir: docs
+    cmds:
+      - pnpm lint
+      - pnpm types:check
+      - pnpm build
+
+  docs:audit:
+    desc: Check the docs site's JavaScript dependencies for known vulnerabilities
+    dir: docs
+    cmds:
+      - pnpm audit

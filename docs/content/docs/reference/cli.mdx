@@ -1,0 +1,250 @@
+---
+title: CLI Reference
+description: Every kura command, argument and flag with its default, the exit codes, and the environment variables and files the CLI reads.
+---
+
+`kura` is the command-line client: it syncs a local folder with a vault on
+a kura server, using the same sync engine as the Obsidian plugin. This page
+is a transcription of its `--help` and of the clap definitions in
+[`crates/kura-cli/src/main.rs`](https://github.com/batleforc/weebo-kura/blob/main/crates/kura-cli/src/main.rs)
+and
+[`commands.rs`](https://github.com/batleforc/weebo-kura/blob/main/crates/kura-cli/src/commands.rs).
+For a walkthrough, see the [CLI guide](/docs/guides/cli).
+
+```text
+kura [OPTIONS] <COMMAND>
+```
+
+## Global options
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--token-file <TOKEN_FILE>` | none | A file holding a scoped token (`kura_…`), for `attach` and `sync` without `kura login`. Preferred to the `KURA_TOKEN` variable, which other processes of the user can read. The server comes from `KURA_SERVER`. Accepted by every command. |
+| `-h`, `--help` | | Print help. |
+| `-V`, `--version` | | Print the version. |
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| [`login`](#kura-login) | Sign in with the device code flow and register this device. |
+| [`attach`](#kura-attach) | Attach a local folder to a vault, showing what will move first. |
+| [`sync`](#kura-sync) | Push local changes and pull remote ones, for one vault or all. |
+| [`watch`](#kura-watch) | Keep a vault in sync: pull on every notification, push local edits. |
+| [`status`](#kura-status) | The state of every attached vault. |
+| [`verify`](#kura-verify) | Check that the server holds exactly this folder's notes. |
+| [`history`](#kura-history) | The revisions of a file, newest first. |
+| [`restore`](#kura-restore) | Bring back a revision of a file as its new version. |
+| [`devices`](#kura-devices) | List devices, or revoke one by name. |
+| [`search`](#kura-search) | Search a vault's notes and file names. |
+| [`token`](#kura-token) | Scoped tokens for agents and scripts: folders they read or write. |
+| `help` | Print the help of a command. |
+
+### kura login
+
+```text
+kura login [OPTIONS] --server <SERVER> --issuer <ISSUER>
+```
+
+Signs in with the OAuth device code flow (it prints a code to approve in
+the browser), stores the refresh token and registers this device.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--server <SERVER>` | required | The kura server's address. |
+| `--issuer <ISSUER>` | required | The OIDC issuer, for example `https://auth.example.org/application/o/kura/`. |
+| `--client-id <CLIENT_ID>` | `kura-cli` | The OIDC client id. |
+| `--device-name <DEVICE_NAME>` | the host name | Shown in device lists and conflict file names. It must be a valid file name (exit 3 otherwise). The host name is `HOSTNAME`, else `/etc/hostname`, else `kura-cli`. |
+
+### kura attach
+
+```text
+kura attach [OPTIONS] <VAULT> <FOLDER>
+```
+
+Attaches a local folder to a vault. It first shows what will move (matching,
+local-only, server-only and differing files, and files that cannot sync),
+asks for confirmation, then runs the first sync.
+
+| Argument or option | Default | Meaning |
+| --- | --- | --- |
+| `<VAULT>` | required | The vault name. |
+| `<FOLDER>` | required | The local folder. |
+| `--yes` | off | Do not ask before the first sync. |
+
+Answering no to the confirmation exits with code 3 and changes nothing.
+
+### kura sync
+
+```text
+kura sync [OPTIONS] [VAULT]
+```
+
+| Argument or option | Default | Meaning |
+| --- | --- | --- |
+| `[VAULT]` | every attached vault | The vault to sync. |
+| `--dry-run` | off | Only list what would be pushed and what cannot sync. |
+| `--yes` | off | Let a full resync move many files to `.trash` without asking. |
+
+With several vaults, the exit code is the highest of all of them.
+
+### kura watch
+
+```text
+kura watch [OPTIONS] [VAULT]
+```
+
+Keeps a vault in sync: pulls on every server notification and pushes local
+edits, until you press Ctrl-C.
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `[VAULT]` | the only attached vault | The vault to watch. Required when more than one vault is attached (exit 3 otherwise). |
+
+### kura status
+
+```text
+kura status [OPTIONS]
+```
+
+The state of every attached vault. No arguments.
+
+### kura verify
+
+```text
+kura verify [OPTIONS] <VAULT>
+```
+
+Checks that the server holds exactly this folder's notes (used for a
+migration). Prints the files and bytes on each side and every difference,
+then `Equal.` (exit 0) or `Not equal.` (exit 1).
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `<VAULT>` | required | An attached vault. |
+
+### kura history
+
+```text
+kura history [OPTIONS] <VAULT> <PATH>
+```
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `<VAULT>` | required | An attached vault. |
+| `<PATH>` | required | The file's path in the vault. |
+
+### kura restore
+
+```text
+kura restore [OPTIONS] <VAULT> <PATH> <REVISION>
+```
+
+Brings back a revision as the file's new version; the history is kept.
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `<VAULT>` | required | An attached vault. |
+| `<PATH>` | required | The file's path in the vault. |
+| `<REVISION>` | required | The revision id (a UUID, from `kura history`). |
+
+### kura devices
+
+```text
+kura devices [OPTIONS] [COMMAND]
+```
+
+With no subcommand, lists the devices (name, profile, last seen, state).
+
+| Subcommand | Arguments | Meaning |
+| --- | --- | --- |
+| `revoke` | `<NAME>` (required) | Revoke the active device of that name. It can no longer sync. To lock it out fully, also end its session in your identity provider. |
+
+### kura search
+
+```text
+kura search [OPTIONS] <VAULT> <QUERY>
+```
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `<VAULT>` | required | The vault. |
+| `<QUERY>` | required | The words to look for in notes and file names. The tenant must have search turned on. |
+
+### kura token
+
+```text
+kura token [OPTIONS] <COMMAND>
+```
+
+Scoped tokens for agents and scripts. See [Scoped tokens](/docs/guides/scoped-tokens).
+
+#### kura token create
+
+```text
+kura token create [OPTIONS] --expires <EXPIRES> <VAULT>
+```
+
+Issues a token. Its secret is printed once.
+
+| Argument or option | Default | Meaning |
+| --- | --- | --- |
+| `<VAULT>` | required | The vault. |
+| `--name <NAME>` | none | Shown in lists and conflict file names. |
+| `--read <READ>` | none | A folder the token reads, ending with `/`. Repeat for more. With no `--read`, `--write` or `--prefix`: the whole vault, read only. |
+| `--write <WRITE>` | none | A folder the token reads and writes, ending with `/`. Repeat for more. The tenant must allow it (`scopedTokens.write`). An empty folder or `/` is refused: a token never writes the whole vault. |
+| `--prefix <PREFIX>` | none | One `--read`, as before folder rules existed. |
+| `--expires <EXPIRES>` | required | Days, at most 90: `30d` or `30`. |
+| `--cidr <CIDR>` | none | An address range the token may be used from. Repeat for more. The CLI accepts none, but the server requires 1 to 32 ranges and refuses a range that allows every address. |
+
+#### kura token list
+
+```text
+kura token list [OPTIONS] <VAULT>
+```
+
+The vault's tokens, never their secrets.
+
+#### kura token revoke
+
+```text
+kura token revoke [OPTIONS] <VAULT> <ID>
+```
+
+Revokes a token by its id (a UUID, from `kura token list`).
+
+## Exit codes
+
+| Code | Meaning | Examples |
+| --- | --- | --- |
+| `0` | Success. | Everything synced; `verify` found the folder equal to the server. |
+| `1` | Any other failure. | Server unreachable or `503`; a `429` that persists; `verify` found differences; the Obsidian configuration did not sync; a local file error; a malformed request (`invalid_request`). |
+| `2` | Sign in again. | Not signed in; the server answered `invalid_token`, `device_revoked` or `device_unknown`; the identity provider refused the sign-in; a scoped token with no `KURA_SERVER`. |
+| `3` | Refused. | The server answered `insufficient_role`, `quota_exceeded` or `client_too_old`; the vault is unknown or not attached; you answered no to a confirmation; a bad flag value (`--device-name`, `--expires`, `--write`); a token write outside its folders; the tenant does not allow write tokens. |
+| `4` | Some files cannot sync. | Files listed as unsyncable (invalid path, too large), or the server answered `invalid_path` or `payload_too_large`. |
+
+The problem types behind them are in [Problem types](/docs/reference/problem-types).
+
+## Environment variables
+
+| Variable | Meaning |
+| --- | --- |
+| `KURA_TOKEN` | A scoped token to use instead of a signed-in device, when `--token-file` is not given. |
+| `KURA_SERVER` | The server's address, used with a scoped token when there is no `config.json`. |
+| `KURA_ACCESS_TOKEN` | An OIDC access token to use as is, instead of refreshing one (scripts and tests). Ignored when a scoped token is given. |
+| `KURA_CLI_HOME` | The folder of the CLI's own files. |
+| `XDG_CONFIG_HOME` | When `KURA_CLI_HOME` is not set, the files are in `$XDG_CONFIG_HOME/kura`. |
+| `HOME` | When neither is set, the files are in `~/.config/kura`. |
+| `HOSTNAME` | The default device name at `login`. |
+
+## Files
+
+| File | Content |
+| --- | --- |
+| `config.json` (in the CLI home) | The server, issuer, client id, device id and name, and the attached folders with their last sync time. Written owner-only (mode 0600). |
+| `credentials.json` (in the CLI home) | The refresh token, owner-only (mode 0600). It is not in the OS keyring. |
+| `.kura/` (in each attached folder) | The local sync state of that vault. A dot-folder, so it never syncs. |
+| `.trash/` (in each attached folder) | Where files deleted elsewhere are moved, instead of being deleted. |
+
+Every request sends `X-Kura-Client: kura-cli/<version>`, so a server can
+refuse a CLI that is too old (exit 3, "Update kura.").

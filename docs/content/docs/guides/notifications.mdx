@@ -1,0 +1,224 @@
+---
+title: Notifications (Webhooks)
+description: Send a tenant's events to a webhook, verify the signature on each delivery, and understand retries, rule switch-off and the network guards.
+---
+
+kura can POST a JSON message to an `https://` URL when something happens in a tenant: notes changed, a conflict appeared, a key is about to expire, a device was revoked, and so on. A tenant admin or a vault manager sets this up as **rules**. Each delivery is signed, so the receiver can check it came from kura.
+
+## Enable notifications on the server
+
+Notifications are off by default. While they are off, the rule routes answer `409 notifications_disabled` and the console says "Notifications are not enabled on this server". Rules already stored are kept but nothing is sent; the server logs one warning at startup with their count.
+
+<Tabs items={['server.yaml', 'Helm values']}>
+<Tab value="server.yaml">
+
+```yaml title="server.yaml"
+notifications:
+  enabled: true
+  webhook:
+    # Private ranges a webhook may reach; empty: public addresses only.
+    allowedCidrs: [10.43.0.0/16]
+    # An extra trust root for webhooks only (a receiver behind a private CA).
+    caFile: /etc/kura/webhook-ca/ca.pem
+```
+
+</Tab>
+<Tab value="Helm values">
+
+```yaml title="values.yaml"
+server:
+  notifications:
+    enabled: true
+    webhook:
+      allowedCidrs: [10.43.0.0/16]
+
+# A Secret holding a PEM bundle; the chart mounts it and sets
+# server.notifications.webhook.caFile for you.
+webhookCa:
+  secretName: hub-ca
+  key: ca.pem
+```
+
+</Tab>
+</Tabs>
+
+- `allowedCidrs` opens private address ranges, for a receiver inside your cluster. `0.0.0.0/0` and `::/0` are refused at startup.
+- `caFile` adds a trust root to the webhook client only. It does not change how kura trusts Authentik, OpenBao or S3.
+- Rule URLs, signing secrets and authorization values are encrypted at rest with the tenant's key, so notifications need the server's storage keys to be configured.
+
+See [Server configuration](/docs/guides/configuration) and [Helm values](/docs/reference/helm-values).
+
+## Rules
+
+A tenant holds at most 20 rules. Each rule has:
+
+| Field | Rules |
+| --- | --- |
+| Name | 1 to 64 bytes. |
+| Events | One or more event types from the list below. |
+| Vault | Optional. A vault of the tenant: only its events are sent. Empty: the whole tenant. |
+| Webhook URL | `https://` only, no user name or password in it, at most 2,048 bytes. After creation, only its host is ever shown again. |
+| Authorization | Optional. Sent as the `Authorization` header of every delivery, for example `Bearer <token>`. At most 1,024 bytes, no control characters. Hidden once saved. |
+
+Who may manage rules:
+
+- A **tenant owner or admin** manages every rule of the tenant, on any event, tenant-wide or per vault.
+- A **vault manager** manages rules bound to one vault they manage, for vault events only. The tenant events (`device.registered`, `device.revoked`, `quota.high`, `vault.created`, `vault.deleted`) are for tenant admins.
+
+### In the console
+
+Tenant admins open **Notifications of** `<tenant>` from the home page (`/app/manage/tenants/<tenant>/notifications`). Vault managers open the vault's **Notifications** tab. Select **New rule**, pick the events and the scope, paste the webhook URL and, optionally, the authorization value.
+
+When the rule is created, the console shows its **signing secret** once (`whsec_…`): "your receiver checks X-Kura-Signature with it". Store it in the receiver.
+
+On an existing rule you can **Test**, **Edit**, **Switch off** or **Re-enable**, **Rotate secret**, open its **Deliveries**, or remove it. Rotating the secret shows the new one once; the old one stops at once, so update the receiver straight away. When editing, leaving the URL or the authorization empty keeps the current value; **Remove the authorization** deletes it.
+
+The API behind these pages is `/v1/tenants/{t}/notifications`; see the [API reference](/docs/reference/api).
+
+## Event types
+
+| Type | Console label | Scope | When |
+| --- | --- | --- | --- |
+| `vault.changed` | notes changed | vault | Notes were changed. At most one event per vault per minute, with a count. |
+| `vault.conflict` | conflict | vault | A commit created conflict files. |
+| `vault.created` | vault created | tenant | A vault was created through the API. |
+| `vault.deleted` | vault deleted | tenant | A vault was deleted through the API. |
+| `binding.changed` | access changed | vault | A role binding was added or changed. |
+| `binding.removed` | access removed | vault | A role binding was removed. |
+| `token.created` | key created | vault | A scoped token was issued. |
+| `token.revoked` | key revoked | vault | A scoped token was revoked. |
+| `token.expiring` | key expiring | vault | A scoped token expires in 7 days or less. Sent once per token. |
+| `token.denied` | key refused | vault | A valid token was used from an address outside its ranges. At most one event per token per hour, with a count. |
+| `device.registered` | device added | tenant | A device signed in for the first time. Sent to each tenant the user belongs to. |
+| `device.revoked` | device revoked | tenant | A device was revoked. Sent to each tenant the user belongs to. |
+| `quota.high` | quota nearly full | tenant | The tenant's storage crossed 90% of its quota. Sent once per crossing. |
+| `ping` | | rule | The **Test** button. Sent to that one rule only. |
+
+`vault.changed` counts changes to notes, not to synced Obsidian settings.
+
+## Payload
+
+Every delivery is a `POST` with a JSON body:
+
+```json
+{
+  "id": "019a8c1d-…",
+  "type": "token.expiring",
+  "time": "2026-11-15T12:33:20Z",
+  "tenant": "jdr",
+  "vault": { "id": "…", "name": "campaign" },
+  "title": "Token discord-recap expires in 7 days or less",
+  "message": "Vault campaign, tenant jdr: renew or replace it.",
+  "data": { "token": { "id": "…", "name": "discord-recap" }, "expiresAt": "2026-11-22T00:00:00Z" }
+}
+```
+
+| Field | Content |
+| --- | --- |
+| `id` | The event id (UUID). |
+| `type` | The event type. |
+| `time` | When the event was recorded (RFC 3339, UTC). |
+| `tenant` | The tenant's slug. |
+| `vault` | `{ "id", "name" }`, or `null` for tenant events and `ping`. |
+| `title`, `message` | Human-readable text, in English. |
+| `data` | Fields that depend on the type (below). |
+
+`data` per type:
+
+| Type | `data` |
+| --- | --- |
+| `vault.changed` | `headSeq` (the vault's latest sequence number), `count` |
+| `vault.conflict` | `conflicts` (how many conflict files) |
+| `vault.created`, `vault.deleted` | `{}` |
+| `binding.changed` | `binding`: `kind`, `role`, `folders` (number of folders, or `null` for the whole vault) |
+| `binding.removed` | `binding`: `kind` |
+| `token.created` | `token`: `id`, `name`; `write` (true when it has a write rule) |
+| `token.revoked` | `token`: `id`, `name` |
+| `token.expiring` | `token`: `id`, `name`; `expiresAt` |
+| `token.denied` | `token`: `id`, `name`; `count` |
+| `device.registered`, `device.revoked` | `device`: `id` |
+| `quota.high` | `usedBytes`, `quotaBytes` |
+| `ping` | `rule`: `id`, `name`; `vaultName` (or `null`) |
+
+Payloads carry names and ids only: never a note path, an OIDC subject, a device name or a secret. For `vault.changed` and `token.denied`, events of the same window are merged into one, and `count` says how many facts it covers.
+
+## Delivery headers
+
+| Header | Value |
+| --- | --- |
+| `Content-Type` | `application/json` |
+| `X-Kura-Event` | The event type, for example `vault.changed`. |
+| `X-Kura-Delivery` | The delivery id (UUID). Unique per rule and event, the same on every retry: use it to drop duplicates. |
+| `X-Kura-Timestamp` | Unix time in seconds when this attempt was signed. |
+| `X-Kura-Signature` | `v1=` followed by the hex HMAC-SHA256 of the timestamp, a dot and the body. |
+| `Authorization` | The rule's authorization value, when it has one. |
+
+## Verify the signature
+
+The signature is `HMAC-SHA256(key, timestamp + "." + body)`, in lowercase hex, prefixed with `v1=`. The **key is the raw secret**: the bytes you get by base64url-decoding (no padding) what follows `whsec_` in the secret the console showed. Compute it over the raw request body, exactly as received, before any JSON parsing.
+
+```python title="verify.py"
+import base64, hashlib, hmac, time
+
+SECRET = "whsec_..."  # as shown once in the console
+
+def key_of(secret: str) -> bytes:
+    raw = secret.removeprefix("whsec_")
+    return base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+
+def verify(headers: dict, body: bytes, max_age: int = 300) -> bool:
+    timestamp = headers["X-Kura-Timestamp"]
+    signature = headers["X-Kura-Signature"]
+    # Refuse old deliveries, so a captured request cannot be replayed later.
+    if abs(time.time() - int(timestamp)) > max_age:
+        return False
+    mac = hmac.new(key_of(SECRET), timestamp.encode() + b"." + body, hashlib.sha256)
+    return hmac.compare_digest("v1=" + mac.hexdigest(), signature)
+```
+
+Compare in constant time (`hmac.compare_digest`), as above. The 5-minute window is a choice for your receiver; kura does not impose one.
+
+## Retries and switch-off
+
+kura answers each attempt by the HTTP status only and never reads the response body.
+
+| Response | What happens |
+| --- | --- |
+| `2xx` | Delivered. The rule's failure count goes back to zero. |
+| `410 Gone` | The delivery fails and the rule is switched off at once (reason `gone`). |
+| `3xx` | Failure (`redirect`). Redirects are never followed. |
+| `4xx`, `5xx` | Failure (`status_4xx`, `status_5xx`). |
+| no answer | Failure (`timeout`, `connect`, `tls`). |
+| address refused | Failure (`address_refused`), never retried. |
+
+A failed delivery is retried after 1 minute, 5 minutes, 30 minutes, 2 hours and 6 hours. After the 6th failed attempt it is marked failed for good.
+
+After **20 failed deliveries in a row**, the rule switches itself off (reason `failures: <last result>`). The console then says the rule was switched off and why: fix the receiver, then select **Re-enable**. Re-enabling forgets the failure count.
+
+The timeout is 3 seconds to connect and 5 seconds in all. Each replica sends at most 4 deliveries at a time.
+
+## The Test button
+
+**Test** records a `ping` event for that one rule and sends it at once, even if the rule is switched off. The console shows the result: an HTTP status, or one of `timeout`, `connect`, `tls`, `address_refused`, `redirect`, `status_4xx`, `status_5xx`. A ping also appears in the rule's deliveries.
+
+## Network protections
+
+A webhook URL is something a tenant admin types in, so kura guards against it being pointed at internal services (server-side request forgery):
+
+- **https only**, no user-info in the URL.
+- **Blocked addresses**, unless a range of `allowedCidrs` covers them: loopback, private (10/8, 172.16/12, 192.168/16), shared (100.64/10), link-local (169.254/16, which includes cloud metadata endpoints), unspecified, multicast, broadcast, documentation ranges, `0.0.0.0/8`, `240.0.0.0/4`, `192.0.0.0/24`, and in IPv6 loopback, unique local (`fc00::/7`), link-local (`fe80::/10`), documentation (`2001:db8::/32`), `64:ff9b::/96`, and IPv4-mapped or IPv4-compatible addresses whose IPv4 is blocked.
+- **Checked on every connection.** The host name is resolved at each attempt and blocked addresses are dropped, so a name that later starts pointing inside your network reaches nothing (DNS rebinding).
+- **No redirects, no proxy.** The webhook client has its own trust roots (`caFile`), separate from every other client.
+- **One error for every refusal.** A refused URL always gets the same message, so the form cannot be used to probe your network.
+
+## Retention
+
+Events and their deliveries are purged after **7 days**, whether notifications are on or off. A rule's **Deliveries** page shows its last 50 deliveries: time, event, attempt, result.
+
+## Delay across replicas
+
+An event is recorded only when an enabled rule of its tenant subscribes to its type. Each replica caches which tenants subscribe to which types and refreshes the cache every 30 seconds. A rule you just saved is active at once on the replica that saved it; on the other replicas it may take **up to 30 seconds** before events are recorded for it.
+
+## Monitoring
+
+The server exports `kura_notification_deliveries_total` (by outcome), `kura_notification_pending`, `kura_notification_oldest_pending_seconds` and `kura_notification_rules_disabled`. Each switch-off is an audit event `notification_rule_disabled`. See [Metrics](/docs/reference/metrics) and [Alerts](/docs/reference/alerts).

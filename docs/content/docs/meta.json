@@ -1,0 +1,31 @@
+{
+  "title": "weebo-kura",
+  "pages": [
+    "index",
+    "ide",
+    "---Concepts---",
+    "concepts/architecture",
+    "concepts/sync",
+    "concepts/security",
+    "---Getting started---",
+    "guides/install",
+    "guides/authentik",
+    "guides/configuration",
+    "guides/tenants-and-vaults",
+    "---Using Kura---",
+    "guides/obsidian-plugin",
+    "guides/cli",
+    "guides/web-console",
+    "guides/scoped-tokens",
+    "guides/notifications",
+    "guides/migrate-from-notion",
+    "---Operate---",
+    "guides/backup-and-restore",
+    "guides/upgrades",
+    "guides/monitoring",
+    "---Reference---",
+    "...crds",
+    "reference",
+    "design"
+  ]
+}

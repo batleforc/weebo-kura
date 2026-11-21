@@ -1,0 +1,116 @@
+---
+title: Architecture
+description: The parts of a Kura deployment, what each one holds, and how they talk to each other.
+---
+
+Kura is one Rust binary, `kura-server`, run as several identical replicas. Every durable fact lives in PostgreSQL or in an object storage bucket, so any replica can answer any request. Vault (or OpenBao, which has the same API) holds the keys, and Authentik signs users in.
+
+## The picture
+
+```text
+ Obsidian plugin ─┐                                   ┌─ PostgreSQL
+ kura CLI        ─┤                                   │   metadata, revisions, change log,
+ scripts (token) ─┼─ HTTPS ─> ingress ─> kura-server ─┤   search index, notifications,
+ browser (/app)  ─┘   (TLS ends here)    replicas     │   reconciled configuration
+        │                                    │        ├─ S3 bucket
+        │ device code flow / sign-in         │        │   encrypted chunks and manifests
+        v                                    │        ├─ Vault / OpenBao
+   Authentik  <── JWKS, userinfo ────────────┤        │   KV: database and bucket credentials
+                                             │        │   Transit: wraps one data key per vault
+                                             │        └─ webhook receivers (HTTPS out)
+                                             └─ :9090 metrics, scraped by Prometheus
+```
+
+Clients reach Authentik only to get tokens. They never reach PostgreSQL, the bucket or Vault: everything goes through the server.
+
+## What each part holds
+
+| Part | Role | Notes |
+| --- | --- | --- |
+| Devices (plugin, CLI) | Run the sync engine `kura-core` | Each install registers a device and sends its id in `X-Kura-Device` |
+| Browser | The web console under `/app` | Served by `kura-server` itself, when `ui.enabled` is on |
+| Ingress | Ends TLS, forwards to the API port `8080` | Never routes the metrics port `9090` |
+| `kura-server` | API, sync, authorization, encryption, background work | Stateless; two replicas by default in the chart |
+| PostgreSQL | Entries, revisions, the change log per vault, chunk and blob rows, devices, bindings, tokens, the search index, notification events and deliveries, the reconciled configuration | Every table forces row-level security: a request sees one tenant's rows |
+| S3 bucket | The encrypted chunks and file manifests | Object names are keyed hashes, so the bucket alone reveals neither content nor which known file is stored |
+| Vault KV | The database URL of `kura_app` and the bucket credentials | The database URL is re-read every 5 minutes, so a rotated password reaches new connections without a restart; the bucket secret is read at start |
+| Vault Transit | One key `kura-<tenant>` per tenant, which wraps each vault's data key | The server may only use `datakey`, `decrypt` and `rewrap`; it cannot delete or configure a key |
+| Vault Kubernetes auth | How the server logs in to Vault | With its ServiceAccount; the login is renewed every 5 minutes |
+| Authentik | Issues the OIDC access tokens | The server reads discovery, the JWKS (signing keys) and userinfo from it, with a 5 s timeout and no redirects |
+| Webhook receivers | Get signed notifications | Only when `notifications.enabled` is on; see [Notifications](/docs/guides/notifications) |
+
+Signing keys fetched from Authentik are cached and stored in PostgreSQL, so a replica that starts while Authentik is down still verifies tokens signed with a known key. A vault's plaintext data key is cached in memory for at most 10 minutes, so during a short Vault outage vaults with a cached key keep working.
+
+## A push, step by step
+
+1. The device asks which chunks the server lacks (`POST /v1/vaults/{v}/chunks/missing`).
+2. It uploads those chunks and the file manifest (a blob). The server checks each hash, encrypts the chunk and stores it in the bucket, then writes its row.
+3. It sends a commit. In one transaction the server locks the vault row, gives each change the next sequence number, stores the revisions and sends a PostgreSQL `NOTIFY`.
+4. Every replica hears the `NOTIFY` on its own `LISTEN` connection and tells the sockets open on that vault that the head moved.
+5. Other devices pull the changes since their cursor.
+
+Content is always stored before a commit points to it. See [How sync works](/docs/concepts/sync) for the rules.
+
+## The live events socket
+
+Devices learn about changes through a WebSocket at `GET /v1/vaults/{v}/events`. A web view cannot set an `Authorization` header on a WebSocket, so the client first trades its access token for a ticket (`POST /v1/vaults/{v}/events/ticket`): 256 random bits, single use, valid 30 seconds. The server stores only a hash of the ticket and consumes it when the socket opens. The server pings each socket every 30 seconds with the current head.
+
+Notifications are hints. A client always pulls from its cursor, so a lost notification costs time, never data.
+
+## Shared state and per-replica state
+
+| Shared, in PostgreSQL | Held by each replica in memory |
+| --- | --- |
+| Everything durable: entries, revisions, chunks, devices, tokens, configuration | Per-device rate limits: with N replicas, a caller can reach N times a limit |
+| The reconciled configuration that every replica authorizes from | The authorization snapshot, reloaded on a `NOTIFY` and polled every 5 s |
+| Signing keys of Authentik | The key cache and the userinfo cache |
+| Background job queues (search index, notification deliveries) | Wrapped data keys, once unwrapped (at most 10 minutes) |
+| | Its WebSocket connections |
+
+Because rate limits live in memory, a `429` from one replica says nothing about the others. See [Rate limits](/docs/reference/rate-limits).
+
+## Background work
+
+Each replica runs these tasks beside the API:
+
+- **Configuration reconciler**: reads the `KuraTenant` and `KuraVault` documents from `KURA_CONFIG_DIR` every 10 s and at least once a minute. A valid set is written to PostgreSQL by one replica at a time; every replica then authorizes from what is stored, never from its own files.
+- **Snapshot refresh**: reloads the stored configuration when it changes.
+- **Maintenance**: inside `maintenance.window` (UTC, `01:00-05:00` by default), each replica tries one pass an hour. A PostgreSQL advisory lock makes sure only one pass runs at a time across replicas. A pass prunes old revisions, purges old deletions, collects unused chunks and purges vaults removed with `Delete`. It waits while a backup holds the backup lock.
+- **Search indexer**: when a tenant turns search on, workers on each replica index Markdown notes, 100 at a time.
+- **Notifier**: claims due webhook deliveries from PostgreSQL, so two replicas never send the same attempt, then signs and sends them. It does nothing when notifications are off.
+- **Device purge**: removes devices idle for 180 days (web devices: 30 days).
+- **Storage metrics**: refreshes the storage and quota gauges every minute.
+- **Vault credential refresh**: re-reads the database URL every 5 minutes.
+
+One maintenance pass can also be run by hand with `kura-server maintain`.
+
+## The crates
+
+| Crate | What it is |
+| --- | --- |
+| `kura-api` | The `KuraTenant` and `KuraVault` documents, their defaults, validation and reason codes |
+| `kura-core` | The sync engine and everything shared by the server and its clients: chunking, paths, the wire types, merge. No I/O of its own, so it also runs in WebAssembly |
+| `kura-server` | The server binary: API, sync, authorization, storage, background work |
+| `kura-cli` | The `kura` command, which links `kura-core` natively |
+| `kura-wasm` | `kura-core` compiled to WebAssembly for the Obsidian plugin |
+| `kura-crdgen` | A build tool that writes the CRD files under `deploy/crd/` from `kura-api` |
+
+The plugin (TypeScript, under `plugin/`) and the web console (Vue, under `ui/`) are the two other shells.
+
+## The `kura-server` subcommands
+
+```text
+kura-server [--config /etc/kura/server.yaml]       serve
+kura-server migrate                                 apply the database migrations, then exit
+kura-server dump-spec                               print the OpenAPI document
+kura-server maintain [--config …]                   one maintenance pass now
+kura-server reset-epochs                            restore runbook: a new epoch for every vault
+kura-server backup [--config …]                     copy new objects to the second bucket
+kura-server check-chunks --sample N [--config …]    decrypt N random chunks, fail on a bad one
+```
+
+<Cards>
+  <Card title="How sync works" href="/docs/concepts/sync">Entries, revisions, commits and conflicts.</Card>
+  <Card title="Security model" href="/docs/concepts/security">Who can do what, and what is encrypted.</Card>
+  <Card title="Install" href="/docs/guides/install">Deploy the chart.</Card>
+</Cards>

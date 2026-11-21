@@ -1,0 +1,11 @@
+---
+title: CRD reference
+description: Every kind the operator adds, its fields, and an interactive manifest builder.
+---
+
+Kura reads these documents from the files of `KURA_CONFIG_DIR` (the chart's `documents`), reconciled live; the future operator applies the same YAML as custom resources. Each page lists every field, its default and its rules.
+
+| Kind | Scope | Description |
+| --- | --- | --- |
+| [`KuraTenant`](/docs/crds/kuratenant) | Cluster | A tenant: who belongs to it, through which OIDC claim, and the limits its vaults share. |
+| [`KuraVault`](/docs/crds/kuravault) | Namespaced | A vault: the tenant it belongs to, how its files are cut into chunks, what of `.obsidian` syncs, and who may open it. |

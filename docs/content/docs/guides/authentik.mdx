@@ -1,0 +1,200 @@
+---
+title: Authentik
+description: Set up the Authentik applications, providers, flows and groups Kura needs, and map them to the oidc keys of server.yaml.
+---
+
+Kura signs nobody in itself. Every person signs in with Authentik, an OpenID
+Connect (OIDC) identity provider, and each client sends the access token it
+got from Authentik. The server checks the token's signature, issuer, audience
+and expiry, then reads the person's groups from it.
+
+This page lists what to create in Authentik. The local stack's blueprint,
+[`dev/authentik/blueprints/kura.yaml`](https://github.com/batleforc/weebo-kura/blob/main/dev/authentik/blueprints/kura.yaml),
+creates all of it and is a working example. It was checked against
+Authentik 2026.8.3.
+
+## What Kura needs
+
+| Client | Client id (default) | Grant | Used by |
+| --- | --- | --- | --- |
+| CLI | `kura-cli` | Device code, refresh token | `kura login` |
+| Obsidian plugin | `kura-plugin` | Device code, refresh token | The plugin's **Sign in** |
+| Web console | `kura-web` | Authorization code with PKCE, refresh token | The console under `/app` |
+
+Each client is a **public** OAuth2/OpenID provider (no client secret) with its
+own Authentik application. Kura also needs a device code flow on the brand, a
+consent stage, and the groups your tenants use.
+
+## Steps
+
+<Steps>
+<Step>
+
+### Create a device code flow and set it on the brand
+
+Authentik ships no device code flow. The CLI and the plugin need one: the
+person opens a URL on any device, signs in, and types the code shown.
+
+Create a flow with the designation **Stage configuration** and
+authentication **Require authenticated** (the person is sent through the
+default authentication flow first). Then, in **System &gt; Brands**, edit your
+brand and set it as the **Device code flow**.
+
+</Step>
+<Step>
+
+### Create the CLI provider and application
+
+Create an OAuth2/OpenID provider:
+
+- **Client type**: public; **Client ID**: `kura-cli`.
+- **Issuer mode**: global (see [Issuer, discovery and audiences](#issuer-discovery-and-audiences)).
+- **Authorization flow**: one with a **consent stage**, such as
+  `default-provider-authorization-explicit-consent`, so the person sees the
+  application's name before approving.
+- **Scopes** (property mappings): `openid`, `profile`, `email`,
+  `offline_access`. Without `offline_access` there is no refresh token and
+  the person must sign in again every time the access token expires.
+  `profile` carries the `groups` claim.
+- **Include claims in ID token**: on (the default). With it, the mapped
+  claims such as `groups` are also in the access token.
+- **Access code validity**: at least 10 minutes. Authentik gives the device
+  code the same lifetime, 1 minute by default, which is too short to type the
+  code on another device.
+
+Then create an application (the blueprint uses the slug `kura`) that uses this
+provider.
+
+The CLI asks for the scopes `openid profile email offline_access`.
+
+</Step>
+<Step>
+
+### Create the plugin provider and application
+
+Same settings as the CLI, with the client id `kura-plugin`, and its own
+application (the blueprint uses the slug `kura-plugin`). The plugin asks for
+the same scopes as the CLI.
+
+In the plugin's settings, the sign-in URL is this application's OIDC URL, for
+example `https://auth.example.org/application/o/kura-plugin/`.
+
+</Step>
+<Step>
+
+### Create the console provider and application (optional)
+
+Only if you enable the web console (`ui.enabled`):
+
+- **Client type**: public; **Client ID**: `kura-web`; **Issuer mode**: global.
+- **Grant types**: authorization code and refresh token, no device code.
+- **Redirect URI**: `https://<host>/app/callback`, in **strict** mode.
+  Authentik takes the origin its token endpoint allows from it.
+- **Scopes**: `openid`, `profile`, `offline_access`.
+- The same consent authorization flow.
+- **Refresh token validity**: 14 days is advised (never checked by Kura).
+  Each refresh starts a new validity, so an active browser stays signed in.
+
+Then create its application (slug `kura-web` in the blueprint).
+
+</Step>
+<Step>
+
+### Create the groups
+
+Create the groups your tenants map to roles (`claimMappings` in each
+`KuraTenant`), and the platform admin group (`oidc.platformAdmin`), for
+example `kura-platform-admins`. Add people to them. See
+[Tenants and vaults](/docs/guides/tenants-and-vaults).
+
+</Step>
+<Step>
+
+### Fill in `server.yaml`
+
+```yaml title="server.yaml"
+oidc:
+  issuer: https://auth.example.org/
+  discovery: https://auth.example.org/application/o/kura/
+  audiences: [kura-cli, kura-plugin, kura-web]
+  platformAdmin: { claim: groups, value: kura-platform-admins }
+ui:
+  enabled: true
+  oidc:
+    clientId: kura-web
+    discovery: https://auth.example.org/application/o/kura-web/
+  plugin:
+    clientId: kura-plugin
+    discovery: https://auth.example.org/application/o/kura-plugin/
+```
+
+</Step>
+</Steps>
+
+## Issuer, discovery and audiences
+
+Kura accepts **one** issuer. Authentik's default issuer mode gives each
+application its own issuer, so the CLI's tokens and the plugin's would not
+share one. With **global** issuer mode on every provider, all tokens carry
+Authentik's base URL as their issuer.
+
+| `server.yaml` key | Authentik value |
+| --- | --- |
+| `oidc.issuer` | Authentik's base URL, such as `https://auth.example.org/`. Must be `https`. |
+| `oidc.discovery` | One application's OIDC URL, such as `https://auth.example.org/application/o/kura/`. The base URL serves no discovery document, so the server reads it from there. The `issuer` it names must equal `oidc.issuer`. |
+| `oidc.audiences` | The client ids of every provider: `kura-cli`, `kura-plugin`, and `kura-web` if the console is on. A token for any other client is refused. |
+| `oidc.algorithms` | The algorithm of the providers' signing key. The default is `[RS256]`; the blueprint signs with `authentik Self-signed Certificate`. |
+| `ui.oidc.clientId` | The console's client id. Must also be in `oidc.audiences`. |
+| `ui.oidc.discovery` | The console application's OIDC URL. A browser cannot read another application's discovery document: Authentik answers its cross-origin request with the origins of that application's redirect URIs only. |
+| `ui.plugin.clientId`, `ui.plugin.discovery` | What the console's "Open in Obsidian" link gives the plugin: its client id (default `kura-plugin`) and its application's OIDC URL. |
+
+## Platform admins
+
+`oidc.platformAdmin` names a claim and a value: a person whose token has that
+value in that claim (a string, or one element of a list) is a platform admin.
+Today it grants one thing: reading `GET /v1/admin/status`, the status of the
+tenant and vault documents. It grants no access to any tenant or vault.
+
+## Access token or userinfo
+
+The server reads role claims (the claim of each tenant's `claimMappings`, and
+`oidc.platformAdmin.claim`) from the access token. If a claim is missing,
+because **Include claims in ID token** was turned off, the server asks
+Authentik's userinfo endpoint and caches the answer for the token's lifetime
+(at most 10,000 answers).
+
+Keep the option on: it saves one call to Authentik per new token.
+
+## How the server checks a token
+
+- The signature, with a key from Authentik's JWKS. Keys are cached (at most
+  16), fetched again on an unknown key id at most once a minute, and stored
+  in PostgreSQL, so a replica started while Authentik is down still checks
+  tokens signed with a known key.
+- The algorithm must be one of `oidc.algorithms`; `none` is never accepted.
+- `iss` must equal `oidc.issuer`, `aud` must be one of `oidc.audiences`,
+  `exp` must be in the future (30 seconds of clock skew allowed), and `sub`
+  must be present.
+- The token must carry a `scope` claim. In Authentik only access tokens carry
+  it, so an ID token sent as a bearer token is refused.
+- Device revocation uses the session id `sid`, or `auth_time` on tokens
+  issued on a refresh. A token with neither is refused on the calls made
+  from a device. See [Security model](/docs/concepts/security).
+
+## Revoking access
+
+Revoking a device in Kura refuses that device and every token of the same
+Authentik session at once. It does not end the session in Authentik: to
+invalidate the refresh token itself, end the session in Authentik too.
+Removing someone from a group takes effect on their next access token. A
+[scoped token](/docs/guides/scoped-tokens) is not tied to Authentik groups:
+revoke it in Kura.
+
+## Try it locally
+
+`task dev:authentik` starts Authentik 2026.8.3 on `https://localhost:59443`
+with the blueprint applied: the three providers, the device code flow on the
+brand, and three users (password `kura-dev`): `alice` owns tenant `dev` and
+is a platform admin, `bob` is a member, `carol` is in no group. The matching
+`server.yaml` is
+[`dev/server.yaml`](https://github.com/batleforc/weebo-kura/blob/main/dev/server.yaml).

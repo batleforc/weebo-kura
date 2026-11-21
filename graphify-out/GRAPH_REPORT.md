@@ -1,17 +1,17 @@
 # Graph Report - weebo-kura  (2026-11-21)
 
 ## Corpus Check
-- 368 files · ~367,045 words
+- 444 files · ~409,995 words
 - Verdict: corpus is large enough that graph structure adds value.
-- Unclassified: 29 file(s) not represented in the graph (top: (none) 10, .toml 7, .css 4)
+- Unclassified: 31 file(s) not represented in the graph (top: (none) 11, .toml 7, .css 5)
 
 ## Summary
-- 5862 nodes · 13180 edges · 299 communities (279 shown, 20 thin omitted)
-- Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 622 edges (avg confidence: 0.81)
+- 6506 nodes · 13852 edges · 348 communities (318 shown, 30 thin omitted)
+- Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 630 edges (avg confidence: 0.82)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `72255166`
+- Built from commit: `a6cd96de`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -23,7 +23,7 @@
 - ProblemType
 - Env
 - kura-server/src/config.rs
-- rfc0001-implementation-plan.md
+- RFC 0003 — implementation plan
 - steps
 - Duration
 - rules
@@ -36,7 +36,7 @@
 - with
 - tasks
 - RFC 0002 — Batched chunk and manifest transfers
-- NotificationsPage.vue
+- notifications.mdx
 - fuzz
 - Doc / Gen / Guideline
 - tasks
@@ -45,12 +45,12 @@
 - KuraPlugin
 - .json
 - tasks
-- super
+- reconcile/status.rs
 - kura-wasm/src/lib.rs
 - fuzz.yml
 - tasks
 - tasks
-- HomePage.vue
+- NotificationsPage.vue
 - tests/notifications.rs
 - 6. Detailed design
 - tasks
@@ -65,7 +65,7 @@
 - SharedState
 - ConfigPage.vue
 - reader.rs
-- VaultOverview.vue
+- HomePage.vue
 - metrics.rs
 - 7. Security
 - RFC 0007 — Folders as synced entries
@@ -73,7 +73,7 @@
 - src/sync.rs
 - KeysPage.vue
 - attrs
-- ref_vitest
+- session.ts
 - path.rs
 - kura-api
 - .claude/CLAUDE.md
@@ -90,7 +90,7 @@
 - auth/mod.rs
 - Notifier
 - app/events.rs
-- PathError
+- steps
 - auth.ts
 - Vault
 - scope.rs
@@ -103,7 +103,7 @@
 - with
 - withDevice
 - ui/package.json
-- store/keys.rs
+- RFC 0009 — Kura operator
 - tasks
 - RFC 0008 — The synced Obsidian configuration in the console
 - oidc
@@ -121,7 +121,7 @@
 - tasks
 - auth/tests.rs
 - Command
-- app/sync_state.rs
+- plugin/src/main.ts
 - kura-server/src/main.rs
 - tests/merge.rs
 - env
@@ -132,7 +132,7 @@
 - ObsidianHost
 - cli.rs
 - dev:network
-- Operating kura-server (phases 1 and 2)
+- versions
 - Serialize
 - dev:env
 - compilerOptions
@@ -150,11 +150,11 @@
 - app/tokens.rs
 - reconcile.rs
 - steps
-- jobs
+- run
 - test
 - s3
 - lint
-- open
+- changes.rs
 - postgres
 - vault
 - pnpm-workspace.yaml
@@ -173,7 +173,7 @@
 - crypto.rs
 - rules
 - HistoryPanel.vue
-- RemoteAdapter
+- versions
 - scripts
 - @playwright/test
 - 6. Detailed design
@@ -181,10 +181,10 @@
 - net.rs
 - server
 - vault
-- ScopeError
+- backup.rs
 - backup
 - cnpg
-- Documentation
+- docs/README.md
 - kura-cli/src/config.rs
 - Chart.yaml
 - problem
@@ -215,7 +215,7 @@
 - bindings
 - overrides
 - test_db
-- sync_one
+- MaintenanceError
 - authz.sh
 - server
 - coverage
@@ -226,7 +226,7 @@
 - kura-core/src/config.rs
 - sw.js
 - Socketed
-- AppState
+- super
 - types.ts
 - PaneResizer.vue
 - test
@@ -263,15 +263,15 @@
 - 2026-11-17T22-55-29Z__ui-src-pages.md
 - 10. Operability
 - claimMappings
-- .fill
-- webhook.rs
+- scalar.rs
+- app/sync_state.rs
 - src/merge.rs
 - 2026-11-18T20-15-32Z__ui-src-pages.md
 - 1. Phase 1 — scaffold, configuration, identity, authorization
 - version:set
 - cli
-- updates
-- 15. Decisions and open questions
+- serve
+- tasks
 - 15. Decisions and open questions
 - 10. Operability
 - 5. Architecture
@@ -279,36 +279,84 @@
 - RFC 0001 — implementation plan
 - Security Policy
 - 5. Architecture
-- .suffixed
-- serve
+- src/db.rs
+- Group `kura`
 - draft
 - dockerfile
 - Api
 - 6. Detailed design
 - 4. User-facing design
-- 4. User-facing design
+- docs/package.json
 - KuraVault suite-config
-- 6. Detailed design
-- events.ts
-- 18. Revision against the tree (2026-11-18)
+- Every route
+- compilerOptions
+- Commands
 - env
 - 10. Operability
 - 5. Architecture
 - image
-- MERGES
+- small_body_routes
 - 15. Decisions and open questions
 - obsidian
 - release
 - security
-- .trivyignore.yaml
-- VaultError
-- AuthError
-- sim.rs
-- 4. User-facing design
-- 5. Architecture
+- source.ts
+- Token
 - 10. Operability
+- kura-crdgen/src/main.rs
+- web-console.mdx
+- security.mdx
+- authentik.mdx
+- .trivyignore.yaml
+- Restore
+- @weebo/operator-docs
+- sync.mdx
+- guides/cli.mdx
+- configuration.mdx
+- obsidian-plugin.mdx
+- helm-values.mdx
+- 18. Revision against the tree (2026-11-18)
+- Install
+- tenants-and-vaults.mdx
+- [v0.1.0-rc.1](https://github.com/batleforc/weebo-kura/compare/bc8e20a8d219f4411cfa01b7de8cccd55457fdd4..v0.1.0-rc.1) - 2026-11-21
+- Algorithm
+- dependencies
+- Spec fields
+- proxy.ts
+- architecture.mdx
+- upgrades.mdx
+- metrics.mdx
+- [[...slug]]/page.tsx
+- Spec fields
+- sim.rs
+- monitoring.mdx
+- app/layout.tsx
+- 4. User-facing design
+- scripts
+- Watched
+- 18. Revision against the tree (2026-11-17)
+- 7. Security
+- jobs
+- migrate-from-notion.mdx
+- 4. User-facing design
+- 4. User-facing design
+- problem-types.mdx
+- rate-limits.mdx
+- docs/eslint.config.mjs
+- rfc0002-batched-transfers.md
 - 15. Decisions and open questions
-- 15. Decisions and open questions
+- 6. Detailed design
+- RFC 0004 — implementation plan
+- RFC 0005 — implementation plan
+- 10. Operability
+- docs/index.mdx
+- reason-codes.mdx
+- allowBuilds
+- recipes.ts
+- perf
+- design.mdx
+- postcss.config.mjs
+- { generateStaticParams, generateMetadata }
 
 ## God Nodes (most connected - your core abstractions)
 1. `ApiError` - 203 edges
@@ -317,8 +365,8 @@
 4. `RemoteError` - 107 edges
 5. `VaultPath` - 87 edges
 6. `Env` - 75 edges
-7. `HostError` - 61 edges
-8. `withDevice()` - 61 edges
+7. `withDevice()` - 61 edges
+8. `HostError` - 61 edges
 9. `begin_tenant()` - 56 edges
 10. `AppState` - 53 edges
 
@@ -342,46 +390,46 @@
 - 3-file cycle: `crates/kura-server/src/app/mod.rs -> crates/kura-server/src/reconcile/snapshot.rs -> crates/kura-server/src/reconcile/mod.rs -> crates/kura-server/src/app/mod.rs`
 - 4-file cycle: `crates/kura-server/src/app/mod.rs -> crates/kura-server/src/reconcile/snapshot.rs -> crates/kura-server/src/reconcile/status.rs -> crates/kura-server/src/reconcile/mod.rs -> crates/kura-server/src/app/mod.rs`
 
-## Communities (299 total, 20 thin omitted)
+## Communities (348 total, 30 thin omitted)
 
 ### Community 0 - "VaultAccess"
-Cohesion: 0.10
-Nodes (37): TenantRole, Admin, Member, Owner, VaultRole, Editor, Manager, Viewer (+29 more)
+Cohesion: 0.11
+Nodes (34): VaultRole, Editor, Manager, Viewer, token_denied(), Principal, a_binding_without_folders_overrides_folders(), a_tenant_role_grant_overrides_folders() (+26 more)
 
 ### Community 1 - "reconcile/mod.rs"
-Cohesion: 0.13
-Nodes (25): ConfigFiles, bytes(), check(), json(), load_previous(), log_applied(), log_rejected(), Outcome (+17 more)
+Cohesion: 0.08
+Nodes (27): AppState, HttpSettings, bytes(), check(), json(), load_previous(), log_applied(), log_rejected() (+19 more)
 
 ### Community 2 - "common/mod.rs"
-Cohesion: 0.09
+Cohesion: 0.10
 Nodes (6): admin_url(), COUNTER, ISSUER, ROLE_PASSWORD, TestDb, TestKey
 
 ### Community 3 - "includes"
 Cohesion: 0.20
-Nodes (10): flatten, taskfile, includes, api, mise, perf, skills, template (+2 more)
+Nodes (10): flatten, taskfile, flatten, taskfile, includes, api, docs, mise (+2 more)
 
 ### Community 4 - "ProblemType"
 Cohesion: 0.06
-Nodes (35): Me, me(), tenant_role(), TenantMembership, Problem, RateLimited, Unavailable, body() (+27 more)
+Nodes (31): Problem, RateLimited, Unavailable, body(), every_type_renders_its_status_and_uri(), Problem, problem_response(), ProblemType (+23 more)
 
 ### Community 5 - "Env"
-Cohesion: 0.13
-Nodes (9): capture_logs(), Captured, two_replicas_creating_one_data_key_keep_one(), vault(), admin(), config(), reads_database_and_bucket_credentials_from_kv(), refuses_a_bad_address_and_a_bad_token() (+1 more)
+Cohesion: 0.17
+Nodes (7): two_replicas_creating_one_data_key_keep_one(), vault(), admin(), config(), reads_database_and_bucket_credentials_from_kv(), refuses_a_bad_address_and_a_bad_token(), server_policy_cannot_delete_key()
 
 ### Community 6 - "kura-server/src/config.rs"
-Cohesion: 0.06
-Nodes (34): alg_none_cannot_be_configured(), Algorithm, EdDSA, ES256, ES384, PS256, PS384, PS512 (+26 more)
+Cohesion: 0.08
+Nodes (24): alg_none_cannot_be_configured(), ConfigError, Invalid, Read, default_plugin_client(), discovery_is_optional_and_https(), err(), EXAMPLE (+16 more)
 
-### Community 7 - "rfc0001-implementation-plan.md"
-Cohesion: 0.09
-Nodes (14): Divergences, Progress, RFC 0002 — implementation plan, Divergences, Progress, RFC 0003 — implementation plan, Divergences, Progress (+6 more)
+### Community 7 - "RFC 0003 — implementation plan"
+Cohesion: 0.33
+Nodes (3): Divergences, Progress, RFC 0003 — implementation plan
 
 ### Community 8 - "steps"
-Cohesion: 0.23
-Nodes (12): steps, BASE, steps, env, if, name, run, uses (+4 more)
+Cohesion: 0.29
+Nodes (7): steps, BASE, env, if, name, with, fetch-depth
 
 ### Community 9 - "Duration"
-Cohesion: 0.09
+Cohesion: 0.07
 Nodes (11): digits(), Duration, Quantity, QuantityRepr, Bytes, Text, ScalarError, Duration (+3 more)
 
 ### Community 10 - "rules"
@@ -389,28 +437,28 @@ Cohesion: 0.07
 Nodes (29): extends, description, given, message, severity, then, overrides, files (+21 more)
 
 ### Community 11 - "app/notifications.rs"
-Cohesion: 0.10
-Nodes (36): DEVICE_HEADER, DeviceCaller, rate_limit(), require_device(), require_session(), authorization_rejects_control_characters(), authorize(), Channel (+28 more)
+Cohesion: 0.14
+Nodes (34): authorization_rejects_control_characters(), authorize(), Channel, check_authorization(), check_events(), check_name(), check_update(), check_url() (+26 more)
 
 ### Community 12 - "vars"
 Cohesion: 0.08
 Nodes (26): cmds, desc, preconditions, cmds, deps, desc, cmds, desc (+18 more)
 
 ### Community 13 - "validate/tests.rs"
-Cohesion: 0.13
-Nodes (29): parse_file(), validate(), binding_names_exactly_one_subject(), binding_paths_are_checked(), chunking_cannot_change_after_creation(), chunking_must_be_ordered_and_at_most_4_mib(), chunking_must_fit_the_algorithms_bounds(), claim_value_mapped_by_two_tenants_is_refused() (+21 more)
+Cohesion: 0.16
+Nodes (26): parse_file(), binding_names_exactly_one_subject(), binding_paths_are_checked(), chunking_cannot_change_after_creation(), chunking_must_be_ordered_and_at_most_4_mib(), chunking_must_fit_the_algorithms_bounds(), claim_value_mapped_by_two_tenants_is_refused(), defaults_are_on_the_closed_side() (+18 more)
 
 ### Community 14 - "ChunkHash"
-Cohesion: 0.09
-Nodes (5): Remote, RemoteError, Problem, Scripted, AppRemote
+Cohesion: 0.05
+Nodes (15): ChunkHash, lock(), Manifest, Prefetch, Prefetch<'a, R>, Prefetch<'_, R>, Remote, RemoteError (+7 more)
 
 ### Community 15 - "spec.rs"
-Cohesion: 0.13
-Nodes (22): ANNOTATIONS, Binding, Chunking, .DEFAULT, .MAX_CHUNK, ClaimMappings, ConfigCategory, Hotkeys (+14 more)
+Cohesion: 0.14
+Nodes (20): ANNOTATIONS, API_VERSION, Binding, Chunking, .DEFAULT, .MAX_CHUNK, ClaimMappings, ConfigSync (+12 more)
 
 ### Community 16 - "app/mod.rs"
-Cohesion: 0.11
-Nodes (19): account_routes(), ApiDoc, audit_denials(), CLIENT_HEADER, client_too_old(), client_version(), docs_csp(), healthz() (+11 more)
+Cohesion: 0.10
+Nodes (14): ApiDoc, audit_denials(), CLIENT_HEADER, client_too_old(), client_version(), docs_csp(), healthz(), MAX_BODY_BYTES (+6 more)
 
 ### Community 17 - "with"
 Cohesion: 0.08
@@ -421,12 +469,12 @@ Cohesion: 0.09
 Nodes (22): cmds, desc, cmds, desc, preconditions, cmds, desc, msg (+14 more)
 
 ### Community 19 - "RFC 0002 — Batched chunk and manifest transfers"
-Cohesion: 0.04
-Nodes (45): 10.1 Observability, 10.2 Failure modes, 10.3 Performance and capacity, 10. Operability, 11. Other concerns, 12. Alternatives considered, 13. Rollout and compatibility, 14. Test plan (+37 more)
+Cohesion: 0.10
+Nodes (20): 10.1 Observability, 10.2 Failure modes, 10.3 Performance and capacity, 10. Operability, 11. Other concerns, 12. Alternatives considered, 13. Rollout and compatibility, 14. Test plan (+12 more)
 
-### Community 20 - "NotificationsPage.vue"
-Cohesion: 0.05
-Nodes (42): admin, askRotate(), authorization, cancelRotate(), closeForm(), closeSecret(), confirmBox, copied (+34 more)
+### Community 20 - "notifications.mdx"
+Cohesion: 0.13
+Nodes (14): Delay across replicas, Delivery headers, Enable notifications on the server, Event types, In the console, Monitoring, Network protections, Payload (+6 more)
 
 ### Community 21 - "fuzz"
 Cohesion: 0.08
@@ -449,24 +497,24 @@ Cohesion: 0.09
 Nodes (21): cmds, desc, cmds, desc, cmds, desc, cmds, desc (+13 more)
 
 ### Community 26 - "KuraPlugin"
-Cohesion: 0.10
-Nodes (27): secretId(), ago(), en, fr, Key, roleName(), setLanguage(), t() (+19 more)
+Cohesion: 0.14
+Nodes (11): 17. References and sources, 7.1 Threat model, secretId(), t(), consoleUrl(), http(), KuraPlugin, ProblemsModal (+3 more)
 
 ### Community 27 - ".json"
-Cohesion: 0.18
+Cohesion: 0.20
 Nodes (5): Api, DeviceView, ScopeRule, TokenView, VaultView
 
 ### Community 28 - "tasks"
 Cohesion: 0.11
 Nodes (17): cmds, desc, cmds, desc, cmds, desc, cmds, desc (+9 more)
 
-### Community 29 - "super"
-Cohesion: 0.11
-Nodes (12): ReasonCode, .SUCCESS, admin_status(), AdminStatus, with_quota_conditions(), Removed, build(), ObjectStatus (+4 more)
+### Community 29 - "reconcile/status.rs"
+Cohesion: 0.22
+Nodes (5): build(), observed_generation(), ready(), StoredStatus, widened()
 
 ### Community 30 - "kura-wasm/src/lib.rs"
-Cohesion: 0.11
-Nodes (33): bytes(), changes(), commit(), File, folders(), get_blob(), get_blobs(), get_chunk() (+25 more)
+Cohesion: 0.10
+Nodes (35): bytes(), changes(), commit(), decode(), File, folders(), get_blob(), get_blobs() (+27 more)
 
 ### Community 31 - "fuzz.yml"
 Cohesion: 0.13
@@ -480,13 +528,13 @@ Nodes (14): task, cmds, internal, cmds, desc, cmds, desc, tasks (+6 more)
 Cohesion: 0.05
 Nodes (43): cmd, for, var, cmds, desc, cmds, desc, requires (+35 more)
 
-### Community 34 - "HomePage.vue"
-Cohesion: 0.06
-Nodes (39): ConsoleConfig, loadedConfig(), RFC-0003, anything(), Targets, targets(), RFC-0003, deviceOf() (+31 more)
+### Community 34 - "NotificationsPage.vue"
+Cohesion: 0.05
+Nodes (40): admin, askRotate(), authorization, cancelRotate(), closeForm(), closeSecret(), confirmBox, copied (+32 more)
 
 ### Community 35 - "tests/notifications.rs"
-Cohesion: 0.14
-Nodes (21): a_manager_sees_their_vaults_only_and_off_means_409(), a_rule_signs_its_deliveries_and_never_shows_its_secrets(), Admin, delivery_result_is_coarse_and_body_unread(), drain(), events_reach_their_rules_with_ids_only_and_retries_back_off(), Got, no_webhook_reaches_an_address_the_operator_did_not_allow() (+13 more)
+Cohesion: 0.13
+Nodes (22): a_manager_sees_their_vaults_only_and_off_means_409(), a_rule_signs_its_deliveries_and_never_shows_its_secrets(), Admin, delivery_result_is_coarse_and_body_unread(), drain(), events_reach_their_rules_with_ids_only_and_retries_back_off(), Got, no_webhook_reaches_an_address_the_operator_did_not_allow() (+14 more)
 
 ### Community 36 - "6. Detailed design"
 Cohesion: 0.15
@@ -497,12 +545,12 @@ Cohesion: 0.15
 Nodes (12): task, cmds, desc, cmds, desc, cmds, desc, tasks (+4 more)
 
 ### Community 38 - "ApiError"
-Cohesion: 0.09
-Nodes (45): ChunkHash, Body, batch_blobs(), batch_chunks(), BATCH_FETCHES, batch_hashes(), BATCHES_IN_FLIGHT, BlobBatchRequest (+37 more)
+Cohesion: 0.10
+Nodes (43): Body, needed_claims(), batch_blobs(), batch_chunks(), BATCH_FETCHES, batch_hashes(), BATCHES_IN_FLIGHT, BlobBatchRequest (+35 more)
 
 ### Community 39 - "RFC 0001 — weebo-kura: self-hosted sync backend for Obsidian vaults"
-Cohesion: 0.17
-Nodes (12): 11. Other concerns, 12. Alternatives considered, 13. Rollout and compatibility, 14. Test plan, 16. Implementation phases, 1. Summary, 2. Motivation, 3. Goals / non-goals (+4 more)
+Cohesion: 0.10
+Nodes (20): 11. Other concerns, 12. Alternatives considered, 13. Rollout and compatibility, 14. Test plan, 15. Decisions and open questions, 16. Implementation phases, 1. Summary, 2. Motivation (+12 more)
 
 ### Community 40 - "tasks"
 Cohesion: 0.17
@@ -522,27 +570,27 @@ Nodes (22): BASE_URL, BLOB, SIZE, TOKEN, VAULT, CLIENT, headers(), pullAll() (+1
 
 ### Community 44 - "ref_vitest"
 Cohesion: 0.08
-Nodes (22): axios, pinia, vue-router, @vue/test-utils, forgetDiscovery(), setConfig(), i18n, localeOf() (+14 more)
+Nodes (24): HomePage(), pinia, vue-router, @vue/test-utils, forgetDiscovery(), ConsoleConfig, setConfig(), RFC-0003 (+16 more)
 
 ### Community 45 - "openapi_contract.rs"
 Cohesion: 0.29
 Nodes (7): every_success_response_declares_its_body(), Exemptions, MIN_ROUTES, NO_BODY, success_responses(), the_guard_reports_a_bodiless_response_and_a_stale_exemption(), violations()
 
 ### Community 46 - "SharedState"
-Cohesion: 0.10
-Nodes (29): Caller, needed_claims(), check_live_quota(), Device, device_event(), device(), DeviceVault, insert_device() (+21 more)
+Cohesion: 0.11
+Nodes (29): Caller, check_live_quota(), Device, device_event(), device(), DeviceVault, insert_device(), list_devices() (+21 more)
 
 ### Community 47 - "ConfigPage.vue"
 Cohesion: 0.07
 Nodes (41): anyHiddenSettings, applies, canRetry, edited, entries, error, file, groups (+33 more)
 
 ### Community 48 - "reader.rs"
-Cohesion: 0.12
-Nodes (13): bearer(), client(), KeyCaller, NOT_UPLOADED, ReadAccess, Reader, Device, Key (+5 more)
+Cohesion: 0.13
+Nodes (13): bearer(), client(), console_writes_nothing(), KeyCaller, NOT_UPLOADED, Reader, Device, Key (+5 more)
 
-### Community 49 - "VaultOverview.vue"
-Cohesion: 0.04
-Nodes (51): 14. Test plan, 16. Implementation phases, 6.1 `kura-core`, 6.2 Server, 6.3 Console, 6. Detailed design, 6.P Proof against a real client, signOut() (+43 more)
+### Community 49 - "HomePage.vue"
+Cohesion: 0.03
+Nodes (76): 14. Test plan, 16. Implementation phases, 6.1 `kura-core`, 6.2 Server, 6.3 Console, 6. Detailed design, 6.P Proof against a real client, signOut() (+68 more)
 
 ### Community 50 - "metrics.rs"
 Cohesion: 0.16
@@ -553,44 +601,44 @@ Cohesion: 0.29
 Nodes (7): 7.1 Threat model, 7.2 Authentication and authorisation, 7.3 Input handling and injection, 7.4 Secrets and cryptography, 7.5 Abuse and resource exhaustion, 7.6 Existing defences that still hold, 7. Security
 
 ### Community 52 - "RFC 0007 — Folders as synced entries"
-Cohesion: 0.08
-Nodes (23): 10. Operability, 11. Other concerns, 12. Alternatives considered, 13. Rollout and compatibility, 14. Test plan, 15. Decisions and open questions, 16. Implementation phases, 1. Summary (+15 more)
+Cohesion: 0.06
+Nodes (34): 10. Operability, 11. Other concerns, 12. Alternatives considered, 13. Rollout and compatibility, 14. Test plan, 15. Decisions and open questions, 16. Implementation phases, 18.1 What shipped (+26 more)
 
 ### Community 53 - "src/maintenance.rs"
-Cohesion: 0.06
-Nodes (45): an_object_gone_since_the_listing_is_skipped(), BackupError, Busy, Db, LockLost, NoStorage, Objects, Other (+37 more)
+Cohesion: 0.14
+Nodes (14): MaintenanceConfig, BACKUP_LOCK, BATCH, DELETED_ENTRY_TTL_HOURS, MAX_HOURS, pass(), PASS_LOCK, PAUSE (+6 more)
 
 ### Community 54 - "src/sync.rs"
-Cohesion: 0.10
-Nodes (46): a_refused_push_counts_what_it_kept(), Applied, Deferred, Done, apply(), apply_folder(), BATCH, clear_path() (+38 more)
+Cohesion: 0.09
+Nodes (56): a_refused_push_counts_what_it_kept(), Applied, Deferred, Done, apply(), apply_folder(), BATCH, blob_of() (+48 more)
 
 ### Community 55 - "KeysPage.vue"
-Cohesion: 0.09
-Nodes (21): allRevoked, error, loading, marks, person(), props, query, revokedCount (+13 more)
+Cohesion: 0.10
+Nodes (20): allRevoked, error, loading, marks, person(), props, query, revokedCount (+12 more)
 
 ### Community 56 - "attrs"
 Cohesion: 0.04
 Nodes (45): access_code_validity, access_token_validity, authentication, authorization_flow, certificate_data, client_id, client_type, default (+37 more)
 
-### Community 57 - "ref_vitest"
+### Community 57 - "session.ts"
 Cohesion: 0.06
 Nodes (45): RFC-6749, RFC-7636, 17. References and sources, discover(), load(), ProviderMetadata, trim(), RFC-0003 (+37 more)
 
 ### Community 58 - "path.rs"
-Cohesion: 0.14
-Nodes (10): allowed_char(), check(), INVALID_PATH, MAX_EXTENSION, MAX_PATH, MAX_SEGMENT, MAX_SUFFIX, names_follow_the_rules() (+2 more)
+Cohesion: 0.07
+Nodes (26): allowed_char(), check(), ignorable(), INVALID_PATH, MAX_EXTENSION, MAX_PATH, MAX_SEGMENT, MAX_SUFFIX (+18 more)
 
 ### Community 59 - "kura-api"
-Cohesion: 0.40
-Nodes (6): kura-api, kura-cli, kura-core, kura-fuzz, kura-server, kura-wasm
+Cohesion: 0.33
+Nodes (7): kura-api, kura-cli, kura-core, kura-crdgen, kura-fuzz, kura-server, kura-wasm
 
 ### Community 64 - "Fail"
-Cohesion: 0.32
-Nodes (18): access_token(), config(), connect_and_watch(), Ctx, device_login(), devices(), entry_of(), Fail (+10 more)
+Cohesion: 0.30
+Nodes (19): access_token(), config(), connect_and_watch(), Ctx, device_login(), devices(), entry_of(), Fail (+11 more)
 
 ### Community 65 - "problem"
-Cohesion: 0.11
-Nodes (31): problem(), vault_id(), a_web_device_never_gets_the_configuration_space(), bindings_need_manager(), idle_web_devices_are_purged(), me_shows_only_own_tenants(), the_console_is_served_with_its_headers(), web() (+23 more)
+Cohesion: 0.10
+Nodes (33): capture_logs(), problem(), vault_id(), a_web_device_never_gets_the_configuration_space(), bindings_need_manager(), idle_web_devices_are_purged(), me_shows_only_own_tenants(), the_console_is_served_with_its_headers() (+25 more)
 
 ### Community 67 - "ui.rs"
 Cohesion: 0.14
@@ -605,60 +653,60 @@ Cohesion: 0.06
 Nodes (32): cmds, desc, dir, cmds, deps, desc, dir, cmds (+24 more)
 
 ### Community 71 - "chunk.rs"
-Cohesion: 0.13
-Nodes (17): an_edit_in_the_middle_keeps_most_chunks(), blob_hashes_bind_size_and_order(), ChunkError, Hash, Params, ChunkParams, chunks(), ChunkSpan (+9 more)
+Cohesion: 0.14
+Nodes (15): an_edit_in_the_middle_keeps_most_chunks(), blob_hashes_bind_size_and_order(), ChunkError, Hash, Params, ChunkParams, chunks(), ChunkSpan (+7 more)
 
 ### Community 72 - "auth/mod.rs"
-Cohesion: 0.10
-Nodes (9): algorithm(), LEEWAY_SECS, MAX_TOKEN_BYTES, now(), USERINFO_CACHE, UserinfoCache, Verifier, BearerToken (+1 more)
+Cohesion: 0.09
+Nodes (15): algorithm(), AuthError, Invalid, Jwt, Provider, crate::problem::ApiError, LEEWAY_SECS, MAX_TOKEN_BYTES (+7 more)
 
 ### Community 73 - "Notifier"
-Cohesion: 0.10
-Nodes (10): Notifier, NotifierOptions, POLL_MS, SILENCE_MS, SocketLike, Timers, setup(), ManualTimers (+2 more)
+Cohesion: 0.14
+Nodes (8): Notifier, NotifierOptions, POLL_MS, SILENCE_MS, SocketLike, Timers, FakeSocket, setup()
 
 ### Community 74 - "app/events.rs"
 Cohesion: 0.07
-Nodes (21): ACCESS_REVOKED, create_ticket(), DEVICE_REVOKED, events(), EventsQuery, Notice, Change, Ping (+13 more)
+Nodes (22): ACCESS_REVOKED, create_ticket(), DEVICE_REVOKED, events(), EventsQuery, Notice, Change, Ping (+14 more)
 
-### Community 75 - "PathError"
-Cohesion: 0.14
-Nodes (13): nfc_is_required_on_the_wire_and_applied_locally(), PathError, Control, DotSegment, Empty, EmptySegment, Hidden, Ignorable (+5 more)
+### Community 75 - "steps"
+Cohesion: 0.06
+Nodes (35): permissions, runs-on, steps, concurrency, cancel-in-progress, group, environment, needs (+27 more)
 
 ### Community 76 - "auth.ts"
 Cohesion: 0.10
-Nodes (27): RFC-8628, AuthError, AuthFailure, call(), discover(), Discovery, fnv(), Http (+19 more)
+Nodes (25): RFC-8628, AuthError, AuthFailure, call(), discover(), Discovery, fnv(), Http (+17 more)
 
 ### Community 77 - "Vault"
-Cohesion: 0.12
-Nodes (11): DatabaseSecret, default_region(), kv2_paths_split_into_mount_and_secret(), refresh_credentials(), rotate_database(), secrets_never_print(), SERVICE_ACCOUNT_TOKEN, split_kv2() (+3 more)
+Cohesion: 0.11
+Nodes (18): client_err(), DatabaseSecret, decode_b64(), default_region(), kv2_paths_split_into_mount_and_secret(), refresh_credentials(), rotate_database(), secrets_never_print() (+10 more)
 
 ### Community 78 - "scope.rs"
-Cohesion: 0.21
-Nodes (7): a_scope_reads_and_writes_under_its_folders_only(), empty_scope_sees_nothing(), fold(), like_patterns_escape_wildcards(), MAX_SCOPES, PathScope, scope_of()
+Cohesion: 0.13
+Nodes (16): a_scope_reads_and_writes_under_its_folders_only(), check_folder(), check_rules(), empty_scope_sees_nothing(), fold(), like_patterns_escape_wildcards(), MAX_SCOPES, PathScope (+8 more)
 
 ### Community 79 - "ObsidianHost"
-Cohesion: 0.14
-Nodes (7): Progress, HostOptions, ObsidianHost, parent(), toBuffer(), RFC-0007, host()
+Cohesion: 0.10
+Nodes (13): 17. References and sources, 2. Motivation, 6.1 `kura-core`, 6.2 Server, 6.3 Clients, 6. Detailed design, 6.P Proof against a real client, HostOptions (+5 more)
 
 ### Community 80 - "api.rs"
-Cohesion: 0.10
-Nodes (31): a_405_is_an_older_server_and_a_404_is_not(), ATTEMPTS, check(), Chunking, CLIENT, DeviceCode, discover(), Discovery (+23 more)
+Cohesion: 0.12
+Nodes (28): a_405_is_an_older_server_and_a_404_is_not(), ATTEMPTS, Chunking, CLIENT, DeviceCode, discover(), Discovery, http() (+20 more)
 
 ### Community 81 - "VaultRemote"
-Cohesion: 0.25
-Nodes (3): body(), newer(), VaultRemote
+Cohesion: 0.18
+Nodes (5): body(), check(), exchange(), newer(), VaultRemote
 
 ### Community 82 - "kura-api/src/lib.rs"
-Cohesion: 0.11
+Cohesion: 0.12
 Nodes (27): TenantSlug, ConfigError, parse_document(), Resource, Tenant, Vault, Source, typed() (+19 more)
 
 ### Community 83 - "commands.rs"
 Cohesion: 0.10
-Nodes (18): a_host_name_is_a_valid_device_name(), BACKOFF_MAX, BACKOFF_MIN, backoff_stays_between_one_and_sixty_seconds(), bytes_for_people(), code_of(), Diff, diff() (+10 more)
+Nodes (27): a_host_name_is_a_valid_device_name(), attach(), BACKOFF_MAX, BACKOFF_MIN, backoff_stays_between_one_and_sixty_seconds(), bytes_for_people(), code_of(), confirm() (+19 more)
 
 ### Community 84 - "PluginGuard"
-Cohesion: 0.08
-Nodes (26): because(), DEFAULTS, notify(), readSettings(), registry(), Settings, sleep(), timers (+18 more)
+Cohesion: 0.11
+Nodes (19): Progress, Tokens, readSettings(), registry(), codeHashes(), emptyConsent(), forget(), obsidianRegistry() (+11 more)
 
 ### Community 85 - "with"
 Cohesion: 0.07
@@ -666,31 +714,31 @@ Nodes (27): with, cache-from, cache-to, context, file, format, image, key (+19 m
 
 ### Community 86 - "withDevice"
 Cohesion: 0.05
-Nodes (67): withDevice(), detailOf(), KNOWN, messageOf(), problemType(), retryable(), RFC-9457, load() (+59 more)
+Nodes (62): axios, browserName(), ensureDevice(), Retryable, RFC-0003, withDevice(), detailOf(), KNOWN (+54 more)
 
 ### Community 87 - "ui/package.json"
-Cohesion: 0.08
-Nodes (30): @biomejs/biome, @hey-api/openapi-ts, jsdom, tailwindcss, @tailwindcss/vite, @vitejs/plugin-vue, vue-tsc, devDependencies (+22 more)
+Cohesion: 0.09
+Nodes (28): @biomejs/biome, @hey-api/openapi-ts, jsdom, @vitejs/plugin-vue, vue-tsc, devDependencies, @biomejs/biome@^2.6.3, @hey-api/openapi-ts@~0.99.0 (+20 more)
 
-### Community 88 - "store/keys.rs"
-Cohesion: 0.17
-Nodes (8): Cache, CACHE_SIZE, CACHE_TTL, DataKeys, Slot, Notifications, Vault, transit_key_name()
+### Community 88 - "RFC 0009 — Kura operator"
+Cohesion: 0.05
+Nodes (41): 10.1 Observability, 10.2 Failure modes, 10.3 Performance and capacity, 10. Operability, 11. Other concerns, 12. Alternatives considered, 13. Rollout and compatibility, 14. Test plan (+33 more)
 
 ### Community 89 - "tasks"
 Cohesion: 0.07
 Nodes (26): tasks, ui:audit, ui:build, ui:client, ui:install, ui:lint, ui:test, cmds (+18 more)
 
 ### Community 90 - "RFC 0008 — The synced Obsidian configuration in the console"
-Cohesion: 0.07
-Nodes (30): 10.1 Observability, 10.2 Failure modes, 10.3 Performance and capacity, 10. Operability, 11. Other concerns, 12. Alternatives considered, 13. Rollout and compatibility, 15. Decisions and open questions (+22 more)
+Cohesion: 0.12
+Nodes (16): 11. Other concerns, 12. Alternatives considered, 13. Rollout and compatibility, 15. Decisions and open questions, 1. Summary, 2. Motivation, 3. Goals / non-goals, 5.1 The web device on the server (+8 more)
 
 ### Community 91 - "oidc"
 Cohesion: 0.06
 Nodes (33): mount, role, listen, api, metrics, notifications, enabled, webhook (+25 more)
 
 ### Community 92 - "ApiError"
-Cohesion: 0.09
-Nodes (70): CommitRequest, CommitResponse, OpResult, RestoreRequest, accepted(), apply(), apply_config(), apply_delete() (+62 more)
+Cohesion: 0.06
+Nodes (84): ConfigCategory, Hotkeys, Plugins, Snippets, Themes, CommitRequest, CommitResponse, OpResult (+76 more)
 
 ### Community 93 - "tests/tokens.rs"
 Cohesion: 0.16
@@ -701,20 +749,20 @@ Cohesion: 0.12
 Nodes (15): compilerOptions, exactOptionalPropertyTypes, isolatedModules, lib, module, moduleResolution, noEmit, noFallthroughCasesInSwitch (+7 more)
 
 ### Community 95 - "engine.rs"
-Cohesion: 0.24
-Nodes (28): a_batched_pull_makes_no_single_reads_and_drops_forged_records(), a_change_of_case_lands_on_a_case_insensitive_disk(), a_conflict_on_an_open_note_fails_that_file_only(), a_copied_folder_starts_fresh(), a_known_file_grown_past_the_limit_is_not_deleted(), a_merged_push_writes_the_merged_head(), a_move_killed_before_the_old_file_went_trashes_it_on_restart(), a_path_held_by_another_known_entry_is_handed_over() (+20 more)
+Cohesion: 0.16
+Nodes (29): a_batched_pull_makes_no_single_reads_and_drops_forged_records(), a_change_of_case_lands_on_a_case_insensitive_disk(), a_conflict_on_an_open_note_fails_that_file_only(), a_copied_folder_starts_fresh(), a_known_file_grown_past_the_limit_is_not_deleted(), a_merged_push_writes_the_merged_head(), a_move_killed_before_the_old_file_went_trashes_it_on_restart(), a_path_held_by_another_known_entry_is_handed_over() (+21 more)
 
 ### Community 96 - "tests/events.rs"
-Cohesion: 0.23
+Cohesion: 0.21
 Nodes (14): a_commit_reaches_the_socket(), a_notification_crosses_replicas(), a_socket_closes_when_its_caller_loses_the_vault(), a_ticket_flood_is_limited_per_address(), expired_ticket_is_refused(), next(), notice_has_no_path(), replica() (+6 more)
 
 ### Community 97 - "auth/keys.rs"
-Cohesion: 0.12
+Cohesion: 0.13
 Nodes (13): Cache, decode_set(), Discovery, Keys, KeySource, Fixed, Http, MAX_AGE (+5 more)
 
 ### Community 98 - "RFC 0003 — Web console (front and back office) and notifications"
-Cohesion: 0.17
-Nodes (12): 11. Other concerns, 12. Alternatives considered, 13. Rollout and compatibility, 14. Test plan, 16. Implementation phases, 1. Summary, 2. Motivation, 3. Goals / non-goals (+4 more)
+Cohesion: 0.13
+Nodes (15): 11. Other concerns, 12. Alternatives considered, 13. Rollout and compatibility, 14. Test plan, 15. Decisions and open questions, 16. Implementation phases, 1. Summary, 2. Motivation (+7 more)
 
 ### Community 99 - "task"
 Cohesion: 0.15
@@ -729,8 +777,8 @@ Cohesion: 0.26
 Nodes (9): a_client_below_its_minimum_is_told_to_upgrade(), call(), get(), healthz_always_answers_and_readyz_follows_the_config(), lazy_pool(), requires_a_token_and_the_platform_admin_claim(), scalar_is_served_with_its_own_csp(), state() (+1 more)
 
 ### Community 102 - "files.rs"
-Cohesion: 0.24
-Nodes (11): FilesError, Io, TooLarge, TooMany, generation_depends_on_names_and_contents(), MAX_FILE_BYTES, MAX_FILES, read_dir() (+3 more)
+Cohesion: 0.28
+Nodes (12): ConfigFiles, FilesError, Io, TooLarge, TooMany, generation_depends_on_names_and_contents(), MAX_FILE_BYTES, MAX_FILES (+4 more)
 
 ### Community 103 - "tasks"
 Cohesion: 0.13
@@ -744,16 +792,16 @@ Nodes (16): a_retired_key_stops_verifying_after_max_age(), a_slow_fetch_does_not
 Cohesion: 0.09
 Nodes (20): DeviceAction, Revoke, TokenAction, Create, List, Revoke, Cli, Command (+12 more)
 
-### Community 106 - "app/sync_state.rs"
-Cohesion: 0.17
-Nodes (11): SyncCounts, caught_up(), COUNT_MAX, DeviceReport, DeviceSync, my_device_vaults(), pushed(), put_report() (+3 more)
+### Community 106 - "plugin/src/main.ts"
+Cohesion: 0.11
+Nodes (27): ago(), en, fr, Key, roleName(), setLanguage(), entryOf(), RFC-0005 (+19 more)
 
 ### Community 107 - "kura-server/src/main.rs"
 Cohesion: 0.15
 Nodes (19): CorsConfig, ServerConfig, backup(), check_chunks(), CONFIG_DIR_ENV, connect(), DATABASE_URL_ENV, dump_spec() (+11 more)
 
 ### Community 108 - "tests/merge.rs"
-Cohesion: 0.36
+Cohesion: 0.25
 Nodes (7): a_rename_on_one_side_and_edits_on_both_merge(), concurrent_line_edits_lose_nothing(), edits_of_different_lines_merge(), overlapping_and_non_text_edits_conflict(), rev(), S, setup()
 
 ### Community 109 - "env"
@@ -773,27 +821,27 @@ Cohesion: 0.29
 Nodes (8): as(), cleanup(), fail(), pass(), real(), sync.sh script, sql(), tokens
 
 ### Community 113 - "tests/sync.rs"
-Cohesion: 0.12
-Nodes (29): ChangesQuery, EntriesQuery, get_changes(), get_entries(), Head, PAGE, query(), response() (+21 more)
+Cohesion: 0.26
+Nodes (20): a_crowded_name_still_gets_a_unique_one(), a_path_freed_and_taken_in_one_commit(), a_pull_during_commits_never_passes_an_unseen_change(), blob(), changes_page_by_seq_and_refuse_a_lost_history(), commit_with_foreign_entry_id_is_refused(), concurrent_commits_never_skip_a_seq(), diverging_edits_become_a_conflict_file() (+12 more)
 
 ### Community 114 - "ObsidianHost"
-Cohesion: 0.06
-Nodes (10): Adapter, core, RFC-0002, Entry, FakeServer, json(), MemAdapter, RFC-0002 (+2 more)
+Cohesion: 0.08
+Nodes (3): Adapter, MemAdapter, obsidian()
 
 ### Community 115 - "cli.rs"
-Cohesion: 0.19
+Cohesion: 0.23
 Nodes (22): a_long_absence_resyncs_and_history_restores(), a_rewound_server_gets_everything_back(), a_scoped_token_syncs_its_folders_and_refuses_the_rest(), a_write_token_refuses_what_leaves_its_folder(), an_expired_access_token_is_renewed_mid_run(), apply_docs(), code(), fake_issuer() (+14 more)
 
 ### Community 116 - "dev:network"
 Cohesion: 0.40
 Nodes (5): cmds, desc, internal, status, dev:network
 
-### Community 117 - "Operating kura-server (phases 1 and 2)"
-Cohesion: 0.09
-Nodes (23): 10. The Obsidian plugin, 11. Local stack, 12. Maintenance, backups and restore, 13. Installing with Helm, 1. The process, 2. PostgreSQL, 3. `server.yaml`, 4. Tenants and vaults (+15 more)
+### Community 117 - "versions"
+Cohesion: 0.06
+Nodes (30): jsonPath, name, type, apiVersion, kind, metadata, name, kind (+22 more)
 
 ### Community 118 - "Serialize"
-Cohesion: 0.18
+Cohesion: 0.10
 Nodes (4): DnsLabel, NameError, String, Metadata
 
 ### Community 119 - "dev:env"
@@ -810,15 +858,15 @@ Nodes (22): steps, steps, steps, GH_TOKEN, REPO, TAG, VERSION, steps (+14 more)
 
 ### Community 123 - "BrowsePage.vue"
 Cohesion: 0.03
-Nodes (90): 17. References and sources, 2. Motivation, asking, byName, canRetry, closeHistory(), copied, crumbs (+82 more)
+Nodes (83): asking, byName, canRetry, closeHistory(), copied, crumbs, cut, doc (+75 more)
 
 ### Community 124 - "Divergences"
 Cohesion: 0.13
 Nodes (15): §8 additions (phase 2), §8 additions (phase 3), §8 additions (phase 5), §8 as built (phase 1), Divergences, Phase 1 eco-design review (2026-11-14), Phase 1 security review (2026-11-14), Phase 2 security review (2026-11-14) (+7 more)
 
 ### Community 125 - "vite.config.ts"
-Cohesion: 0.13
-Nodes (11): vite, BUDGET_BYTES, buildChecks(), gzippedBytes(), inlineScripts(), RFC-0003, vite@^8.3.8, pluginZip() (+3 more)
+Cohesion: 0.12
+Nodes (13): @tailwindcss/vite, vite, BUDGET_BYTES, buildChecks(), gzippedBytes(), inlineScripts(), RFC-0003, @tailwindcss/vite@^4.3.5 (+5 more)
 
 ### Community 126 - "tests"
 Cohesion: 0.14
@@ -841,8 +889,8 @@ Cohesion: 0.31
 Nodes (12): bot(), cleanup(), fail(), gm(), head_seq(), key_curl(), pass(), refused() (+4 more)
 
 ### Community 131 - "ci.yml"
-Cohesion: 0.22
-Nodes (8): name, on, pull_request, push, workflow_dispatch, permissions, contents, branches
+Cohesion: 0.40
+Nodes (5): on, pull_request, push, workflow_dispatch, branches
 
 ### Community 132 - "manifest.json"
 Cohesion: 0.25
@@ -853,32 +901,32 @@ Cohesion: 0.09
 Nodes (26): ScopeMode, Read, Write, ScopeRule, check_cidrs(), check_folder(), check_name(), check_prefix() (+18 more)
 
 ### Community 134 - "reconcile.rs"
-Cohesion: 0.18
-Nodes (18): no_key_verifier(), a_config_change_is_seen_before_the_poll(), a_failed_tick_is_retried_as_a_local_change(), an_older_replica_never_overwrites_newer_state(), apply(), count_state(), DIRS, files() (+10 more)
+Cohesion: 0.20
+Nodes (17): no_key_verifier(), a_config_change_is_seen_before_the_poll(), a_failed_tick_is_retried_as_a_local_change(), apply(), count_state(), DIRS, files(), invalid_document_keeps_last_config() (+9 more)
 
 ### Community 135 - "steps"
 Cohesion: 0.08
 Nodes (34): runs-on, steps, permissions, runs-on, steps, jobs, audit, image (+26 more)
 
-### Community 136 - "jobs"
-Cohesion: 0.29
-Nodes (7): runs-on, jobs, check, plugin, ui, runs-on, runs-on
+### Community 136 - "run"
+Cohesion: 0.21
+Nodes (12): runs-on, steps, docs, plugin, ui, runs-on, steps, run (+4 more)
 
 ### Community 137 - "test"
-Cohesion: 0.29
-Nodes (7): KURA_TEST_DATABASE_URL, KURA_TEST_S3_ENDPOINT, KURA_TEST_VAULT_ADDR, KURA_TEST_VAULT_TOKEN, test, env, runs-on
+Cohesion: 0.25
+Nodes (8): KURA_TEST_DATABASE_URL, KURA_TEST_S3_ENDPOINT, KURA_TEST_VAULT_ADDR, KURA_TEST_VAULT_TOKEN, test, env, runs-on, services
 
 ### Community 138 - "s3"
-Cohesion: 0.29
-Nodes (7): RUSTFS_ACCESS_KEY, RUSTFS_SECRET_KEY, env, image, ports, s3, services
+Cohesion: 0.33
+Nodes (6): RUSTFS_ACCESS_KEY, RUSTFS_SECRET_KEY, env, image, ports, s3
 
 ### Community 139 - "lint"
 Cohesion: 0.29
 Nodes (7): task, cmds, desc, cmds, desc, lint, recu
 
-### Community 140 - "open"
-Cohesion: 0.18
-Nodes (7): open(), categories_and_the_kura_plugin(), category(), Use, Changes, List, Write
+### Community 140 - "changes.rs"
+Cohesion: 0.21
+Nodes (11): ChangesResponse, ChangesQuery, EntriesQuery, get_changes(), get_entries(), Head, open(), PAGE (+3 more)
 
 ### Community 141 - "postgres"
 Cohesion: 0.33
@@ -893,8 +941,8 @@ Cohesion: 0.29
 Nodes (6): allowBuilds, esbuild, auditConfig, ignoreGhsas, overrides, minimatch
 
 ### Community 144 - "KeysPage.vue"
-Cohesion: 0.03
-Nodes (85): RFC-3339, 11. Other concerns, vue, vue-i18n, emit, { t }, { t }, box (+77 more)
+Cohesion: 0.02
+Nodes (101): RFC-3339, 11. Other concerns, vue, vue-i18n, emit, { t }, { t }, box (+93 more)
 
 ### Community 145 - "deploy.yaml"
 Cohesion: 0.17
@@ -909,27 +957,27 @@ Cohesion: 0.07
 Nodes (41): 5.1 The pull window, 5.2 One visibility query per batch, 5. Architecture, installAuth(), announced, close(), id, localeNote (+33 more)
 
 ### Community 148 - "vaults.rs"
-Cohesion: 0.14
-Nodes (25): BindingRow, BindingView, ChunkingView, create_vault(), CreateVault, delete_binding(), delete_vault(), folder_pattern() (+17 more)
+Cohesion: 0.10
+Nodes (30): DEVICE_HEADER, DeviceCaller, rate_limit(), require_device(), require_session(), BindingRow, BindingView, ChunkingView (+22 more)
 
 ### Community 149 - "tests/search.rs"
 Cohesion: 0.27
 Nodes (7): Round, a_failing_index_job_is_kept_after_five_attempts(), a_scoped_token_searches_under_its_prefix(), S, search_is_opt_in_indexes_markdown_and_follows_edits(), setup(), the_queries_fold_accents_and_stems()
 
 ### Community 150 - "notifier.rs"
-Cohesion: 0.07
-Nodes (36): BACKOFF, classify(), context(), deliver(), EVENTS, Expiring, Fact, Fact<'a> (+28 more)
+Cohesion: 0.08
+Nodes (34): BACKOFF, classify(), context(), deliver(), EVENTS, Expiring, Fact<'a>, hourly() (+26 more)
 
 ### Community 151 - "tenants.yaml"
 Cohesion: 0.25
 Nodes (7): KuraTenant dev, KuraVault notes, apiVersion, kind, metadata, apiVersion, kind
 
 ### Community 152 - "RFC 0006 — Sync state per device and per vault"
-Cohesion: 0.17
+Cohesion: 0.15
 Nodes (12): 12. Alternatives considered, 13. Rollout and compatibility, 14. Test plan, 16. Implementation phases, 17. References and sources, 1. Summary, 2. Motivation, 3. Goals / non-goals (+4 more)
 
 ### Community 153 - "chunk_stats.rs"
-Cohesion: 0.24
+Cohesion: 0.27
 Nodes (8): BATCH_BYTES, BATCH_RECORDS, batches(), files(), KIB, main(), pct(), SETTINGS
 
 ### Community 155 - "analyze"
@@ -937,8 +985,8 @@ Cohesion: 0.08
 Nodes (26): if, permissions, runs-on, steps, strategy, jobs, analyze, language (+18 more)
 
 ### Community 156 - "crypto.rs"
-Cohesion: 0.11
-Nodes (22): a_chunk_opens_only_at_its_own_address_vault_and_key(), aad(), CODEC_NONE, CryptoError, Corrupt, KeyLength, Malformed, Random (+14 more)
+Cohesion: 0.05
+Nodes (41): a_chunk_opens_only_at_its_own_address_vault_and_key(), aad(), CODEC_NONE, CryptoError, Corrupt, KeyLength, Malformed, Random (+33 more)
 
 ### Community 157 - "rules"
 Cohesion: 0.18
@@ -946,11 +994,11 @@ Nodes (10): summary, groups, name, rules, severity, alert, annotations, expr (+2
 
 ### Community 158 - "HistoryPanel.vue"
 Cohesion: 0.06
-Nodes (31): 18.1 What shipped, browserName(), ensureDevice(), Retryable, RFC-0003, RFC-0003, blobManifest(), call() (+23 more)
+Nodes (44): 18.1 What shipped, prepare(), BRIDGE, bridgeHash(), RFC-0005, blobManifest(), call(), ContentError (+36 more)
 
-### Community 159 - "RemoteAdapter"
-Cohesion: 0.17
-Nodes (4): decode(), hashes(), RemoteAdapter, SyncOptions
+### Community 159 - "versions"
+Cohesion: 0.06
+Nodes (30): jsonPath, name, type, apiVersion, kind, metadata, name, kind (+22 more)
 
 ### Community 160 - "scripts"
 Cohesion: 0.25
@@ -969,8 +1017,8 @@ Cohesion: 0.18
 Nodes (10): summary, groups, name, rules, severity, alert, annotations, expr (+2 more)
 
 ### Community 164 - "net.rs"
-Cohesion: 0.19
-Nodes (13): AddressRefused, client_addr(), client_addr_strict(), forwarding_headers_count_only_from_trusted_proxies(), GuardedResolver, headers(), Lookup, the_strict_form_never_takes_the_proxy_for_the_client() (+5 more)
+Cohesion: 0.12
+Nodes (19): a_target_is_https_without_credentials(), ip(), MAX_URL, private_and_special_addresses_are_refused(), refused_by_default(), Target, TargetError, AddressRefused (+11 more)
 
 ### Community 165 - "server"
 Cohesion: 0.29
@@ -980,9 +1028,9 @@ Nodes (7): audiences, discovery, issuer, platformAdmin, claim, value, oidc
 Cohesion: 0.20
 Nodes (10): mount, role, bucket, database, vault, mount, address, kubernetesAuth (+2 more)
 
-### Community 167 - "ScopeError"
-Cohesion: 0.28
-Nodes (9): check_folder(), check_rules(), ScopeError, Both, Count, NotAFolder, Path, Twice (+1 more)
+### Community 167 - "backup.rs"
+Cohesion: 0.11
+Nodes (17): an_object_gone_since_the_listing_is_skipped(), BackupError, Busy, Db, LockLost, NoStorage, Objects, Other (+9 more)
 
 ### Community 168 - "backup"
 Cohesion: 0.22
@@ -992,29 +1040,25 @@ Nodes (9): backup, credentialsSecret, destinationPath, enabled, endpointURL, ret
 Cohesion: 0.25
 Nodes (8): cnpg, enabled, instances, name, operatorNamespace, storage, size, storageClass
 
-### Community 170 - "Documentation"
-Cohesion: 0.50
-Nodes (4): Documentation, Guides, Planned, RFCs
-
 ### Community 171 - "kura-cli/src/config.rs"
-Cohesion: 0.24
-Nodes (6): Attached, Config, Credentials, refresh_token(), set_refresh_token(), write_private()
+Cohesion: 0.23
+Nodes (5): Attached, Config, Credentials, refresh_token(), write_private()
 
 ### Community 172 - "Chart.yaml"
 Cohesion: 0.29
 Nodes (6): apiVersion, appVersion, description, name, type, version
 
 ### Community 173 - "problem"
-Cohesion: 0.09
-Nodes (27): Basic, Env, env(), env_stored(), file(), Who, who(), a_folder_is_an_entry_older_clients_never_see() (+19 more)
+Cohesion: 0.10
+Nodes (25): Basic, Env, env(), env_stored(), file(), Who, who(), a_folder_is_an_entry_older_clients_never_see() (+17 more)
 
 ### Community 174 - "limits.rs"
-Cohesion: 0.25
+Cohesion: 0.21
 Nodes (7): counts_per_key_and_route_and_says_when_to_retry(), limit_of(), LIMITS, MAX_TRACKED, RateLimiter, WINDOW, WindowKey
 
 ### Community 175 - "VaultPath"
-Cohesion: 0.07
-Nodes (16): a_255_byte_name_is_written(), err(), FsHost, mtime(), never_follows_a_symbolic_link(), p(), STATE_DIR, tmp() (+8 more)
+Cohesion: 0.06
+Nodes (17): a_255_byte_name_is_written(), err(), FsHost, mtime(), never_follows_a_symbolic_link(), p(), STATE_DIR, tmp() (+9 more)
 
 ### Community 176 - "RFC 0005 — Folder-restricted viewers and the web reader"
 Cohesion: 0.15
@@ -1045,12 +1089,12 @@ Cohesion: 0.40
 Nodes (5): image, digest, pullPolicy, repository, tag
 
 ### Community 183 - "snapshot.rs"
-Cohesion: 0.39
+Cohesion: 0.48
 Nodes (3): load_if_changed(), REFRESH, run()
 
 ### Community 184 - ".start"
 Cohesion: 0.08
-Nodes (17): Sleep, Core, loadCore(), random16(), Api, ApiOptions, CLIENT, Fetch (+9 more)
+Nodes (17): Sleep, Core, loadCore(), because(), random16(), Api, ApiOptions, CLIENT (+9 more)
 
 ### Community 185 - "drill.sh"
 Cohesion: 0.83
@@ -1077,12 +1121,12 @@ Cohesion: 0.29
 Nodes (7): 18.1 What shipped, 18.2 Where it differs from the text, 18.3 What the proof observed, 18.4 §7, the tests that prove each row, 18.5 §8, supply chain, 18.6 §4.5, mocks against what shipped, 18. Revision against the tree (2026-11-17)
 
 ### Community 192 - "history.rs"
-Cohesion: 0.08
+Cohesion: 0.09
 Nodes (27): a_pass_from_zero_pages_past_the_horizon(), eid(), epochs_change_once_with_the_cluster_identity(), history_and_restore(), purged_deletions_move_the_horizon(), retention_prunes_history_but_never_a_head(), S, setup() (+19 more)
 
 ### Community 193 - "wire.rs"
-Cohesion: 0.07
-Nodes (31): Pending, Prefetch<'a, R>, Author, ChangesResponse, commit_bodies_parse_strictly(), eid(), entry_ids_are_uuid_v7(), EntryId (+23 more)
+Cohesion: 0.10
+Nodes (20): ChunkUploads, Author, commit_bodies_parse_strictly(), eid(), entry_ids_are_uuid_v7(), parse_records(), Record, record() (+12 more)
 
 ### Community 194 - "android.sh"
 Cohesion: 0.52
@@ -1105,12 +1149,12 @@ Cohesion: 0.29
 Nodes (6): auditConfig, ignoreGhsas, overrides, glob, js-yaml, minimatch
 
 ### Community 201 - "test_db"
-Cohesion: 0.26
-Nodes (12): test_db(), a_chunk_cannot_claim_another_tenant(), app_role_is_not_owner(), definer_functions_return_only_what_they_name(), devices_are_isolated_by_subject(), every_table_forces_rls(), jwks_survive_a_restart_without_the_provider(), pooled_connection_does_not_leak_tenant() (+4 more)
+Cohesion: 0.22
+Nodes (13): test_db(), a_chunk_cannot_claim_another_tenant(), app_role_is_not_owner(), definer_functions_return_only_what_they_name(), devices_are_isolated_by_subject(), every_table_forces_rls(), jwks_survive_a_restart_without_the_provider(), pooled_connection_does_not_leak_tenant() (+5 more)
 
-### Community 202 - "sync_one"
-Cohesion: 0.21
-Nodes (12): attach(), confirm(), human(), params(), remote_entries(), report_outcome(), run_sync(), scoped() (+4 more)
+### Community 202 - "MaintenanceError"
+Cohesion: 0.23
+Nodes (14): Batches, collect_chunks(), delete_objects(), lock_held(), MaintenanceError, Db, LockLost, Objects (+6 more)
 
 ### Community 203 - "authz.sh"
 Cohesion: 0.30
@@ -1141,20 +1185,16 @@ Cohesion: 0.67
 Nodes (3): ui, flatten, taskfile
 
 ### Community 210 - "kura-core/src/config.rs"
-Cohesion: 0.21
+Cohesion: 0.39
 Nodes (8): categories_never_include_what_stays_on_the_device(), category(), like_patterns_cover_viewable(), only_files_without_secrets_are_viewable(), plugin_of(), synced(), viewable(), VIEWABLE_LIKE
 
 ### Community 212 - "Socketed"
 Cohesion: 0.67
 Nodes (3): Socketed, Reconnect, Stop
 
-### Community 213 - "AppState"
-Cohesion: 0.13
-Nodes (5): AppState, HttpSettings, ConfigError, Invalid, Read
-
 ### Community 214 - "types.ts"
-Cohesion: 0.15
-Nodes (13): Controller, ControllerOptions, QUIET_MS, Situation, count(), deletionsToConfirm(), isProblem(), pairs() (+5 more)
+Cohesion: 0.07
+Nodes (24): Controller, ControllerOptions, QUIET_MS, Situation, count(), deletionsToConfirm(), isProblem(), pairs() (+16 more)
 
 ### Community 215 - "PaneResizer.vue"
 Cohesion: 0.29
@@ -1173,11 +1213,11 @@ Cohesion: 0.67
 Nodes (3): cmds, desc, dev:certs:renew
 
 ### Community 219 - "app"
-Cohesion: 0.14
-Nodes (11): app(), app_router(), cors(), openapi_spec(), SecurityAddon, router(), API_DOCS_CSP, scalar() (+3 more)
+Cohesion: 0.22
+Nodes (6): app(), app_router(), cors(), openapi_spec(), SecurityAddon, router()
 
 ### Community 220 - "token.rs"
-Cohesion: 0.17
+Cohesion: 0.19
 Nodes (7): hex_digit(), PREFIX, ScopedToken, SECRET_BYTES, TokenError, Malformed, tokens_round_trip_and_parse_strictly()
 
 ### Community 221 - "KuraTenant other"
@@ -1185,15 +1225,15 @@ Cohesion: 0.50
 Nodes (4): KuraTenant other, apiVersion, kind, metadata
 
 ### Community 223 - "notify.rs"
-Cohesion: 0.06
-Nodes (38): ACQUIRE_TIMEOUT, begin_subject(), begin_tenant_snapshot(), check_schema(), connect(), crate::problem::ApiError, DbError, BinaryTooOld (+30 more)
+Cohesion: 0.10
+Nodes (22): CHANNEL, check_epoch(), CONFIG_CHANNEL, connect_listener(), Event, Change, Pull, Revoked (+14 more)
 
 ### Community 224 - "18. Revision against the tree (2026-11-18)"
 Cohesion: 0.22
 Nodes (9): 18.1 What shipped, 18.2 Divergences from the text, 18.3 What the proof observed, 18.4 Threats against the tests, 18.5 Supply chain, 18.6 Mocks against what shipped, 18.7 Phase 3 and the proofs, landed the same day, 18.8 Owners by name, and the browser proof (supersedes D13) (+1 more)
 
 ### Community 225 - "duration"
-Cohesion: 0.16
+Cohesion: 0.14
 Nodes (7): MAX_RETRIES, s3(), Storage, StorageError, TIMEOUT, BucketSecret, rotate_bucket()
 
 ### Community 226 - "config-view.sh"
@@ -1253,8 +1293,8 @@ Cohesion: 0.33
 Nodes (6): 4.1 Configuration, 4.2 Behaviour rules, 4.3 Validation, 4.4 API surface, 4.5 Mocks, 4. User-facing design
 
 ### Community 241 - "modals.ts"
-Cohesion: 0.09
-Nodes (12): DeviceCode, Ask, Button, CodeModal, ConfirmModal, PluginModal, ProblemsModal, SetupModal (+4 more)
+Cohesion: 0.11
+Nodes (11): DeviceCode, Ask, Button, CodeModal, ConfirmModal, PluginModal, SetupModal, SwitchModal (+3 more)
 
 ### Community 242 - "contents"
 Cohesion: 0.20
@@ -1288,13 +1328,13 @@ Nodes (4): 10.1 Observability, 10.2 Failure modes, 10.3 Performance and capacity
 Cohesion: 0.13
 Nodes (17): claim, roles, spec, spec, spec, maxFileSize, storage, admin (+9 more)
 
-### Community 251 - ".fill"
-Cohesion: 0.13
-Nodes (7): ChunkUploads, download(), lock(), Manifest, Prefetch, Prefetch<'_, R>, upload_manifests()
+### Community 251 - "scalar.rs"
+Cohesion: 0.36
+Nodes (5): API_DOCS_CSP, scalar(), SCALAR_BUNDLE_PATH, scalar_unavailable_html(), the_reference_loads_nothing_from_a_third_party()
 
-### Community 252 - "webhook.rs"
-Cohesion: 0.30
-Nodes (7): a_target_is_https_without_credentials(), ip(), MAX_URL, private_and_special_addresses_are_refused(), refused_by_default(), Target, TargetError
+### Community 252 - "app/sync_state.rs"
+Cohesion: 0.08
+Nodes (23): TenantRole, Admin, Member, Owner, SyncCounts, admin_status(), AdminStatus, with_quota_conditions() (+15 more)
 
 ### Community 253 - "src/merge.rs"
 Cohesion: 0.27
@@ -1312,13 +1352,13 @@ Nodes (13): task, vars, tasks, version:check, version:set, version, cmds, desc (
 Cohesion: 0.15
 Nodes (13): name, needs, runs-on, strategy, archive, cross, name, os (+5 more)
 
-### Community 258 - "updates"
-Cohesion: 0.17
-Nodes (11): prefix, default-days, interval, updates, commit-message, cooldown, directories, directory (+3 more)
+### Community 258 - "serve"
+Cohesion: 0.52
+Nodes (3): Background, background(), serve()
 
-### Community 259 - "15. Decisions and open questions"
-Cohesion: 0.67
-Nodes (3): 15. Decisions and open questions, Resolved, Still open
+### Community 259 - "tasks"
+Cohesion: 0.07
+Nodes (26): cmds, desc, dir, cmds, deps, desc, dir, cmds (+18 more)
 
 ### Community 260 - "15. Decisions and open questions"
 Cohesion: 0.67
@@ -1337,8 +1377,8 @@ Cohesion: 0.50
 Nodes (7): api(), cleanup(), fail(), pass(), serve(), notify.sh script, sql()
 
 ### Community 264 - "RFC 0001 — implementation plan"
-Cohesion: 0.20
-Nodes (10): 0. Before the first line of code, 2. Phase 2 — chunks, blobs, encryption, quota, 3. Phase 3 — changes, commits, kura-core, kura-cli, 4. Phase 4 — merge, notifications, plugin, 5. Phase 5 — history, retention, resync, 6. Phase 6 — operations, 7. Phase 7 — scoped tokens and search, 8. Phase 8 — Obsidian configuration (+2 more)
+Cohesion: 0.14
+Nodes (12): 0. Before the first line of code, 2. Phase 2 — chunks, blobs, encryption, quota, 3. Phase 3 — changes, commits, kura-core, kura-cli, 4. Phase 4 — merge, notifications, plugin, 5. Phase 5 — history, retention, resync, 6. Phase 6 — operations, 7. Phase 7 — scoped tokens and search, 8. Phase 8 — Obsidian configuration (+4 more)
 
 ### Community 265 - "Security Policy"
 Cohesion: 0.13
@@ -1348,13 +1388,13 @@ Nodes (12): Development, Documentation, Install, License, weebo-kura, Disclosure
 Cohesion: 0.67
 Nodes (3): 5.1 Where the fact comes from, 5.2 Who sees which row, 5. Architecture
 
-### Community 267 - ".suffixed"
-Cohesion: 0.29
-Nodes (3): ignorable(), suffixes_always_fit(), suffixes_stay_valid_and_bounded()
+### Community 267 - "src/db.rs"
+Cohesion: 0.11
+Nodes (18): ReadAccess, ACQUIRE_TIMEOUT, begin_subject(), begin_tenant(), begin_tenant_snapshot(), check_schema(), connect(), crate::problem::ApiError (+10 more)
 
-### Community 268 - "serve"
-Cohesion: 0.52
-Nodes (3): Background, background(), serve()
+### Community 268 - "Group `kura`"
+Cohesion: 0.08
+Nodes (23): Group `kura`, Group `kura-backup`, KuraBackupMissing, KuraChunkCorrupt, KuraConfigRejected, KuraDeletionScheduled, KuraDependencyFailing, KuraDown (+15 more)
 
 ### Community 269 - "draft"
 Cohesion: 0.29
@@ -1376,25 +1416,25 @@ Nodes (7): 6.1 `ui/` and how it is served, 6.2 Sign-in and the web device, 6.3 N
 Cohesion: 0.33
 Nodes (6): 4.1 Configuration, 4.2 Behaviour rules, 4.3 Validation, 4.4 API surface, 4.5 Mocks, 4. User-facing design
 
-### Community 274 - "4. User-facing design"
-Cohesion: 0.33
-Nodes (6): 4.1 Configuration, 4.2 Behaviour rules, 4.3 Validation, 4.4 API surface, 4.5 Mocks, 4. User-facing design
+### Community 274 - "docs/package.json"
+Cohesion: 0.12
+Nodes (23): devDependencies, eslint@^9.39.4, postcss@^8.5.17, tailwindcss@^4.3.2, @tailwindcss/postcss@^4.3.2, @types/mdx@^2.0.14, @types/node@^26.1.1, @types/react@^19.2.17 (+15 more)
 
 ### Community 275 - "KuraVault suite-config"
 Cohesion: 0.50
 Nodes (4): KuraVault suite-config, apiVersion, kind, metadata
 
-### Community 276 - "6. Detailed design"
-Cohesion: 0.33
-Nodes (5): 6.1 `kura-core`, 6.2 Server, 6.3 Clients, 6. Detailed design, 6.P Proof against a real client
+### Community 276 - "Every route"
+Cohesion: 0.10
+Nodes (20): admin, Authentication, Body limits, Browsers (CORS), chunks, Client version, devices, Errors (+12 more)
 
-### Community 277 - "events.ts"
-Cohesion: 0.33
-Nodes (3): FINAL, RFC-0005, Watch
+### Community 277 - "compilerOptions"
+Cohesion: 0.10
+Nodes (20): compilerOptions, allowJs, esModuleInterop, forceConsistentCasingInFileNames, incremental, isolatedModules, jsx, lib (+12 more)
 
-### Community 278 - "18. Revision against the tree (2026-11-18)"
-Cohesion: 0.40
-Nodes (5): 18.1 What shipped, 18.2 Divergences from the text, 18.3 What the proof observed, 18.4 Threats against the tests, 18. Revision against the tree (2026-11-18)
+### Community 278 - "Commands"
+Cohesion: 0.10
+Nodes (19): Commands, Environment variables, Exit codes, Files, Global options, kura attach, kura devices, kura history (+11 more)
 
 ### Community 279 - "env"
 Cohesion: 0.40
@@ -1412,6 +1452,10 @@ Nodes (4): 5.1 One scope type, two questions, 5.2 Which routes a token reaches, 
 Cohesion: 0.50
 Nodes (4): name, needs, runs-on, image
 
+### Community 284 - "small_body_routes"
+Cohesion: 0.60
+Nodes (5): account_routes(), large_body_routes(), small_body_routes(), v1_router(), vault_routes()
+
 ### Community 285 - "15. Decisions and open questions"
 Cohesion: 0.67
 Nodes (3): 15. Decisions and open questions, Resolved, Still open
@@ -1428,57 +1472,217 @@ Nodes (3): release, flatten, taskfile
 Cohesion: 0.67
 Nodes (3): security, flatten, taskfile
 
-### Community 303 - "VaultError"
-Cohesion: 0.23
-Nodes (6): client_err(), decode_b64(), VaultError, Address, Path, ServiceAccount
+### Community 289 - "source.ts"
+Cohesion: 0.12
+Nodes (13): GET, revalidate, dynamic, GET, revalidate, dynamic, generateStaticParams, GET (+5 more)
 
-### Community 316 - "AuthError"
-Cohesion: 0.38
-Nodes (5): AuthError, Invalid, Jwt, Provider, crate::problem::ApiError
+### Community 291 - "10. Operability"
+Cohesion: 0.50
+Nodes (4): 10.1 Observability, 10.2 Failure modes, 10.3 Performance and capacity, 10. Operability
+
+### Community 292 - "kura-crdgen/src/main.rs"
+Cohesion: 0.14
+Nodes (6): Status, Args, committed_crds_match_the_specs(), no_closed_object_reaches_a_crd(), open_objects(), write()
+
+### Community 293 - "web-console.mdx"
+Cohesion: 0.12
+Nodes (15): A vault, Access, Back office, Devices and their sync state, Help, History, Home, Keys (+7 more)
+
+### Community 294 - "security.mdx"
+Cohesion: 0.13
+Nodes (14): Audit logs, Authentication, Authorization, Devices, sessions and revocation, Encryption at rest, OIDC access tokens, Rate limits and body limits, Scoped tokens (+6 more)
+
+### Community 295 - "authentik.mdx"
+Cohesion: 0.13
+Nodes (14): Access token or userinfo, Create a device code flow and set it on the brand, Create the CLI provider and application, Create the console provider and application (optional), Create the groups, Create the plugin provider and application, Fill in `server.yaml`, How the server checks a token (+6 more)
+
+### Community 297 - "Restore"
+Cohesion: 0.13
+Nodes (14): 1. PostgreSQL, 2. The bucket, 3. Vault or OpenBao, Check a sample of chunks, Copy the objects back, Failover and switchover, Migrate and reset the epochs, Practise the restore (+6 more)
+
+### Community 298 - "@weebo/operator-docs"
+Cohesion: 0.22
+Nodes (6): generateStaticParams, GET, revalidate, site, fumadocs-ui, @weebo/operator-docs
+
+### Community 299 - "sync.mdx"
+Cohesion: 0.14
+Nodes (13): Batched transfers, Chunks and blobs, Deletes go to `.trash`, Entries and revisions, Epochs, Folders, Full resync: `410` answers, Merges and conflict files (+5 more)
+
+### Community 300 - "guides/cli.mdx"
+Cohesion: 0.14
+Nodes (13): Attach a folder to a vault, Check the state, Devices, Exit codes, History and restore, Install, Keep a folder in sync, Scoped tokens (+5 more)
+
+### Community 301 - "configuration.mdx"
+Cohesion: 0.14
+Nodes (13): A complete example, `cors`, Environment variables, How the file is checked, `listen`, `maintenance`, `notifications`, `oidc` (required) (+5 more)
+
+### Community 302 - "obsidian-plugin.mdx"
+Cohesion: 0.15
+Nodes (12): Configuration sync, Conflicts and merges, Connect and sign in, Deleted notes, large files, open notes, Install, On mobile, See also, Signing out (+4 more)
+
+### Community 303 - "helm-values.mdx"
+Cohesion: 0.15
+Nodes (12): Backups, cnpg, documents, Image, ingress, migrate, monitoring, networkPolicy (+4 more)
+
+### Community 304 - "18. Revision against the tree (2026-11-18)"
+Cohesion: 0.50
+Nodes (4): 18.2 Divergences from the text, 18.3 What the proof observed, 18.4 Threats against the tests, 18. Revision against the tree (2026-11-18)
+
+### Community 305 - "Install"
+Cohesion: 0.17
+Nodes (11): Add the first vault, Check that it runs, Install, Install the chart, Next, Plan the backups, Point users to the plugin, Prepare Vault (+3 more)
+
+### Community 306 - "tenants-and-vaults.mdx"
+Cohesion: 0.17
+Nodes (11): Removing a document, Status and reason codes, Tenant roles, Tenant settings, The two documents, Validation, Vault roles and bindings, Vault settings (+3 more)
+
+### Community 307 - "[v0.1.0-rc.1](https://github.com/batleforc/weebo-kura/compare/bc8e20a8d219f4411cfa01b7de8cccd55457fdd4..v0.1.0-rc.1) - 2026-11-21"
+Cohesion: 0.18
+Nodes (10): Bug Fixes, Changelog, Continuous Integration, Documentation, Features, Miscellaneous Chores, Performance Improvements, Refactoring (+2 more)
+
+### Community 308 - "Algorithm"
+Cohesion: 0.18
+Nodes (11): Algorithm, EdDSA, ES256, ES384, PS256, PS384, PS512, RS256 (+3 more)
+
+### Community 309 - "dependencies"
+Cohesion: 0.18
+Nodes (11): dependencies, fumadocs-ui@16.16.2, lucide-react@^1.24.0, react@^19.3.0, react-dom@^19.3.0, shiki@^4.3.1, @weebo/operator-docs@https://github.com/weebo-si-operator/..., lucide-react (+3 more)
+
+### Community 310 - "Spec fields"
+Cohesion: 0.20
+Nodes (9): Build a manifest, Example, `spec.claimMappings.roles` [#spec.claimMappings.roles], `spec.claimMappings` [#spec.claimMappings], Spec fields, `spec.quota` [#spec.quota], `spec.retention` [#spec.retention], `spec.scopedTokens` [#spec.scopedTokens] (+1 more)
+
+### Community 311 - "proxy.ts"
+Cohesion: 0.20
+Nodes (7): fumadocs-core@16.16.2, fumadocs-mdx@15.4.6, { rewrite: rewriteDocs }, { rewrite: rewriteSuffix }, docs, fumadocs-core, fumadocs-mdx
+
+### Community 312 - "architecture.mdx"
+Cohesion: 0.22
+Nodes (8): A push, step by step, Background work, Shared state and per-replica state, The crates, The `kura-server` subcommands, The live events socket, The picture, What each part holds
+
+### Community 313 - "upgrades.mdx"
+Cohesion: 0.22
+Nodes (8): After the upgrade, Before you upgrade, Clients, How migrations stay safe, Rolling back, Tenant and vault documents keep working, Upgrade with Helm, Verify the release
+
+### Community 314 - "metrics.mdx"
+Cohesion: 0.22
+Nodes (8): Commits and transfers, Configuration and HTTP, Maintenance, Notifications (webhooks), Scraping, Search index, Storage, quotas and lifecycle, Transport and Vault
+
+### Community 315 - "[[...slug]]/page.tsx"
+Cohesion: 0.28
+Nodes (5): docsPage, getMDXComponents(), MDXProvidedComponents, useMDXComponents, CHOICES
+
+### Community 316 - "Spec fields"
+Cohesion: 0.25
+Nodes (7): Build a manifest, Example, `spec.bindings[]` [#spec.bindings], `spec.chunking` [#spec.chunking], `spec.configSync` [#spec.configSync], Spec fields, `spec.tenantRef` [#spec.tenantRef]
 
 ### Community 317 - "sim.rs"
-Cohesion: 0.15
-Nodes (8): both_batch_routes_carried_chunks(), Device, devices_converge_and_lose_nothing(), edit_notes(), MemHost, no_line_is_lost(), Rng, run()
+Cohesion: 0.18
+Nodes (5): both_batch_routes_carried_chunks(), devices_converge_and_lose_nothing(), edit_notes(), Rng, run()
+
+### Community 318 - "monitoring.mdx"
+Cohesion: 0.25
+Nodes (7): Dashboards, Logs, Probes, ServiceMonitor and PrometheusRule, The admin status endpoint, The metrics port, The signals to watch first
+
+### Community 319 - "app/layout.tsx"
+Cohesion: 0.25
+Nodes (5): next@16.4.6, jetbrainsMono, metadata, silkscreen, next
 
 ### Community 320 - "4. User-facing design"
 Cohesion: 0.33
 Nodes (6): 4.1 Configuration, 4.2 Behaviour rules, 4.3 Validation, 4.4 API surface, 4.5 Mocks, 4. User-facing design
 
-### Community 322 - "5. Architecture"
-Cohesion: 0.40
-Nodes (5): 5.1 Components, 5.2 A push crossing the components, 5.3 Deciding the outcome of one pushed operation, 5.4 Invariants, 5. Architecture
+### Community 321 - "scripts"
+Cohesion: 0.25
+Nodes (8): scripts, build, dev, gen:crds, lint, postinstall, start, types:check
 
-### Community 326 - "10. Operability"
-Cohesion: 0.50
-Nodes (4): 10.1 Observability, 10.2 Failure modes, 10.3 Performance and capacity, 10. Operability
-
-### Community 332 - "15. Decisions and open questions"
+### Community 322 - "Watched"
 Cohesion: 0.67
-Nodes (3): 15. Decisions and open questions, Resolved, Still open
+Nodes (3): Watched, Dropped, Stop
+
+### Community 323 - "18. Revision against the tree (2026-11-17)"
+Cohesion: 0.29
+Nodes (7): 18.1 What shipped, 18.2 Where the tree differs from the text, 18.3 What the proof observed, 18.4 §7 threats against the tests, 18.5 Supply chain as shipped, 18.6 Mocks against what shipped, 18. Revision against the tree (2026-11-17)
+
+### Community 324 - "7. Security"
+Cohesion: 0.29
+Nodes (7): 7.1 Threat model, 7.2 Authentication and authorisation, 7.3 Input handling and injection, 7.4 Secrets and cryptography, 7.5 Abuse and resource exhaustion, 7.6 Existing defences that still hold, 7. Security
+
+### Community 325 - "jobs"
+Cohesion: 0.29
+Nodes (6): runs-on, jobs, check, name, permissions, contents
+
+### Community 326 - "migrate-from-notion.mdx"
+Cohesion: 0.33
+Nodes (5): Check the names, Export and convert, Freeze Notion, Move everyone over, Push and verify
+
+### Community 327 - "4. User-facing design"
+Cohesion: 0.33
+Nodes (6): 4.1 Configuration, 4.2 Behaviour rules, 4.3 Validation, 4.4 API surface, 4.5 Mocks, 4. User-facing design
+
+### Community 328 - "4. User-facing design"
+Cohesion: 0.33
+Nodes (6): 4.1 Configuration, 4.2 Behaviour rules, 4.3 Validation, 4.4 API surface, 4.5 Mocks, 4. User-facing design
+
+### Community 330 - "problem-types.mdx"
+Cohesion: 0.40
+Nodes (4): Denials are audited, Every type, In the CLI, The body
+
+### Community 331 - "rate-limits.mdx"
+Cohesion: 0.40
+Nodes (4): How calls are counted, Limits per route, Other bounds, What clients do
+
+### Community 332 - "docs/eslint.config.mjs"
+Cohesion: 0.40
+Nodes (3): eslintConfig, eslint-config-next@16.4.6, eslint-config-next
+
+### Community 333 - "rfc0002-batched-transfers.md"
+Cohesion: 0.40
+Nodes (3): Divergences, Progress, RFC 0002 — implementation plan
 
 ### Community 334 - "15. Decisions and open questions"
 Cohesion: 0.67
 Nodes (3): 15. Decisions and open questions, Resolved, Still open
 
+### Community 335 - "6. Detailed design"
+Cohesion: 0.40
+Nodes (5): 6.1 `kura-server`, 6.2 `kura-core`, 6.3 Clients, 6. Detailed design, 6.P Proof against a real client
+
+### Community 336 - "RFC 0004 — implementation plan"
+Cohesion: 0.40
+Nodes (3): Divergences, Progress, RFC 0004 — implementation plan
+
+### Community 337 - "RFC 0005 — implementation plan"
+Cohesion: 0.40
+Nodes (3): Divergences, Progress, RFC 0005 — implementation plan
+
+### Community 338 - "10. Operability"
+Cohesion: 0.50
+Nodes (4): 10.1 Observability, 10.2 Failure modes, 10.3 Performance and capacity, 10. Operability
+
+### Community 343 - "perf"
+Cohesion: 0.67
+Nodes (3): perf, flatten, taskfile
+
 ## Knowledge Gaps
-- **212 isolated node(s):** `Bytes`, `Text`, `Duration`, `Member`, `Admin` (+207 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 2265 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **20 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **214 isolated node(s):** `Editor`, `Manager`, `Viewer`, `Applied`, `NotWritten` (+209 more)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 2723 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **30 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `RFC 0003 — Web console (front and back office) and notifications` connect `RFC 0003 — Web console (front and back office) and notifications` to `15. Decisions and open questions`, `ui.rs`, `18. Revision against the tree (2026-11-17)`, `rfc0001-implementation-plan.md`, `7. Security`, `6. Detailed design`, `10. Operability`, `4. User-facing design`, `5. Architecture`?**
-  _High betweenness centrality (0.162) - this node is a cross-community bridge._
+- **Why does `folders_sync_between_devices()` connect `cli.rs` to `RFC 0007 — Folders as synced entries`?**
+  _High betweenness centrality (0.147) - this node is a cross-community bridge._
 - **Are the 7 inferred relationships involving `SharedState` (e.g. with `call()` and `state()`) actually correct?**
   _`SharedState` has 7 INFERRED edges - model-reasoned connections that need verification._
-- **What connects `Bytes`, `Text`, `Duration` to the rest of the system?**
-  _212 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **What connects `Editor`, `Manager`, `Viewer` to the rest of the system?**
+  _214 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `VaultAccess` be split into smaller, more focused modules?**
-  _Cohesion score 0.09853249475890985 - nodes in this community are weakly interconnected._
-- **Why does `17. References and sources` connect `ui.rs` to `RFC 0003 — Web console (front and back office) and notifications`?**
-  _High betweenness centrality (0.154) - this node is a cross-community bridge._
+  _Cohesion score 0.10745098039215686 - nodes in this community are weakly interconnected._
+- **Why does `18.3 What the proof observed` connect `RFC 0007 — Folders as synced entries` to `cli.rs`?**
+  _High betweenness centrality (0.147) - this node is a cross-community bridge._
 - **Should `reconcile/mod.rs` be split into smaller, more focused modules?**
-  _Cohesion score 0.1268939393939394 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.07653061224489796 - nodes in this community are weakly interconnected._
 - **Should `common/mod.rs` be split into smaller, more focused modules?**
-  _Cohesion score 0.09359605911330049 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.09788359788359788 - nodes in this community are weakly interconnected._

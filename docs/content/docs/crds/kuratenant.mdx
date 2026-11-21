@@ -1,0 +1,102 @@
+---
+title: KuraTenant
+description: >-
+  A tenant: who belongs to it, through which OIDC claim, and the limits its
+  vaults share.
+full: true
+---
+
+- **API version:** `kura.weebo.io/v1alpha1`
+- **Scope:** Cluster
+- **Short names:** none
+- **Guide:** [Tenants and vaults](/docs/guides/tenants-and-vaults)
+
+A tenant: who belongs to it, through which OIDC claim, and the limits its
+vaults share. Cluster-scoped; its `metadata.name` is the tenant's slug,
+used in API paths.
+
+## Example
+
+```yaml
+apiVersion: kura.weebo.io/v1alpha1
+kind: KuraTenant
+metadata:
+  name: my-tenant
+spec:
+  claimMappings:
+    claim: groups
+    roles:
+      owner:
+        - kura-maxime-owners
+      member:
+        - kura-maxime
+  vaultNamespaces:
+    - maxime
+  retention:
+    maxRevisionAge: 180d
+    maxRevisionsPerEntry: 200
+    deletedEntryTtl: 90d
+  quota:
+    storage: 20Gi
+    maxFileSize: 500Mi
+```
+
+## Spec fields
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| [`claimMappings`](#spec.claimMappings) | `object` | no |  | The OIDC claim whose values grant the tenant roles. Absent or empty: the tenant has no members. |
+| `deletionPolicy` | `string` | no | `"Orphan"` | What removing this document does: `Orphan` (default) disables the tenant and keeps its data; `Delete` also deletes it after 30 days, cancelled if the document comes back.<br /><br />Values: `"Orphan"`, `"Delete"` |
+| [`quota`](#spec.quota) | `object` | no | `{}` | Storage limits shared by the tenant's vaults. Absent fields: no limit. |
+| [`retention`](#spec.retention) | `object` | no | `{}` | How long history is kept, applied by the nightly maintenance pass. Absent: every revision is kept, and deleted entries are purged after 90d. |
+| [`scopedTokens`](#spec.scopedTokens) | `object` | no | `{"write":false}` | What the tenant's scoped tokens may do beyond reading. |
+| [`search`](#spec.search) | `object` | no | `{"enabled":false}` | Full-text search over the tenant's notes. |
+| `vaultNamespaces` | `string[]` | no | `[]` | The namespaces allowed to declare a `KuraVault` for this tenant. Absent: no namespace may. |
+
+### `spec.claimMappings` [#spec.claimMappings]
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `claim` | `string` | yes |  | The token claim to read, such as `groups`: a string or a list of strings. |
+| [`roles`](#spec.claimMappings.roles) | `object` | no | `{"admin":[],"member":[],"owner":[]}` | The claim values granting each tenant role. |
+
+### `spec.claimMappings.roles` [#spec.claimMappings.roles]
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `admin` | `string[]` | no | `[]` | Values granting `admin`: create and delete vaults, manage bindings, scoped tokens and notification rules. |
+| `member` | `string[]` | no | `[]` | Values granting `member`: the vaults a binding opens to them. |
+| `owner` | `string[]` | no | `[]` | Values granting `owner`: every right on the tenant and its vaults. |
+
+### `spec.quota` [#spec.quota]
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `maxFileSize` | `int-or-string` | no |  | The largest file a device may sync; larger ones stay local and are reported. |
+| `storage` | `int-or-string` | no |  | Encrypted bytes the tenant may store, all vaults together. An upload past it is refused. |
+
+### `spec.retention` [#spec.retention]
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `deletedEntryTtl` | `string` | no |  | A deleted entry stays restorable this long, then is purged. Absent: 90d.<br /><br />Constraints: `pattern: ^[0-9]+[hd]$` |
+| `maxRevisionAge` | `string` | no |  | Revisions older than this are pruned, an entry's head never.<br /><br />Constraints: `pattern: ^[0-9]+[hd]$` |
+| `maxRevisionsPerEntry` | `integer` | no |  | At most this many revisions are kept per entry, the newest.<br /><br />Constraints: `minimum: 0` |
+
+### `spec.scopedTokens` [#spec.scopedTokens]
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `write` | `boolean` | no | `false` | Absent: false. Tokens of the tenant may carry `write` rules (RFC 0004 §4.1); set back to false, their writes stop at once. |
+
+### `spec.search` [#spec.search]
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `enabled` | `boolean` | no | `false` | Absent: false. The index is plaintext, so indexing is opt-in. |
+
+## Build a manifest
+
+Answer the questions and fill in the fields: the YAML preview updates as you type, ready to copy or download and `kubectl apply`.
+
+<CrdForm kind="KuraTenant" />

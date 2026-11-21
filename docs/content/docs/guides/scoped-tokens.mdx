@@ -1,0 +1,168 @@
+---
+title: Scoped Tokens
+description: Give a script or an agent limited, expiring, revocable access to some folders of one vault, and know how the server checks and logs it.
+---
+
+A scoped token is a key for a script, a bot or an AI agent that has to use a vault without signing in. It replaces a person's account with something much narrower:
+
+- **One vault.** Another vault answers `404`, as if it did not exist.
+- **Some folders.** 1 to 16 folder rules. Each rule covers a folder and everything under it, compared without regard to case.
+- **Read-only by default.** No rule at all means the whole vault, read only. A `write` rule is possible only when the tenant allows it.
+- **Bound to addresses.** 1 to 32 address ranges (CIDRs). `0.0.0.0/0` and `::/0` are refused.
+- **Expiring.** 1 to 90 days. There is no token without an end date.
+- **Revocable.** Revocation takes effect on the next request, on every replica.
+
+The console calls them **access keys**; the CLI and the API call them tokens. They are the same thing.
+
+## What a token looks like
+
+A token reads `kura_<id>_<secret>`: `kura_`, the token id as 32 lowercase hex digits, `_`, and a 256-bit secret as 64 lowercase hex digits. The server stores only the SHA-256 of the secret. The full token is shown once, when it is created. Nobody can display it again, including the person who made it. Lists show its name, rules, address ranges, expiry, creator and last use.
+
+## Who may create one
+
+A **vault manager**, or a tenant **owner** or **admin**, of the vault the token is for. A token lives by the grant its creator held when they made it: if that role binding is removed, or the group stops mapping to owner or admin, the token stops working too.
+
+Each token has a name of 1 to 64 bytes, usable in a file name, because it labels conflict files the token creates. Without a name, it is `key-` and the first 8 characters of its id.
+
+## Folder rules
+
+| Rule | Means |
+| --- | --- |
+| none | The whole vault, read only. |
+| `read` on `Sessions/` | Reads `Sessions/` and everything below it. |
+| `write` on `Resumes/` | Reads and writes `Resumes/`, and nothing else. |
+
+A folder always ends with `/`. A token never writes the whole vault: a `write` rule needs a folder. The same folder may not appear twice (after case folding).
+
+### Write rules
+
+Write rules work only when the tenant's `KuraTenant` sets `scopedTokens.write: true` (see the [KuraTenant reference](/docs/crds/kuratenant)). Otherwise creating a token with a `write` rule fails with `409 token_write_disabled`.
+
+Setting it back to `false` is a kill switch: every token write is refused at the next request with `403`, reads continue, and nothing is deleted.
+
+Under its `write` folders a token creates, edits, renames and deletes. A commit with even one operation outside them is refused whole. A token may only commit content it can read, or that it uploaded itself in the last 24 hours; naming the hash of a note elsewhere gives `422 content not uploaded by this token`, whether that content exists or not. What it writes is ordinary history, attributed to the token. An editor can restore over it.
+
+## Create a token
+
+<Tabs items={['Console', 'CLI']}>
+<Tab value="Console">
+
+Open the vault, then its **Keys** tab. Select **New key** and fill in:
+
+- **Name**.
+- **Folders**: add one row per folder with **Add a folder**, each **read** or **read and write**. Leave it empty for the whole vault, read only.
+- **Expires in (days, 1 to 90)**.
+- **Allowed from (address ranges)**: one or more CIDRs, separated by spaces or commas.
+
+Select **Create**. The secret appears once, with a **Copy** button. Store it, then select **I stored it, close**.
+
+</Tab>
+<Tab value="CLI">
+
+```bash
+kura token create campaign --name discord-recap \
+    --read Sessions/ --read PNJ/ --write Resumes/ \
+    --expires 30d --cidr 10.42.0.0/16
+```
+
+`--expires` (days, at most 90) and at least one `--cidr` are required. See the [CLI guide](/docs/guides/cli#scoped-tokens).
+
+</Tab>
+</Tabs>
+
+## Use a token against the API
+
+Send it as a bearer token:
+
+```http
+Authorization: Bearer kura_<id>_<secret>
+```
+
+No `X-Kura-Device` header is needed. A token can call only the routes that accept one. Every other route refuses it.
+
+Read routes (any token, inside its folders):
+
+| Method | Path | What |
+| --- | --- | --- |
+| `GET` | `/v1/vaults` | The vault the token belongs to. |
+| `GET` | `/v1/vaults/{v}/entries` | The files it can see. |
+| `GET` | `/v1/vaults/{v}/changes` | Changes since a cursor. |
+| `GET` | `/v1/vaults/{v}/entries/{e}/revisions` | A file's history. |
+| `GET` | `/v1/vaults/{v}/blobs/{hash}` | A file version's manifest (its chunks). |
+| `GET` | `/v1/vaults/{v}/chunks/{hash}` | A chunk. |
+| `POST` | `/v1/vaults/{v}/blobs/batch` | Several manifests at once. |
+| `POST` | `/v1/vaults/{v}/chunks/batch` | Several chunks at once. |
+| `POST` | `/v1/vaults/{v}/search` | Search, when the tenant enables it. |
+
+Write routes (a token with a `write` rule, tenant switch on):
+
+| Method | Path |
+| --- | --- |
+| `POST` | `/v1/vaults/{v}/chunks/missing` |
+| `PUT` | `/v1/vaults/{v}/chunks/{hash}` |
+| `POST` | `/v1/vaults/{v}/chunks/upload` |
+| `PUT` | `/v1/vaults/{v}/blobs/{hash}` |
+| `POST` | `/v1/vaults/{v}/blobs/upload` |
+| `POST` | `/v1/vaults/{v}/commits` |
+
+A token never restores a revision, manages tokens or role bindings, opens the live event socket, or reads or writes Obsidian settings (`.obsidian`). For request and response shapes, see the [API reference](/docs/reference/api).
+
+The easiest client is the CLI itself: `kura --token-file <file> sync <vault>` with `KURA_SERVER` set. See [Use a token with the CLI](/docs/guides/cli#use-a-token-with-the-cli).
+
+Errors use the problem types of [Problem types](/docs/reference/problem-types). A token that is malformed, unknown, expired, revoked, or whose grant is gone gets `invalid_token`. A valid token from an address outside its ranges gets `address_not_allowed`. Token use is rate limited per address and per token; see [Rate limits](/docs/reference/rate-limits).
+
+## Address checks and trusted proxies
+
+The server checks the client address of every request against the token's ranges. Which address counts depends on `trustedProxies` in `server.yaml` (`server.trustedProxies` in the Helm chart):
+
+- If the direct peer is **not** in `trustedProxies`, the peer's address is the client.
+- If the peer **is** a trusted proxy, the server reads `X-Forwarded-For` from the right, skipping trusted proxies, and takes the first address that is not one.
+
+For tokens the check fails closed. Behind a trusted proxy, a request whose `X-Forwarded-For` is missing, malformed, or names only trusted proxies is refused. The proxy's own address is never taken as the client.
+
+<Callout type="warn" title="Set trustedProxies behind an ingress">
+With `trustedProxies` empty, `X-Forwarded-For` is ignored and every request seems to come from the ingress controller. Set it to the ingress controller's pod range (for example `[10.42.0.0/16]`), or tokens bound to real client ranges will be refused. See [Server configuration](/docs/guides/configuration).
+</Callout>
+
+## Expiry
+
+A token stops working at its expiry date. Before that:
+
+- The console's **Home** page lists, for vaults you manage, keys that expire within 14 days ("Scripts using them stop when they expire").
+- If [notifications](/docs/guides/notifications) are on and a rule subscribes to `token.expiring`, the server sends one event per token 7 days before it expires.
+
+Expired tokens are purged from the database 30 days after expiry. To keep a script running, create a new token and swap it in before the old one expires.
+
+## Revoke
+
+<Tabs items={['Console', 'CLI']}>
+<Tab value="Console">
+
+In the vault's **Keys** tab, select **Revoke** on the key and confirm. Anything using it stops at once. Any manager of the vault can see and revoke any key of it, but never its secret.
+
+</Tab>
+<Tab value="CLI">
+
+```bash
+kura token list campaign
+kura token revoke campaign <token-id>
+```
+
+</Tab>
+</Tabs>
+
+A revoked token answers `invalid_token` on its next request.
+
+## What is logged
+
+| Event | When |
+| --- | --- |
+| Audit `scoped_token_created` | A token is issued: who, which vault, how many rules, whether it writes. |
+| Audit `scoped_token_used` | Every accepted use: token id, route, client address. |
+| Audit `scoped_token_revoked` | A token is revoked, and by whom. |
+| Audit `authz_denied` with `address_not_allowed` | A valid token from a refused address. |
+| Metric `kura_token_writes_total` | Token writes, by `outcome`: `applied`, `refused`, `disabled`. |
+
+The token's `last used` time, shown in lists, is updated at most once a minute. Webhook rules can also receive `token.created`, `token.revoked`, `token.expiring` and `token.denied` (a valid token from a refused address, at most one event per token per hour). See [Notifications](/docs/guides/notifications) and [Metrics](/docs/reference/metrics).
+
+The secret itself is never logged, never printed by `kura token list`, and never written to the CLI's configuration.

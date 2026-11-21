@@ -1,0 +1,105 @@
+---
+title: Monitoring
+description: Scrape Kura's metrics, load its alerts, read its probes and logs, and know which signals matter most.
+---
+
+Kura exposes Prometheus metrics on a separate port, ships its alerts in the Helm chart, answers two probes, and writes JSON logs. This page shows how to collect each one and what to watch.
+
+## The metrics port
+
+Each replica serves Prometheus metrics at `GET /metrics` on port `9090` (`listen.metrics` in `server.yaml`; the chart sets it). Every metric name starts with `kura_`.
+
+The metrics port is never exposed by the ingress. The chart puts it on its own Service, `<release>-metrics`, labelled `kura.weebo.io/metrics: "true"`, and the NetworkPolicy admits it only from `networkPolicy.monitoringNamespace` (`monitoring` by default).
+
+## ServiceMonitor and PrometheusRule
+
+With the Prometheus operator installed, the chart creates both by default:
+
+```yaml title="values.yaml"
+monitoring:
+  serviceMonitor: { enabled: true, interval: 30s }
+  prometheusRule: { enabled: true }
+networkPolicy:
+  monitoringNamespace: monitoring
+```
+
+- The **ServiceMonitor** scrapes the `metrics` port of the metrics Service every `interval`.
+- The **PrometheusRule** holds the alerts from the chart's `files/alerts.yaml`, each one unit-tested in the repository with `task alerts:test`. Unless `backupsWaived: true`, it also holds `KuraBackupMissing`.
+
+The full list of alerts, with their thresholds, is in [Alerts](/docs/reference/alerts). Every metric is described in [Metrics](/docs/reference/metrics).
+
+## The signals to watch first
+
+| Signal | What it tells you |
+| --- | --- |
+| `kura_ready` | 1 once a replica has a valid configuration. `KuraUnready` fires when no replica is ready, `KuraDown` when none is scraped |
+| `kura_unavailable_total` | `503` answers caused by a failed dependency (PostgreSQL, object storage, Vault or Authentik). The `warn` log line names it. Alert: `KuraDependencyFailing` |
+| `kura_vault_call_duration_seconds{outcome}` | Vault Transit calls. Alert: `KuraVaultFailing` |
+| `kura_commit_duration_seconds` | How long commits take; the budget is 200 ms at p95 |
+| `kura_authz_denied_total{outcome}` | Every refusal, by problem type |
+| `kura_chunk_corrupt_total` | A stored chunk failed its check on read. Alert on any: `KuraChunkCorrupt` |
+| `kura_vault_epoch_changes_total` | Epochs regenerated after a failover or a restore; every device resyncs. Alert: `KuraVaultEpochChanged` |
+| `kura_resync_total{outcome}` | `410` answers: devices running a full resync |
+| `kura_notify_lag_seconds`, `kura_notify_queue_usage` | Change notifications between replicas through PostgreSQL `NOTIFY`. Commits fail when the queue is full |
+| `kura_quota_used_ratio{tenant}` | Storage used against each tenant's quota. Alert above 90%: `KuraTenantQuotaHigh` |
+| `kura_config_rejected_total` | A configuration change was refused; the previous one stays in force |
+| `kura_maintenance_failures_total`, `kura_maintenance_gc_timestamp_seconds` | Maintenance failures, and the last garbage collection |
+| `kura_backup_last_success_timestamp_seconds` | The last bucket copy. Alert after 36 hours: `KuraBackupMissing` |
+| `kura_ws_connections` | Open notification sockets per replica |
+
+With search on, also watch `kura_index_queue_depth` and `kura_index_failed`. With notifications on, watch `kura_notification_oldest_pending_seconds` and `kura_notification_rules_disabled`.
+
+Metric labels carry tenant names, problem types and outcomes, never a note path or a user.
+
+## Probes
+
+Both probes are on the API port `8080`, outside `/v1`, and need no token.
+
+| Probe | Answers `200` when | Answers otherwise |
+| --- | --- | --- |
+| `GET /healthz` | The process is alive: it always answers `{"status":"ok"}` | — |
+| `GET /readyz` | A valid configuration is loaded: `{"status":"ready"}` | `503` until the first valid configuration |
+
+`/readyz` never checks a shared dependency such as PostgreSQL, Vault or Authentik. If it did, a short outage of one of them would take every replica out of the Service at once. A failed dependency shows up instead as `503` answers on the routes that need it, counted by `kura_unavailable_total`.
+
+The chart uses `/healthz` as the liveness probe (every 10 s) and `/readyz` as the readiness probe (every 5 s).
+
+## Logs
+
+`kura-server` writes JSON logs to standard output, one object per line, through `tracing`.
+
+- **Level**: set `RUST_LOG`; the default is `info`. For example `RUST_LOG=info,kura_server=debug`.
+- **Requests**: each request has a span with its method and route template (for example `/v1/vaults/{v}/changes`).
+- **Audit events** use the target `audit`: every refusal (`authz_denied`, with the problem type, route template, client address and claimed device), device registration and revocation, binding and vault changes, configuration removals, every use, issue and revocation of a scoped token, and vault purges. Route them to a separate stream if you keep audit logs longer.
+- **Configuration rejections** are logged at `warn` as `file#index field.path: message`.
+
+What is never logged: the request path (it carries vault names and note paths), tokens and secrets, note content, and data keys. Spans use the route template instead of the path.
+
+There is no trace export yet.
+
+## The admin status endpoint
+
+Platform admins (the `oidc.platformAdmin` claim) can read the reconciled configuration's status:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" -H "X-Kura-Device: <device id>" \
+  https://kura.example.org/v1/admin/status
+```
+
+It returns:
+
+- `generation`, `writerVersion` and `writtenAt` of the stored configuration;
+- `objects`: one entry per tenant or vault with its conditions, `Ready` first, plus advisory conditions such as `QuotaBelowUsage` (a tenant storing more than its quota: reads continue, writes are refused), `TokenWriteDisabled` and `RestrictedBindingWidened`;
+- `rejection`: this replica's last refused configuration change.
+
+See [Reason codes](/docs/reference/reason-codes) for every condition.
+
+## Dashboards
+
+The repository ships no Grafana dashboard. Build one from the signals above.
+
+<Cards>
+  <Card title="Metrics" href="/docs/reference/metrics">Every metric.</Card>
+  <Card title="Alerts" href="/docs/reference/alerts">Every alert and its threshold.</Card>
+  <Card title="Backup and restore" href="/docs/guides/backup-and-restore">The backup alert in context.</Card>
+</Cards>

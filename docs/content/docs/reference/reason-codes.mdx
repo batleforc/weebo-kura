@@ -1,0 +1,57 @@
+---
+title: Reason Codes
+description: Every reason code of a KuraTenant or KuraVault status, what it means and when the server sets it.
+---
+
+Each `KuraTenant` and `KuraVault` document gets a status: an
+`observedGeneration` (for documents read from files, a hash of the
+document) and a list of `conditions`, with `Ready` first. Each condition
+carries a `reason`, one of the PascalCase codes below, from the
+`ReasonCode` catalogue of
+[`crates/kura-api/src/reason.rs`](https://github.com/batleforc/weebo-kura/blob/main/crates/kura-api/src/reason.rs).
+You read the statuses in `GET /v1/admin/status` (platform admin) and on the
+web console's status page. Objects whose `Ready` is not `True`, or that
+carry an advisory condition, are counted in the `kura_config_warnings`
+metric.
+
+## The catalogue
+
+A **blocking** code means the document is not applied. An **advisory** code
+means it is applied, with something to look at.
+
+| Code | Severity | Meaning | Where and when it is set |
+| --- | --- | --- | --- |
+| `Reconciled` | advisory (success) | `Ready: True`: the document is applied. | The `Ready` condition of every tenant and vault declared in the current configuration. |
+| `InvalidDocument` | blocking | A document broke a validation rule; the last valid configuration stays in force. | Defined in the catalogue, but the server sets no condition with it today. A refused change appears instead in the `rejection` list of `GET /v1/admin/status` (file, document index, field and message), in `kura_config_rejected_total` and in the log. |
+| `Orphaned` | advisory | Removed from the files with `deletionPolicy: Orphan` (or force-orphan): disabled, data kept. | `Ready: False` on a tenant or vault no longer declared, with no deletion date. Message: "removed from the files; disabled, data kept". |
+| `QuotaBelowUsage` | advisory | The tenant stores more than its storage quota: reads continue, writes are refused. | An extra condition (type and reason `QuotaBelowUsage`, status `True`) on the tenant, computed when `GET /v1/admin/status` is called, from the bytes actually stored. |
+| `CidrTokensWithoutTrustedProxies` | advisory | Scoped tokens bound to a CIDR are refused while `trustedProxies` is empty. | Defined in the catalogue, but the server sets no condition with it today. |
+| `DeletionScheduled` | advisory | Removed with `deletionPolicy: Delete`; purged after 30 days unless the document comes back. | `Ready: False` on a tenant or vault no longer declared, with the purge date in the message. Also counted in `kura_deletions_scheduled` (alert `KuraDeletionScheduled`). |
+| `AwaitingKeyDestruction` | advisory | A purged tenant's Vault Transit key still exists. | Defined in the catalogue, but the server sets no condition with it today. The fact is reported by the `kura_tenants_awaiting_key_destruction` metric and the `KuraTenantAwaitingKeyDestruction` alert. |
+| `TokenWriteDisabled` | advisory | Write tokens exist while the tenant's `scopedTokens.write` is off: they still read, their writes are refused. | An extra condition (status `True`) on the tenant, computed when `GET /v1/admin/status` is called. |
+| `RestrictedBindingWidened` | advisory | A viewer binding lists folders, but its claim value is also mapped to `owner` or `admin` for the tenant, which opens the whole vault: the widest grant wins. | An extra condition (status `True`) on the vault, set at each reconcile; the message names the claim values. |
+
+## An example
+
+```json title="One object of GET /v1/admin/status"
+{
+  "kind": "KuraTenant",
+  "name": "acme",
+  "source": "tenants.yaml#0",
+  "observedGeneration": 4120987345120987,
+  "conditions": [
+    { "type": "Ready", "status": "True", "reason": "Reconciled", "message": "", "observedGeneration": 4120987345120987 },
+    {
+      "type": "QuotaBelowUsage",
+      "status": "True",
+      "reason": "QuotaBelowUsage",
+      "message": "11811160064 bytes stored, quota 10737418240: reads continue, writes are refused"
+    }
+  ]
+}
+```
+
+See [KuraTenant](/docs/crds/kuratenant) and [KuraVault](/docs/crds/kuravault)
+for the documents themselves, and
+[Tenants and vaults](/docs/guides/tenants-and-vaults) for removal and
+deletion.

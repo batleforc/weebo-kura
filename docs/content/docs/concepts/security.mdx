@@ -1,0 +1,134 @@
+---
+title: Security Model
+description: How Kura authenticates callers, decides what they may do, protects stored data, and what the server itself can read.
+---
+
+This page describes who can reach what in a Kura deployment, how data is protected at rest and in transit, and where the limits are. To report a vulnerability, follow [SECURITY.md](https://github.com/batleforc/weebo-kura/blob/main/SECURITY.md).
+
+## Authentication
+
+Every API call carries `Authorization: Bearer <token>`. Two kinds of token exist: OIDC access tokens from Authentik, for people, and scoped tokens (`kura_…`), for scripts and agents.
+
+### OIDC access tokens
+
+The server checks each access token against Authentik's signing keys (JWKS):
+
+- **Algorithms are pinned** in `server.yaml` (`oidc.algorithms`, default `[RS256]`). The algorithm named in the token header must be one of them; `none` is always refused.
+- The signature, the issuer (`oidc.issuer`), the audience (one of `oidc.audiences`), the expiry (30 s of clock skew allowed) and the subject are required.
+- **The token must carry a `scope` claim.** In Authentik only access tokens carry it, so an ID token presented as an access token is refused.
+- A token longer than 16 KiB is refused before parsing.
+
+Signing keys are cached (at most 16), fetched again on an unknown key id at most once a minute, and stored in PostgreSQL. When the role claim is missing from the access token, the server asks Authentik's userinfo endpoint and caches the answer for the token's lifetime (at most 10,000 entries).
+
+The API takes bearer tokens only, never cookies. CORS allows only the origins in `cors.allowedOrigins`, without credentials.
+
+### Devices, sessions and revocation
+
+Each client install registers a **device** and sends its id in `X-Kura-Device`. A device is tied to the token's subject and to its Authentik session (the `sid` claim, or for refreshed tokens that carry no `sid`, the session's `auth_time`). A token with neither claim is refused.
+
+- **Revoke** (`DELETE /v1/devices/{d}`, by the owner or a tenant admin) refuses the device at once, closes its sockets, and refuses every token of the same Authentik session, on any device and for any new registration. Use it for a lost or stolen device. The refresh token itself stays valid in Authentik until you end the session there.
+- **Sign out** in the web console (`POST /v1/devices/{d}/sign-out`) forgets that device without banning the session, and asks Authentik to revoke the refresh token.
+- A refresh token stolen from a browser and already refreshed by the thief survives a sign-out; only Revoke stops it.
+
+Devices idle for 180 days are purged (web devices: 30 days). Revoked devices are kept, so their session stays refused.
+
+### Scoped tokens
+
+A scoped token is `kura_<id>_<secret>`, with 256 bits of secret. The server stores only its SHA-256 hash. A token is limited to one vault, 1 to 16 folder rules (`read` or `write`), at most 90 days, and a list of client address ranges that may not be `0.0.0.0/0` or `::/0`. Writing needs the tenant to set `scopedTokens: { write: true }`. See [Scoped tokens](/docs/guides/scoped-tokens).
+
+## Authorization
+
+Roles come from the reconciled configuration, never from a replica's own files.
+
+| Level | Role | Grants |
+| --- | --- | --- |
+| Platform | platform admin | Reads `GET /v1/admin/status`. Set by the `oidc.platformAdmin` claim and value |
+| Tenant | `owner`, `admin` | Every vault of the tenant, as `manager`. An `admin` creates vaults and manages bindings |
+| Tenant | `member` | Only the vaults where a binding grants a role |
+| Vault | `manager` | Read, write, restore, manage the vault's bindings and tokens |
+| Vault | `editor` | Read, write, restore |
+| Vault | `viewer` | Read, search, list history |
+
+- A tenant maps OIDC claim values (usually Authentik groups) to tenant roles with `claimMappings`.
+- A vault **binding** grants a vault role to a claim value or to one OIDC subject.
+- The effective right on a vault is the **highest** of the tenant role and every matching binding.
+- A `viewer` binding may list `paths`, 1 to 16 folders (RFC 0005). Its holder sees only notes under those folders, on every client. A hidden note answers `404`, exactly like a missing one. Any wider grant wins over the restriction.
+- A manager or admin can only bind a role no higher than their own, and only to the tenant's own claim values or known members.
+
+In PostgreSQL, the server connects as `kura_app`, which neither owns the tables nor bypasses row-level security. Every table forces row-level security, so a request sees one tenant's rows, or its caller's own devices, even if a query forgets a filter.
+
+## Encryption at rest
+
+Envelope encryption, per RFC 0001 §6.6:
+
+- One Vault Transit key per tenant, `kura-<tenant>`. One **data key** per vault, created by Transit's `datakey` endpoint on first upload and stored only wrapped (encrypted by the Transit key).
+- Each chunk is encrypted with **AES-256-GCM** under the vault's data key, with a random 96-bit nonce.
+- The **associated data** binds the ciphertext to the vault id, the chunk hash, the format byte and the codec byte, so a stored chunk cannot be replayed under another address or vault.
+- Object names in the bucket are a keyed hash of the chunk hash, under a key derived from the data key, plus a random suffix per upload. Holding the bucket alone does not tell whether a known file is stored.
+- Plaintext data keys are held in memory only, wiped on drop, never printed, cached at most 10 minutes (at most 1,000 keys).
+- The server's Vault policy allows only `datakey`, `decrypt` and `rewrap` on Transit, and `read` on its two KV paths. Creating, allowing deletion of and deleting a tenant's Transit key are operator actions under a separate Vault role.
+
+Webhook URLs, signing secrets and `authorization` values are sealed the same way, with a per-tenant data key.
+
+## What the server can read
+
+Encryption at rest protects the bucket and its copies. It does **not** hide content from the server: the server can unwrap any data key through Transit, and it decrypts content to merge text, build search snippets and serve the console's reader.
+
+Stored in PostgreSQL **in plaintext**:
+
+- File paths and sizes.
+- **The search index, when a tenant enables search**: the words of each Markdown note, in PostgreSQL and its backups. Search is off by default.
+
+An operator with access to PostgreSQL and Vault can read everything. Choose who runs Kura accordingly.
+
+## Transport
+
+TLS ends at the ingress. The API listens on port `8080`; metrics on `9090` are on their own Service, never routed by the ingress, and admitted only from `networkPolicy.monitoringNamespace`.
+
+Set `trustedProxies` to the ingress controller's pod range. `X-Forwarded-For` is believed only from a peer in that list; otherwise the peer address is the client. For checks that grant access (a scoped token's address ranges), a request behind a trusted proxy that does not name its client in a well-formed `X-Forwarded-For` is refused.
+
+## The web console
+
+`/app` is served with a Content-Security-Policy that allows scripts from Kura's own origin only, connections to Kura and the identity provider only, and `frame-ancestors 'none'`. Kura sets no cookie: the console keeps its access token in memory and its refresh token in the tab's `sessionStorage`, or in `localStorage` when the user ticks "Stay signed in on this device".
+
+A note is rendered with raw HTML off and sanitized, in a sandboxed frame that may run only the console's own bridge script, allowed by its hash. Images come from the vault only; remote images are never loaded.
+
+## Webhooks
+
+Outbound webhooks are guarded against server-side request forgery:
+
+- `https` only, no user info in the URL, at most 2,048 bytes.
+- The server connects only to public addresses, or to ranges listed in `notifications.webhook.allowedCidrs` (never `0.0.0.0/0` or `::/0`). The rule is checked on every address it connects to, at every attempt, so a name that later points inside is refused.
+- No redirects, 5 s per attempt.
+- Each delivery is signed with HMAC-SHA256 (`X-Kura-Signature`). A payload never holds a note path or content, an OIDC subject, a device name or a secret.
+
+## Rate limits and body limits
+
+Every route has a per-device rate limit, kept in each replica's memory; past it, the server answers `429` with `Retry-After`. Request bodies are limited (64 KiB by default; larger limits for commits, chunks and batches). See [Rate limits](/docs/reference/rate-limits).
+
+## Audit logs
+
+Security events are JSON log lines with the tracing target `audit`:
+
+- every refusal (`authz_denied`), with the problem type, the route template, the client address and the claimed device;
+- device registration and revocation, binding and vault changes, configuration removals;
+- every use, issue and revocation of a scoped token (`scoped_token_used`, `scoped_token_created`, `scoped_token_revoked`);
+- a vault purged after its `Delete` grace period (`vault_purged`).
+
+Logs name the route template, never the request path, because paths carry vault names and note paths. Tokens are never logged. See [Monitoring](/docs/guides/monitoring).
+
+## Secrets stay out of files
+
+`server.yaml` holds no secret. The server reads the database URL and the bucket credentials from Vault KV, and logs in to Vault with its Kubernetes ServiceAccount. The image runs as UID 65532 and writes nothing to disk, so a read-only root filesystem works. `KURA_DATABASE_URL` and `KURA_VAULT_TOKEN` are for local runs and the migration Job only.
+
+## Supply chain
+
+- **Releases** are built by a tag-triggered GitHub Actions workflow. The image `ghcr.io/batleforc/kura-server` and the chart `oci://ghcr.io/batleforc/weebo-kura/charts/kura` are signed with cosign keyless; `checksums.txt` covers every release asset and has a Sigstore bundle. See [Upgrades](/docs/guides/upgrades) for the verification commands.
+- **SBOMs** (CycloneDX) are attached to each release for the server, the CLI and the image, and attested.
+- **CI scanners** run on every pull request, on `main`, and every day: gitleaks (secrets), `task audit` (dependency CVEs), Semgrep (static analysis) and Trivy on the built image. CodeQL runs weekly as well, when code scanning is enabled on the repository.
+
+<Cards>
+  <Card title="Scoped tokens" href="/docs/guides/scoped-tokens">Tokens for scripts and agents.</Card>
+  <Card title="Tenants and vaults" href="/docs/guides/tenants-and-vaults">Roles and bindings in practice.</Card>
+  <Card title="Problem types" href="/docs/reference/problem-types">What each refusal means.</Card>
+</Cards>

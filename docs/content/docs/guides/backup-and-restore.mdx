@@ -1,0 +1,140 @@
+---
+title: Backup and Restore
+description: Set up the three backups Kura needs, and restore a deployment from them in the right order.
+---
+
+A Kura deployment keeps its data in three places, and a restore needs all three: PostgreSQL (metadata and history), the bucket (encrypted content), and Vault or OpenBao (the keys that decrypt the content). This page shows how to back up each one with the Helm chart and how to restore them.
+
+<Callout type="warn" title="All three are required">
+Without the Vault Transit keys, the chunks in the bucket cannot be decrypted: a database and a bucket restored without them hold nothing readable. Without the bucket, the database points to content that does not exist.
+</Callout>
+
+## The three backups
+
+### 1. PostgreSQL
+
+The chart's CloudNativePG cluster archives the write-ahead log (WAL) continuously with barman and takes a base backup every day. Together they let you recover the database to any point in time.
+
+```yaml title="values.yaml"
+cnpg:
+  enabled: true
+  backup:
+    destinationPath: s3://kura-db-backups/kura   # a location other than the kura bucket
+    endpointURL: ""                              # your S3 endpoint, if not AWS
+    credentialsSecret: kura-db-backup            # a Secret with ACCESS_KEY_ID and ACCESS_SECRET_KEY
+    retention: 30d
+    schedule: "0 0 0 * * *"                      # the daily base backup (CloudNativePG's six-field cron)
+```
+
+### 2. The bucket
+
+The `kura-server backup` command copies every new object to a **second bucket**. The chart runs it as a CronJob. Each run:
+
+1. takes the **backup lock**, a PostgreSQL advisory lock (`7743220896921379691`) that stops maintenance from deleting any chunk or object meanwhile. It waits up to 30 minutes for a running maintenance pass;
+2. records the database time **T**;
+3. copies every object the second bucket lacks. Object names are unique per upload, so a name already present holds the same bytes;
+4. checks it still holds the lock; if the lock was lost, the run fails, since the copy proves nothing;
+5. writes `backups/<T>.keys` (every object name the database may refer to at T) and `backups/<T>.json`;
+6. records its success in `kura_backup_last_success_timestamp_seconds`, and releases the lock.
+
+It prints the point in time T to recover PostgreSQL to. The alert `KuraBackupMissing` fires when no copy has completed for 36 hours.
+
+```yaml title="values.yaml"
+backup:
+  enabled: true
+  schedule: "30 23 * * *"           # outside maintenance.window (01:00-05:00 UTC by default)
+  targetSecret: kura-backup-target
+```
+
+The Secret names the second bucket:
+
+```bash
+kubectl -n kura create secret generic kura-backup-target \
+  --from-literal=KURA_BACKUP_ENDPOINT=https://s3.example.org \
+  --from-literal=KURA_BACKUP_BUCKET=kura-backup \
+  --from-literal=KURA_BACKUP_REGION=us-east-1 \
+  --from-literal=KURA_BACKUP_ACCESS_KEY_ID=<key id> \
+  --from-literal=KURA_BACKUP_SECRET_ACCESS_KEY=<secret>
+```
+
+`KURA_BACKUP_REGION` defaults to `us-east-1` when absent. The CronJob runs with the server's ServiceAccount: it reads the database and the source bucket from Vault, like the server.
+
+<Callout type="info" title="Pruning the second bucket">
+The backup tool never deletes anything from the second bucket. To prune it, delete only the object names that **no kept** `backups/<T>.keys` file lists. Never prune by age: a chunk keeps its name for as long as a note uses it. Any other backup tool must hold the same backup lock while it copies.
+</Callout>
+
+### 3. Vault or OpenBao
+
+Take a Raft snapshot of Vault **after** each bucket copy, and keep it as long as the restore points it covers. Never trim a Transit key version older than the oldest kept base backup: a restored database must be able to unwrap its data keys. Kura does not take this snapshot for you.
+
+### The chart refuses to run without backups
+
+The chart fails to render when `backup.enabled` is false, or when it creates the CloudNativePG cluster and `cnpg.backup.destinationPath` is empty. For a test install, or when you back up by other means, set:
+
+```yaml title="values.yaml"
+backupsWaived: true
+```
+
+With `backupsWaived: true`, the chart also leaves out the `KuraBackupMissing` alert: alert on your own backups yourself.
+
+## Restore
+
+Follow these steps in order. They assume you restore the bucket copy taken at time T.
+
+<Steps>
+<Step>
+### Restore Vault
+
+Restore the first Vault snapshot taken **after** T. An older one may lack the Transit key of a tenant created before T.
+</Step>
+<Step>
+### Recover PostgreSQL to T
+
+Recover the CloudNativePG cluster to the time T printed by the bucket copy, with `bootstrap.recovery` and `recoveryTarget.targetTime`. Every object the database names at T was in that copy.
+</Step>
+<Step>
+### Copy the objects back
+
+Copy the second bucket's objects back into the Kura bucket, for example with `rclone copy` or `mc mirror`.
+</Step>
+<Step>
+### Migrate and reset the epochs
+
+Run both as the database owner, with the owner's `KURA_DATABASE_URL`:
+
+```bash
+kura-server migrate
+kura-server reset-epochs
+```
+
+`reset-epochs` gives every vault a new epoch and prints how many it changed.
+</Step>
+<Step>
+### Check a sample of chunks
+
+```bash
+KURA_DATABASE_URL=<owner URL> kura-server check-chunks --sample 200 --config /etc/kura/server.yaml
+```
+
+It decrypts random chunks with their vault's key and checks their address. It fails on any bad chunk.
+</Step>
+</Steps>
+
+### What devices do next
+
+Every device then gets `410 history_rewound` on its next pull and runs a full resync. It pushes back whatever the backup lacked and deletes nothing. A version the server lost comes back as a conflict file beside the older one. See [How sync works](/docs/concepts/sync).
+
+### Failover and switchover
+
+A failover to a PostgreSQL standby needs no step: the new timeline changes every vault's epoch by itself, and devices resync the same way. A planned switchover changes the timeline too, so every device resyncs: nothing is deleted, but an edit the old primary had not replicated comes back as a conflict file, and a deletion it had not replicated is undone. Watch `kura_vault_epoch_changes_total` and the `KuraVaultEpochChanged` alert.
+
+## Practise the restore
+
+On the local development stack, `task dev:drill` runs the restore drill: it backs up PostgreSQL and the bucket, deletes the objects, restores both into a separate database, regenerates the epochs and decrypts a sample of 50 chunks. It does not restore OpenBao's Transit keys; that part belongs to a drill on a real cluster.
+
+Run the same steps against a staging cluster before you need them in production.
+
+<Cards>
+  <Card title="Helm values" href="/docs/reference/helm-values">Every `cnpg.*` and `backup.*` value.</Card>
+  <Card title="Monitoring" href="/docs/guides/monitoring">The backup alert and its metric.</Card>
+</Cards>

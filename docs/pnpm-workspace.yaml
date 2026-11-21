@@ -1,0 +1,3 @@
+# Same rule as the plugin: esbuild alone may run its install script.
+allowBuilds:
+  esbuild: true

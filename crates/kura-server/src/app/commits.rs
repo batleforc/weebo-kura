@@ -1,7 +1,7 @@
 //! `POST /v1/vaults/{v}/commits` (RFC 0001 §6.3, §6.5): one transaction under
 //! the vault row lock, consecutive `seq` values, idempotency per device.
-//! Phase 3 has no merge: an edit that diverged from the head is stored as a
-//! conflict file (phase 4 adds the three-way merge).
+//! An edit that diverged from the head is merged three-way when it can be
+//! (Markdown lines), else stored as a conflict file.
 
 use std::collections::{HashMap, HashSet};
 

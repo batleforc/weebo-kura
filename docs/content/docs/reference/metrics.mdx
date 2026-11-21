@@ -1,0 +1,97 @@
+---
+title: Metrics
+description: Every Prometheus metric kura-server exports, with its type, labels and meaning.
+---
+
+kura-server exports Prometheus metrics at `/metrics` on its own port,
+separate from the API (`listen.metrics` in `server.yaml`, default
+`0.0.0.0:9090`; the Helm chart uses port 9090 on a `<release>-metrics`
+Service that the ingress never routes). Every name starts with `kura_`.
+Labels are limited to `tenant`, `outcome` and, for one metric, `route`, so
+the number of series stays small. All metrics are registered in
+[`crates/kura-server/src/metrics.rs`](https://github.com/batleforc/weebo-kura/blob/main/crates/kura-server/src/metrics.rs);
+no other metric is registered elsewhere. Gauges and counters are per
+replica unless they come from a database query, as noted. The alerts built
+on them are in [Alerts](/docs/reference/alerts).
+
+## Configuration and HTTP
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `kura_ready` | gauge | none | 1 while the configuration is loaded and the replica serves traffic. |
+| `kura_config_rejected_total` | counter | none | Configuration changes refused by validation; the previous configuration stays in force. |
+| `kura_config_warnings` | gauge | none | Objects of the stored configuration whose `Ready` is not `True`, or that carry an advisory condition (see [Reason codes](/docs/reference/reason-codes)). |
+| `kura_authz_denied_total` | counter | `outcome` | Authorization denials. `outcome` is the problem type: `invalid_token`, `device_revoked`, `device_unknown`, `insufficient_role`, `address_not_allowed`, `not_found`. |
+| `kura_unavailable_total` | counter | none | `503` answers caused by a failed dependency; the `warn` log line names it. |
+| `kura_resync_total` | counter | `outcome` | `410` answers sent, by problem type: `cursor_expired` or `history_rewound`. Each one makes a device run a full resync. |
+
+## Transport and Vault
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `kura_ws_connections` | gauge | none | Open notification WebSockets on this replica. |
+| `kura_vault_call_duration_seconds` | histogram | `outcome` | Duration of Vault (or OpenBao) Transit calls; `outcome` is `ok` or `error`. Default buckets. |
+| `kura_vault_epoch_changes_total` | counter | none | Vault epochs regenerated after a database promotion or a restore. Every device of those vaults resyncs. |
+| `kura_notify_lag_seconds` | gauge | none | Round trip of this replica's own heartbeat through PostgreSQL `NOTIFY`. |
+| `kura_notify_queue_usage` | gauge | none | `pg_notification_queue_usage()`, from 0 to 1. Commits fail when the queue is full. |
+
+## Commits and transfers
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `kura_commits_total` | counter | none | Commits that wrote at least one revision. |
+| `kura_commit_duration_seconds` | histogram | none | Commit handling time, lock wait and merges included. Buckets: 0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1, 2.5, 5 seconds. The design budget is 200 ms at p95. |
+| `kura_merge_total` | counter | `outcome` | Three-way merges attempted: `merged` or `conflict`. |
+| `kura_token_writes_total` | counter | `outcome` | Writes asked by scoped tokens: `applied`, `refused` (outside its folders, or content it did not upload), `disabled` (the tenant's `scopedTokens.write` is off). |
+| `kura_chunk_corrupt_total` | counter | none | Stored chunks that failed their check on read. Any increase needs attention. |
+| `kura_batch_items_total` | counter | `route`, `outcome` | Items of the batch routes. `route="blobs"` or `"chunks"` with `outcome="found"` (fetched and sent) or `"missing"` (unknown or not visible); `route="upload"`, `outcome="stored"` counts chunks stored by `chunks/upload`. |
+| `kura_batch_response_bytes` | histogram | none | Body size of each `chunks/batch` answer. Buckets: 4096, 65536, 262144, 1048576, 2097152, 4194304, 4500000 bytes. |
+| `kura_device_sync_write_failures_total` | counter | none | Device sync state rows not recorded; the pull or commit went on. The `warn` log names the tenant. |
+
+## Notifications (webhooks)
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `kura_notification_deliveries_total` | counter | `outcome` | Delivery attempts. `outcome` is one of `delivered`, `gone`, `redirect`, `status_4xx`, `status_5xx`, `timeout`, `connect`, `tls`, `address_refused`, `unavailable`, `disabled`, `rule_disabled`. |
+| `kura_notification_pending` | gauge | none | Deliveries waiting. |
+| `kura_notification_oldest_pending_seconds` | gauge | none | Age of the oldest delivery that is due and not sent. |
+| `kura_notification_rules_disabled` | gauge | none | Rules that switched themselves off after failures (a `410 Gone`, or 20 failures in a row). |
+
+## Storage, quotas and lifecycle
+
+These gauges are refreshed from the database once a minute.
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `kura_chunk_bytes_stored` | gauge | `tenant` | Encrypted bytes stored. |
+| `kura_dedup_ratio` | gauge | `tenant` | Bytes of current files over bytes stored (absent while nothing is stored). |
+| `kura_quota_used_ratio` | gauge | `tenant` | Bytes stored over the quota (absent for a tenant without a quota). |
+| `kura_storage_refreshed_timestamp_seconds` | gauge | none | When the storage gauges were last refreshed, in Unix seconds. A stale value means the gauges above are stale. |
+| `kura_deletions_scheduled` | gauge | none | Tenants and vaults removed with `deletionPolicy: Delete`, still in their 30-day grace period. |
+| `kura_tenants_awaiting_key_destruction` | gauge | none | Tenants purged by `Delete` whose Transit key an operator must destroy. |
+| `kura_backup_last_success_timestamp_seconds` | gauge | none | When the last bucket copy (`kura-server backup`) finished, in Unix seconds; 0 if never. |
+
+## Maintenance
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `kura_maintenance_deleted_total` | counter | `outcome` | Rows and objects removed by maintenance: `revision`, `entry`, `blob`, `chunk`, `object`, `orphan`, `purged` (vaults purged after their grace period). |
+| `kura_maintenance_failures_total` | counter | none | Vaults whose maintenance failed in a pass; the other vaults went on. |
+| `kura_maintenance_gc_timestamp_seconds` | gauge | none | When a maintenance pass last ran garbage collection, in Unix seconds. It stays frozen while a backup holds the lock or passes fail. |
+
+## Search index
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `kura_index_queue_depth` | gauge | none | Search index jobs waiting. |
+| `kura_index_failed` | gauge | none | Index jobs given up after five attempts: those notes are missing from search until their next edit. |
+| `kura_index_round_timestamp_seconds` | gauge | none | When the indexer last finished a round, in Unix seconds. It stays frozen while the indexer is stuck or failing. |
+
+## Scraping
+
+With the Helm chart, `monitoring.serviceMonitor.enabled` (default `true`)
+creates a ServiceMonitor that scrapes the `metrics` port every
+`monitoring.serviceMonitor.interval` (default `30s`). The NetworkPolicy
+admits the metrics port only from `networkPolicy.monitoringNamespace`. See
+[Helm values](/docs/reference/helm-values) and
+[Monitoring](/docs/guides/monitoring).

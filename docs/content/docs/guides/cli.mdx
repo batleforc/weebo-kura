@@ -1,0 +1,232 @@
+---
+title: CLI Guide
+description: Install the kura command-line client, sign in, attach a folder to a vault, keep it in sync, and manage devices and scoped tokens.
+---
+
+`kura` is the command-line client of weebo-kura. It uses the same sync engine as the Obsidian plugin, so a folder synced with `kura` behaves like a vault synced from Obsidian. Use it on a server, in a script, or to migrate a vault.
+
+This page walks through common tasks. For every command and flag, see the [CLI reference](/docs/reference/cli).
+
+## Install
+
+<Tabs items={['mise', 'Release archive']}>
+<Tab value="mise">
+
+```bash
+mise use -g github:batleforc/weebo-kura
+```
+
+</Tab>
+<Tab value="Release archive">
+
+Each GitHub release carries one archive per platform, holding the `kura` binary:
+
+| Platform | Archive |
+| --- | --- |
+| Linux x86_64 | `kura-linux-amd64.tar.gz` |
+| Linux aarch64 | `kura-linux-arm64.tar.gz` |
+| macOS (Apple silicon) | `kura-darwin-arm64.tar.gz` |
+| Windows x86_64 | `kura-windows-amd64.zip` |
+
+The archives are signed with cosign (keyless) and listed in `checksums.txt`. They also carry a GitHub build attestation:
+
+```bash
+gh attestation verify kura-linux-amd64.tar.gz --repo batleforc/weebo-kura
+```
+
+</Tab>
+</Tabs>
+
+Check the install with `kura --version`.
+
+## Sign in
+
+```bash
+kura login \
+  --server https://kura.example.org \
+  --issuer https://auth.example.org/application/o/kura/
+```
+
+`kura login` uses the OAuth device flow. It prints a URL and a short code:
+
+```text
+Open https://auth.example.org/device and enter the code:
+
+    ABCD-EFGH
+
+(or open https://auth.example.org/device?code=ABCD-EFGH)
+Waiting for approval...
+```
+
+Open the URL in any browser, sign in, and approve. `kura` then registers this machine as a device with the `desktop` profile:
+
+```text
+Logged in as alice. Device "laptop" registered (profile: desktop).
+```
+
+Options:
+
+- `--client-id`: the OIDC client, `kura-cli` by default.
+- `--device-name`: how the device appears in device lists and in conflict file names. It defaults to the host name. It must be a valid file name.
+
+If your account belongs to no Kura tenant, `kura login` says so and exits with code 2: ask your platform admin to add you to a tenant group.
+
+## Attach a folder to a vault
+
+```bash
+kura attach notes ~/vaults/notes
+```
+
+`attach` links a local folder to a vault, by the vault's name. It creates the folder if needed. Before anything moves, it compares the folder with the server and prints a summary:
+
+```text
+Attach /home/alice/vaults/notes to notes:
+     120 files match the server
+       3 only here, will be pushed (12.0 KiB)
+      40 only on the server, will be downloaded
+       1 differ from the server, both kept (a conflict file each)
+```
+
+It also lists files that cannot sync, and why. It then asks `Continue? [y/N]`. Answer `y`, or pass `--yes` to skip the question. A file that differs from the server is never overwritten: both versions are kept, the local one as a conflict file. When you answer no, nothing changes.
+
+The first sync runs straight after: `Attached. notes is in sync.`
+
+## Sync once
+
+```bash
+kura sync notes     # one vault
+kura sync           # every attached vault
+```
+
+Each run pushes local changes and pulls remote ones, then prints a line such as `notes: pushed 2, pulled 5, removed 0, 0 conflicts.` Conflicts are printed as `conflict: <path>`. Files deleted on other devices are moved to the folder's `.trash`, never deleted outright.
+
+- `--dry-run` lists what would be pushed and what cannot sync, without sending or pulling anything.
+- `--yes` lets a full resync move many files to `.trash` without asking. A full resync happens when this machine was away longer than the vault keeps deletions. Without `--yes`, `kura` asks when a resync would trash more than 10% of the files or more than 50 files; when it cannot ask (no terminal), it stops, removes nothing, and exits with code 3.
+
+If the vault shares Obsidian settings and the folder has an `.obsidian` folder, `sync` also syncs the shared categories of it, with the `desktop` profile. See [Obsidian plugin](/docs/guides/obsidian-plugin#configuration-sync).
+
+`kura` skips files larger than 2 GiB; the vault's own size limit on the server still applies.
+
+## Keep a folder in sync
+
+```bash
+kura watch notes
+```
+
+`watch` syncs once, then keeps a live connection to the server:
+
+- it pulls when the server announces a change;
+- it pushes local edits once the folder has been quiet for 5 seconds;
+- if the connection drops (no message for 75 seconds; the server pings every 30 seconds), it reconnects after a randomised delay between 1 and 60 seconds.
+
+Stop it with Ctrl-C. With a single attached vault you can omit its name. `watch` stops by itself only when you must sign in again (exit 2) or the server refuses (exit 3); other errors are retried.
+
+## Check the state
+
+```bash
+kura status
+```
+
+```text
+VAULT        ROLE     STATE       PENDING CONFLICTS  LAST SYNC
+notes        editor   in sync           0         0  42s ago
+```
+
+`STATE` is `in sync`, `syncing` (local changes to push), `conflict`, `unsyncable`, `read-only` (you are a viewer and have local changes), or `no access`. `status` does not send anything.
+
+```bash
+kura verify notes
+```
+
+`verify` checks that the server holds exactly the folder's files, by content. It lists files only here, files that differ, files that cannot sync, and files only on the server, then prints `Equal.` (exit 0) or `Not equal.` (exit 1). Use it to confirm a migration.
+
+## History and restore
+
+```bash
+kura history notes "Projects/plan.md"
+kura restore notes "Projects/plan.md" 0193c0de-…
+```
+
+`history` lists a file's revisions, newest first. `restore` makes an old revision the file's new version on the server, then syncs the folder to bring it here.
+
+## Devices
+
+```bash
+kura devices                 # list your devices
+kura devices revoke laptop   # revoke one by name
+```
+
+A revoked device can no longer sync. To lock it out fully, also end its session in your identity provider.
+
+## Scoped tokens
+
+A scoped token lets a script or an agent read (and, if the tenant allows, write) some folders of one vault, from some addresses, for a limited time. You need the manager role on the vault. See [Scoped tokens](/docs/guides/scoped-tokens) for the rules.
+
+```bash
+kura token create notes \
+  --name ci-export \
+  --read Projects/ \
+  --expires 30d \
+  --cidr 10.0.0.0/8
+```
+
+- `--read <folder/>`: a folder it reads. Repeat for more.
+- `--write <folder/>`: a folder it reads and writes. Repeat for more. The tenant must set `scopedTokens.write`; a token never writes the whole vault.
+- With no `--read` or `--write`, the token reads the whole vault.
+- `--expires`: days, at most 90 (`30d` or `30`). Required.
+- `--cidr`: an address range it may be used from. Required; repeat for more.
+
+The secret (`kura_…`) is printed once. Store it now: nobody can display it again.
+
+```bash
+kura token list notes             # names, scopes, expiry, last use; never secrets
+kura token revoke notes <token-id>
+```
+
+### Use a token with the CLI
+
+A token never signs in and never needs `kura login`. Give it to `attach` and `sync` with `--token-file` (preferred) or the `KURA_TOKEN` variable, and the server with `KURA_SERVER`:
+
+```bash
+export KURA_SERVER=https://kura.example.org
+kura --token-file ~/.config/kura/ci.token attach notes ./export --yes
+kura --token-file ~/.config/kura/ci.token sync notes
+```
+
+Prefer `--token-file`: other processes of the same user can read environment variables. A token run never touches Obsidian settings. If a local change falls outside the token's write folders, nothing is pushed and `kura` exits with code 3.
+
+## Sign out
+
+There is no `kura logout` command. To sign a machine out:
+
+1. Revoke its device: `kura devices revoke <name>`, or from **My devices** in the [web console](/docs/guides/web-console).
+2. Delete `credentials.json` from the configuration folder (below).
+
+## Where kura keeps its state
+
+| What | Where |
+| --- | --- |
+| Configuration: server, issuer, client id, device, attached folders | `config.json` in the configuration folder |
+| Refresh token | `credentials.json` in the configuration folder |
+| Sync state of a folder (never synced) | `.kura/` inside the attached folder |
+| Files deleted elsewhere | `.trash/` inside the attached folder |
+
+The configuration folder is `$KURA_CLI_HOME`, else `$XDG_CONFIG_HOME/kura`, else `~/.config/kura`. Both files are written with mode `0600` (owner only).
+
+<Callout type="warn" title="The refresh token is a file">
+The refresh token is stored in a `0600` file, not in the operating system keyring. Anyone who can read your home folder as you can use it. Protect the machine accordingly, and revoke the device if it is lost.
+</Callout>
+
+Dot-folders inside an attached folder (`.kura`, `.trash`, `.git`, `.obsidian`) are never synced as notes.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success. |
+| 1 | Anything else: network error, a remote file could not be written here, `verify` found differences. |
+| 2 | Sign in: not signed in, token invalid, device revoked or unknown. Run `kura login`. |
+| 3 | Refused: role too low, quota exceeded, client too old, vault not attached or not visible, a question answered no, a change outside a token's write folders. |
+| 4 | Some files cannot sync (invalid path, too large). |
+
+`kura sync` without a vault returns the worst code of all vaults.

@@ -1,0 +1,138 @@
+---
+title: Web Console
+description: Use the browser console to read vaults, follow your devices, see your synced Obsidian settings, and, as a manager, run access, keys and notifications.
+---
+
+The web console is a web app served by kura-server under `/app`. It lets people read their vaults without Obsidian, see their devices, and install the plugin. Vault managers and tenant admins also use it as a back office.
+
+The console is off by default. An operator turns it on with `ui.enabled: true` in `server.yaml` (`server.ui.enabled` in the Helm chart); otherwise `/app` answers `404`. When it is on, `/` redirects to `/app/`. See [Server configuration](/docs/guides/configuration).
+
+The console only shows; the API decides. A page hides what your role cannot do, but every action is an ordinary `/v1` call that the server authorises.
+
+## Sign in
+
+Open `/app/` and select **Sign in with Authentik**. The console signs you in with your identity provider (authorization code flow with PKCE) and registers this browser as a device with the `web` profile.
+
+- **Stay signed in on this device** keeps your session after the tab closes. Leave it unticked on a shared computer: the session then ends with the tab.
+- **Sign out** (bottom of the sidebar) signs this browser out.
+- If your account is in no Kura tenant, the console says so: ask an administrator to add your account to a group, then sign in again.
+
+## Home
+
+The home page shows:
+
+- **To do**: install the plugin if none of your devices runs Obsidian with Kura yet, and access keys of vaults you manage that expire within 14 days.
+- **Your vaults**, with a link to read each.
+- **In brief**: your active devices and the latest one seen.
+- **You run**: for tenant owners and admins, links to the tenant's vaults, notifications and members' devices; for platform admins, the platform status.
+
+The sidebar lists your vaults grouped by tenant, with a filter (**Find a vault**), plus **My devices** and **Help**.
+
+## A vault
+
+Each vault has a header with its tenant, name and your role, and an **Open in Obsidian** button (see [Obsidian plugin](/docs/guides/obsidian-plugin)). Its sections are tabs:
+
+| Tab | Who sees it |
+| --- | --- |
+| **Overview** | Everyone with access. |
+| **Notes** | Everyone with access. |
+| **Configuration** | Members with whole-vault access, when the vault syncs Obsidian settings. |
+| **Access**, **Keys**, **Notifications** | Vault managers, and the tenant's owners and admins. |
+
+The **Overview** shows the notes changed last, the devices syncing the vault and, for managers, who can open it and its live access keys.
+
+## Reading notes
+
+The **Notes** tab is a reader:
+
+- **Folders** on the side. Its width can be changed (arrow keys or drag; double-click resets it). A folder-restricted viewer sees only the folders shared with them.
+- **Find a note**, by name or in the text (in the text only when search is on).
+- One note in a reading column, with a breadcrumb, the last edit date and who made it, previous and next notes, **Copy link**, and **History**.
+- Keyboard: `/` or `Ctrl+K` to find a note, `[` and `]` to turn the page, `Escape` to close.
+
+Notes are rendered safely:
+
+- Markdown is rendered with raw HTML turned off, then cleaned with DOMPurify, and shown in a sandboxed frame. Nothing from a note runs in the console itself.
+- Wikilinks (`[[note]]`, `[[note|label]]`) and links resolve only to notes listed in the vault.
+- Images come only from the vault. Embedded images (`![[image.png]]`) up to 8 MiB are shown inline; larger ones become a link. Supported: PNG, JPEG, GIF, WebP, AVIF, SVG.
+- **Mermaid** code blocks are drawn as diagrams (Mermaid in strict mode, shown as an image) up to 50,000 characters. A diagram that cannot be drawn stays a code block. Diagrams follow the light or dark theme.
+- Notes over 1 MiB are not rendered: they are offered as a download.
+- A vault with more entries than the reader lists shows only the first ones in the folders; search finds the others.
+
+The reader keeps a live connection to the server, so it updates when the vault changes.
+
+## Search
+
+Search appears only when the tenant enables it. Otherwise the reader says "Search is not enabled for this vault. Browse the folders instead." Results are limited to the folders you can read. Search also has its own page (`/app/vaults/<vault>/search`) for direct links.
+
+## History
+
+**History** opens a drawer beside the note with its revisions, newest first: date, author, and whether a revision is a deletion. Select one to read it in the note's frame ("The revision of …, not the current one"), then **Show the current one** to go back.
+
+The console only shows past revisions; it does not restore them. To bring an old revision back, use `kura restore` from the [CLI](/docs/guides/cli#history-and-restore).
+
+## Devices and their sync state
+
+**My devices** lists every device you signed in: name, kind (desktop, mobile, web console), when it was last seen, the vaults it syncs, and its state. Revoke a lost device there; it stops at its next request. Revoking a device refuses every device signed in with the same Authentik session until it signs in again. **Sign out here** on the current browser signs it out. You can have at most 20 live devices.
+
+On a vault's **Overview**, **Devices syncing it** shows, for each device:
+
+| Column | Meaning |
+| --- | --- |
+| **Caught up** | When the server last handed the device every change. A file the device could not write still counts as handed. |
+| **Behind** | How many notes it has not received yet (`up to date`, `N notes`, `N+ notes`, or `full resync needed`). |
+| **Last push** | When it last sent changes (shown to managers). |
+| **Last run** | What its last sync left undone: changes not sent, conflicts, files that cannot sync, files not written, or `nothing left`. |
+
+Managers see every member's devices on the vault, with their owners (the section is then titled "Devices syncing it"). Other members see their own ("Your devices on this vault").
+
+## Synced configuration
+
+The **Configuration** tab shows your own Obsidian settings that sync with this vault. Only you see them. Choose the **Device profile**, **Desktop** or **Mobile**, and browse by category: snippets, themes, plugins, hotkeys. The page says which categories the vault syncs.
+
+Some files are never shown in a browser:
+
+- a plugin's code (`main.js`);
+- a plugin's settings (`data.json`), which can hold passwords or API keys. They stay on your devices;
+- any file not on the viewable list.
+
+What can be shown: `hotkeys.json`, snippet CSS files, a theme's `theme.css` and `manifest.json`, and a plugin's `manifest.json` and `styles.css`. Files over 256 KiB are not shown.
+
+## Back office
+
+### Access
+
+Vault managers and tenant admins decide who opens a vault: a group of your identity provider, or one person by OIDC subject, as **viewer**, **editor** or **manager**, on the whole vault or, for viewers, on some folders (for example `Sessions/`). You can change a role or remove an access; the vault closes to them at their next request. Access declared in configuration files is read-only here.
+
+See [Tenants and vaults](/docs/guides/tenants-and-vaults).
+
+### Keys
+
+Access keys (scoped tokens) let a script or an agent read, or write, some folders of the vault, from some addresses, for 1 to 90 days. The secret is shown once. Every manager of the vault can see and revoke every key, never its secret. See [Scoped tokens](/docs/guides/scoped-tokens).
+
+### Notifications
+
+Send a tenant's or a vault's events to a webhook. Create, edit, test, switch off, re-enable, rotate the signing secret, and look at the last 50 deliveries. Tenant admins open it from the home page; vault managers from the vault's tab. See [Notifications](/docs/guides/notifications).
+
+### Tenant pages
+
+Tenant owners and admins also have:
+
+- **Vaults of** `<tenant>`: create a vault, or delete one made here. A deleted vault is disabled at once and purged after 30 days. Vaults declared in configuration change there.
+- **Members' devices**: see and revoke the devices of your tenants' members.
+
+Platform admins have **Status**: the loaded configuration and whether each tenant and vault is ready, with the reason when it is not. See [Reason codes](/docs/reference/reason-codes).
+
+## Help
+
+The **Help** page holds:
+
+- **Sync with Obsidian**: the plugin install steps for the device you are on (Computer, Android, iPhone/iPad), the plugin download `kura-sync.zip` with its version and size, and an **Open** `<vault>` **in Obsidian** link for each vault you can sync. Folder-restricted vaults are read in the browser only, so they have no link.
+- **Set it up by hand instead**: the server and identity provider addresses to paste into the plugin.
+- Questions: reading without Obsidian, what each role can do, lost devices and shared computers, troubleshooting the plugin, and (for managers) a summary of the back office.
+
+If the server was built without the plugin, the page says so.
+
+## Preferences
+
+The **Preferences** menu sets the **Theme** (System, Light, Dark) and the **Language** (System, English, Français). "System" follows your device or browser and changes with it. The choice is stored in this browser only.

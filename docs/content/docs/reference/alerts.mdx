@@ -1,0 +1,282 @@
+---
+title: Alerts
+description: Every Prometheus alert the Helm chart installs, its expression, severity and what to do when it fires.
+---
+
+The Helm chart installs a PrometheusRule (when
+`monitoring.prometheusRule.enabled`, the default) with the alerts of
+[`deploy/helm/kura/files/alerts.yaml`](https://github.com/batleforc/weebo-kura/blob/main/deploy/helm/kura/files/alerts.yaml).
+The backup alert of
+[`files/backup-alerts.yaml`](https://github.com/batleforc/weebo-kura/blob/main/deploy/helm/kura/files/backup-alerts.yaml)
+is added as its own group unless `backupsWaived` is `true`; if you waive
+the chart's backups, alert on your own backups yourself. Each alert is
+unit-tested with promtool (`task alerts:test`). Severities are `critical`,
+`warning` and `info`. The metrics are described in
+[Metrics](/docs/reference/metrics).
+
+"For" is how long the expression must stay true before the alert fires.
+The notification alerts never page (`warning`): notifications are off the
+sync path.
+
+## Group `kura`
+
+| Alert | For | Severity |
+| --- | --- | --- |
+| [`KuraUnready`](#kuraunready) | 2m | `critical` |
+| [`KuraDown`](#kuradown) | 5m | `critical` |
+| [`KuraDependencyFailing`](#kuradependencyfailing) | 2m | `critical` |
+| [`KuraVaultFailing`](#kuravaultfailing) | none (fires at once) | `critical` |
+| [`KuraNotifyLag`](#kuranotifylag) | 5m | `warning` |
+| [`KuraNotifyQueueFilling`](#kuranotifyqueuefilling) | 1m | `critical` |
+| [`KuraChunkCorrupt`](#kurachunkcorrupt) | none (fires at once) | `critical` |
+| [`KuraConfigRejected`](#kuraconfigrejected) | none (fires at once) | `warning` |
+| [`KuraDeletionScheduled`](#kuradeletionscheduled) | none (fires at once) | `warning` |
+| [`KuraTenantAwaitingKeyDestruction`](#kuratenantawaitingkeydestruction) | none (fires at once) | `info` |
+| [`KuraVaultEpochChanged`](#kuravaultepochchanged) | none (fires at once) | `warning` |
+| [`KuraTenantQuotaHigh`](#kuratenantquotahigh) | 15m | `warning` |
+| [`KuraStorageMetricsStale`](#kurastoragemetricsstale) | 5m | `warning` |
+| [`KuraIndexQueueGrowing`](#kuraindexqueuegrowing) | none (fires at once) | `warning` |
+| [`KuraIndexStalled`](#kuraindexstalled) | 5m | `warning` |
+| [`KuraIndexJobsFailed`](#kuraindexjobsfailed) | 15m | `warning` |
+| [`KuraNotificationsStalled`](#kuranotificationsstalled) | 10m | `warning` |
+| [`KuraNotificationRuleDisabled`](#kuranotificationruledisabled) | none (fires at once) | `warning` |
+| [`KuraGarbageCollectionStale`](#kuragarbagecollectionstale) | none (fires at once) | `warning` |
+| [`KuraMaintenanceFailing`](#kuramaintenancefailing) | none (fires at once) | `warning` |
+
+### KuraUnready
+
+```text
+max(kura_ready) == 0
+```
+
+- **For:** 2m
+- **Severity:** `critical`
+- **Summary:** No kura-server replica has a configuration loaded.
+- **What to do:** Check the pods' logs. A replica with no stored configuration and invalid files stays unready; fix the documents (see `rejection` in `GET /v1/admin/status`) or the database connection.
+
+### KuraDown
+
+```text
+absent(kura_ready)
+```
+
+- **For:** 5m
+- **Severity:** `critical`
+- **Summary:** No kura-server replica is scraped.
+- **What to do:** Check that the pods run and that Prometheus can reach the metrics port (ServiceMonitor, NetworkPolicy `networkPolicy.monitoringNamespace`).
+
+### KuraDependencyFailing
+
+```text
+sum(rate(kura_unavailable_total[2m])) > 0
+```
+
+- **For:** 2m
+- **Severity:** `critical`
+- **Summary:** Requests fail with 503 on a dependency (PostgreSQL, object storage, Vault or Authentik); the warn logs name it.
+- **What to do:** Read the `warn` log lines of kura-server: they name the failing dependency. Fix PostgreSQL, object storage, Vault or Authentik.
+
+### KuraVaultFailing
+
+```text
+sum(increase(kura_vault_call_duration_seconds_count{outcome="error"}[10m])) > 0
+```
+
+- **For:** none (fires at once)
+- **Severity:** `critical`
+- **Summary:** Vault Transit calls fail; vaults without a cached key answer 503.
+- **What to do:** Check Vault (or OpenBao): sealed, unreachable, the Kubernetes auth role `kura`, or the tenant's Transit key `kura-<tenant>`.
+
+### KuraNotifyLag
+
+```text
+max(kura_notify_lag_seconds) > 30
+```
+
+- **For:** 5m
+- **Severity:** `warning`
+- **Summary:** Notifications reach replicas more than 30 s late.
+- **What to do:** Look at PostgreSQL load and the network between replicas and the database. Devices still sync, but notifications arrive late.
+
+### KuraNotifyQueueFilling
+
+```text
+max(kura_notify_queue_usage) > 0.5
+```
+
+- **For:** 1m
+- **Severity:** `critical`
+- **Summary:** PostgreSQL's NOTIFY queue is over half full; commits fail when it is full.
+- **What to do:** Look for a long-running transaction on the database: PostgreSQL cannot free `NOTIFY` queue entries older than it. End it before the queue fills and commits fail.
+
+### KuraChunkCorrupt
+
+```text
+increase(kura_chunk_corrupt_total[10m]) > 0
+```
+
+- **For:** none (fires at once)
+- **Severity:** `critical`
+- **Summary:** A stored chunk failed its check on read.
+- **What to do:** Look for the failing chunk in the logs, then check object storage. `kura-server check-chunks --sample <n>` decrypts random chunks and checks their address.
+
+### KuraConfigRejected
+
+```text
+increase(kura_config_rejected_total[10m]) > 0
+```
+
+- **For:** none (fires at once)
+- **Severity:** `warning`
+- **Summary:** A configuration change was refused; the previous one stays in force.
+- **What to do:** Read `rejection` in `GET /v1/admin/status` (file, document index, field) or the `warn` log, and fix the document.
+
+### KuraDeletionScheduled
+
+```text
+max(kura_deletions_scheduled) > 0
+```
+
+- **For:** none (fires at once)
+- **Severity:** `warning`
+- **Summary:** A tenant or vault removed with Delete will be purged after its 30-day grace period.
+- **What to do:** Confirm the removal was meant. To cancel it, put the document back before the 30 days end.
+
+### KuraTenantAwaitingKeyDestruction
+
+```text
+max(kura_tenants_awaiting_key_destruction) > 0
+```
+
+- **For:** none (fires at once)
+- **Severity:** `info`
+- **Summary:** A purged tenant's Transit key awaits an operator.
+- **What to do:** After the tenant is purged, destroy its Transit key under the operator role in Vault; the tenant then leaves the gauge.
+
+### KuraVaultEpochChanged
+
+```text
+increase(kura_vault_epoch_changes_total[15m]) > 0
+```
+
+- **For:** none (fires at once)
+- **Severity:** `warning`
+- **Summary:** Vault epochs changed (promotion or restore); every device resyncs.
+- **What to do:** Expected after a failover, a switchover or a restore. Otherwise find out why the database timeline changed.
+
+### KuraTenantQuotaHigh
+
+```text
+max by (tenant) (kura_quota_used_ratio) > 0.9
+```
+
+- **For:** 15m
+- **Severity:** `warning`
+- **Summary:** `Tenant {{ $labels.tenant }} is above 90% of its quota.`
+- **What to do:** Raise the tenant's quota, or ask the tenant to remove content. Past 100%, writes are refused.
+
+### KuraStorageMetricsStale
+
+```text
+time() - max(kura_storage_refreshed_timestamp_seconds) > 600
+```
+
+- **For:** 5m
+- **Severity:** `warning`
+- **Summary:** Storage and quota metrics have not been refreshed for 10 minutes; quota alerts act on stale data.
+- **What to do:** Check the `storage metrics not refreshed` warn logs and the database.
+
+### KuraIndexQueueGrowing
+
+```text
+min_over_time(deriv(max(kura_index_queue_depth)[15m:1m])[15m:1m]) > 0
+```
+
+- **For:** none (fires at once)
+- **Severity:** `warning`
+- **Summary:** The search index queue has grown for 15 minutes; search results lag behind edits.
+- **What to do:** Check the replicas' load and the database; the indexer works through 100 notes at a time per replica.
+
+### KuraIndexStalled
+
+```text
+time() - max(kura_index_round_timestamp_seconds) > 900
+```
+
+- **For:** 5m
+- **Severity:** `warning`
+- **Summary:** The search indexer has not finished a round for 15 minutes; new edits are not searchable.
+- **What to do:** Check the replicas' warn logs for indexer errors and the database.
+
+### KuraIndexJobsFailed
+
+```text
+max(kura_index_failed) > 0
+```
+
+- **For:** 15m
+- **Severity:** `warning`
+- **Summary:** `{{ $value }} notes could not be indexed after five attempts and are missing from search until edited; see the warn logs.`
+- **What to do:** Read the warn logs for the failing notes. They come back into search at their next edit.
+
+### KuraNotificationsStalled
+
+```text
+max(kura_notification_oldest_pending_seconds) > 900
+```
+
+- **For:** 10m
+- **Severity:** `warning`
+- **Summary:** A notification delivery has waited more than 15 minutes; the worker is behind or stuck.
+- **What to do:** Check the replicas' logs for the notification worker and the receivers' availability.
+
+### KuraNotificationRuleDisabled
+
+```text
+max(kura_notification_rules_disabled) > 0
+```
+
+- **For:** none (fires at once)
+- **Severity:** `warning`
+- **Summary:** `{{ $value }} notification rules switched themselves off after 20 failed deliveries; a tenant admin re-enables them.`
+- **What to do:** Fix the receiver, then a tenant admin re-enables the rule (a re-enabled rule forgets its failures).
+
+### KuraGarbageCollectionStale
+
+```text
+(time() - max(kura_maintenance_gc_timestamp_seconds) > 172800) and max(kura_maintenance_gc_timestamp_seconds) > 0
+```
+
+- **For:** none (fires at once)
+- **Severity:** `warning`
+- **Summary:** Garbage collection has not run for 2 days (skipped while a backup holds its lock, or passes failing); storage keeps deleted content.
+- **What to do:** Check that a backup is not stuck holding the backup lock, and read `kura_maintenance_failures_total` and the warn logs.
+
+### KuraMaintenanceFailing
+
+```text
+increase(kura_maintenance_failures_total[2h]) > 0
+```
+
+- **For:** none (fires at once)
+- **Severity:** `warning`
+- **Summary:** Retention, garbage collection or a purge failed on a vault; see the warn logs.
+- **What to do:** Read the warn logs: they name the vault. The other vaults went on.
+
+## Group `kura-backup`
+
+| Alert | For | Severity |
+| --- | --- | --- |
+| [`KuraBackupMissing`](#kurabackupmissing) | 15m | `critical` |
+
+### KuraBackupMissing
+
+```text
+time() - max(kura_backup_last_success_timestamp_seconds) > 36 * 3600
+```
+
+- **For:** 15m
+- **Severity:** `critical`
+- **Summary:** No bucket copy has completed for 36 hours (kura-server backup); restores would lose recent content.
+- **What to do:** Check the `<release>-backup` CronJob and its logs, and the Secret naming the second bucket.
+

@@ -33,6 +33,11 @@ skip = [
     { name = "block-buffer", version = "0.10" },
     { name = "crypto-common", version = "0.1" },
     { name = "cpufeatures", version = "0.2" },
+    # The darling 0.20 line, held by vaultrs 0.8 (derive_builder); kube-derive,
+    # behind kura-api's `crd` feature, is on 0.23. Build-time proc macros only.
+    { name = "darling", version = "0.20" },
+    { name = "darling_core", version = "0.20" },
+    { name = "darling_macro", version = "0.20" },
     # Held by ring 0.17 (rustls).
     { name = "getrandom", version = "0.2" },
     { name = "windows-sys", version = "0.52" },

@@ -1,0 +1,109 @@
+---
+title: Rate Limits
+description: The request limits of every API route, who they are counted for, and what a client sees when it passes one.
+---
+
+kura-server limits how often each caller may call each route, in requests
+per minute. The limits are fixed in the code (the `LIMITS` table of
+[`crates/kura-server/src/limits.rs`](https://github.com/batleforc/weebo-kura/blob/main/crates/kura-server/src/limits.rs));
+there is no setting to change them. A caller over a limit gets
+`429 Too Many Requests` with the problem type
+[`rate_limited`](/docs/reference/problem-types) and a `Retry-After` header
+giving the seconds to wait.
+
+## How calls are counted
+
+- **Window.** Each counter covers a fixed window of 60 seconds that starts at
+  the caller's first call on the route. When the window ends, the count
+  starts again from zero. `Retry-After` is the time left in the window, at
+  least 1 second.
+- **Per caller and per route.** Each (caller, method, route template) pair
+  has its own counter. `GET /v1/vaults/{v}/changes` counts every vault
+  together for one caller.
+- **Who the caller is:**
+
+| Caller | Counted per | Routes |
+| --- | --- | --- |
+| A signed-in device (OIDC) | device id (`X-Kura-Device`) | every route that needs a device |
+| A user with no device yet | OIDC subject | `POST /v1/devices`, `GET /v1/me`, `POST /v1/devices/{d}/sign-out` |
+| A scoped token | client address first, then token id | the routes that accept tokens; the address counter is checked before any database lookup, so random tokens cost an address its own limit |
+| The notification socket | client address | `GET /v1/vaults/{v}/events`, which is opened with a ticket, not a token |
+
+- **Per replica, in memory.** Each replica keeps its own counters. With N
+  replicas behind a load balancer, a caller can reach up to N times a
+  limit. The defaults are sized for two replicas. Counters are lost on
+  restart.
+- **Bounded memory.** A replica tracks at most 100,000 (caller, route)
+  pairs. When full, it first drops expired windows; past that, a new caller
+  is not counted until room frees up.
+- **Routes not in the table** are not rate limited (the probes `/healthz`
+  and `/readyz`, the web console, `/scalar`).
+
+## Limits per route
+
+| Method | Route | Requests per minute |
+| --- | --- | --- |
+| `POST` | `/v1/devices` | 10 |
+| `GET` | `/v1/devices` | 60 |
+| `DELETE` | `/v1/devices/{d}` | 10 |
+| `POST` | `/v1/devices/{d}/sign-out` | 10 |
+| `GET` | `/v1/me` | 120 |
+| `GET` | `/v1/vaults/{v}/bindings` | 60 |
+| `GET` | `/v1/vaults/{v}/sync` | 60 |
+| `PUT` | `/v1/vaults/{v}/sync/report` | 60 |
+| `GET` | `/v1/tenants/{t}/notifications` | 60 |
+| `POST` | `/v1/tenants/{t}/notifications` | 10 |
+| `PUT` | `/v1/tenants/{t}/notifications/{n}` | 10 |
+| `DELETE` | `/v1/tenants/{t}/notifications/{n}` | 10 |
+| `POST` | `/v1/tenants/{t}/notifications/{n}/test` | 6 |
+| `GET` | `/v1/tenants/{t}/notifications/{n}/deliveries` | 60 |
+| `GET` | `/v1/vaults` | 60 |
+| `POST` | `/v1/vaults` | 10 |
+| `DELETE` | `/v1/vaults/{v}` | 10 |
+| `PUT` | `/v1/vaults/{v}/bindings/{b}` | 10 |
+| `DELETE` | `/v1/vaults/{v}/bindings/{b}` | 10 |
+| `GET` | `/v1/admin/status` | 60 |
+| `POST` | `/v1/vaults/{v}/chunks/missing` | 600 |
+| `PUT` | `/v1/vaults/{v}/chunks/{hash}` | 600 |
+| `GET` | `/v1/vaults/{v}/chunks/{hash}` | 600 |
+| `PUT` | `/v1/vaults/{v}/blobs/{hash}` | 600 |
+| `GET` | `/v1/vaults/{v}/blobs/{hash}` | 600 |
+| `POST` | `/v1/vaults/{v}/blobs/batch` | 60 |
+| `POST` | `/v1/vaults/{v}/chunks/batch` | 60 |
+| `POST` | `/v1/vaults/{v}/chunks/upload` | 60 |
+| `POST` | `/v1/vaults/{v}/blobs/upload` | 60 |
+| `POST` | `/v1/vaults/{v}/commits` | 120 |
+| `GET` | `/v1/vaults/{v}/changes` | 600 |
+| `GET` | `/v1/vaults/{v}/entries` | 60 |
+| `GET` | `/v1/vaults/{v}/entries/{e}/revisions` | 60 |
+| `POST` | `/v1/vaults/{v}/entries/{e}/restore` | 60 |
+| `POST` | `/v1/vaults/{v}/events/ticket` | 10 |
+| `POST` | `/v1/vaults/{v}/search` | 60 |
+| `POST` | `/v1/vaults/{v}/tokens` | 10 |
+| `GET` | `/v1/vaults/{v}/tokens` | 60 |
+| `DELETE` | `/v1/vaults/{v}/tokens/{t}` | 10 |
+| `GET` | `/v1/vaults/{v}/events` | 60 |
+
+Chunk and manifest uploads and downloads allow 600 calls a minute: they
+are bounded mainly by their body size (see
+[API reference](/docs/reference/api#body-limits)). The batch routes take up
+to 1,000 items a call.
+
+## Other bounds
+
+- **Batch downloads per replica.** A replica builds at most 8
+  `POST /v1/vaults/{v}/chunks/batch` answers at once. A ninth call gets
+  `429` with `Retry-After: 1`. It is not counted as a failing dependency.
+- **Notification sockets.** A device holds at most 4 open WebSockets on
+  `GET /v1/vaults/{v}/events` on a replica. A fifth is closed with code
+  `4008` (`too_many_sockets`). The socket's ticket, from
+  `POST /v1/vaults/{v}/events/ticket`, is valid once, for 30 seconds.
+- **Devices.** A user has at most 20 live devices; the 21st registration
+  gets `422 quota_exceeded`.
+
+## What clients do
+
+The CLI and the Obsidian plugin read `Retry-After` on `429` and `503` and
+wait before they try again. The CLI waits between 1 and 60 seconds (1 when
+the header is missing) and tries a request 6 times at most. A script calling the API should do the same: on `429` or `503`, wait
+the number of seconds in `Retry-After`, then retry.

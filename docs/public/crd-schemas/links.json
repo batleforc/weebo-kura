@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "kinds": {
+    "Database": {
+      "references": [],
+      "produces": []
+    },
+    "DnsName": {
+      "references": [],
+      "produces": []
+    },
+    "HttpEndpoint": {
+      "references": [],
+      "produces": []
+    },
+    "KuraTenant": {
+      "references": [],
+      "produces": []
+    },
+    "KuraVault": {
+      "references": [
+        {
+          "path": "spec.tenantRef",
+          "to": [
+            {
+              "group": "kura.weebo.io",
+              "kind": "KuraTenant"
+            }
+          ]
+        }
+      ],
+      "produces": []
+    },
+    "OidcIssuer": {
+      "references": [],
+      "produces": []
+    },
+    "S3Bucket": {
+      "references": [],
+      "produces": []
+    },
+    "UpstreamRegistry": {
+      "references": [],
+      "produces": []
+    },
+    "VaultServer": {
+      "references": [],
+      "produces": []
+    }
+  }
+}

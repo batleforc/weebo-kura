@@ -8,6 +8,8 @@ pub mod quantity;
 pub mod reason;
 pub mod role;
 pub mod spec;
+#[cfg(feature = "crd")]
+pub mod status;
 pub mod validate;
 
 pub use names::{DnsLabel, TenantSlug};
@@ -19,4 +21,7 @@ pub use spec::{
     Binding, Chunking, DeletionPolicy, Document, KuraTenant, KuraVault, TenantSpec, VaultKey,
     VaultSpec,
 };
+/// The custom resources the future operator serves, and kura-crdgen writes.
+#[cfg(feature = "crd")]
+pub use spec::{KuraTenantResource, KuraVaultResource};
 pub use validate::{Config, ManagedBy, PreviousState, StoredVault, validate};

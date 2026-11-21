@@ -169,6 +169,35 @@ impl From<Duration> for String {
     }
 }
 
+#[cfg(feature = "crd")]
+impl schemars::JsonSchema for Quantity {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Quantity".into()
+    }
+
+    // An integer or a binary-suffixed string, as Kubernetes writes int-or-string.
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "x-kubernetes-int-or-string": true,
+            "anyOf": [
+                { "type": "integer", "minimum": 0 },
+                { "type": "string", "pattern": "^[0-9]+(Ki|Mi|Gi|Ti|Ei)?$" }
+            ],
+        })
+    }
+}
+
+#[cfg(feature = "crd")]
+impl schemars::JsonSchema for Duration {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Duration".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({ "type": "string", "pattern": "^[0-9]+[hd]$" })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

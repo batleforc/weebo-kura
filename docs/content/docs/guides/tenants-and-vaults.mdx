@@ -1,0 +1,260 @@
+---
+title: Tenants and Vaults
+description: Declare tenants and vaults, grant roles to groups and people, and understand how Kura checks, applies and removes them.
+---
+
+Kura groups vaults by **tenant**. A tenant is a set of people (usually a few
+Authentik groups) with shared limits: quota, retention, search. A **vault** is
+one Obsidian vault stored on the server; it belongs to one tenant.
+
+You declare both as YAML documents, in the same shape as Kubernetes custom
+resources. This page explains how they work. For every field, see the
+generated references: [KuraTenant](/docs/crds/kuratenant) and
+[KuraVault](/docs/crds/kuravault). To build them with checks as you type, use
+the [CRD IDE](/docs/ide).
+
+## The two documents
+
+| Kind | Scope | `metadata.name` |
+| --- | --- | --- |
+| `KuraTenant` | Cluster-scoped: no namespace | The tenant's slug, used in API paths and in its Transit key `kura-<slug>` |
+| `KuraVault` | Namespaced: `metadata.namespace` is required | The vault's name, unique in its namespace |
+
+Both use `apiVersion: kura.weebo.io/v1alpha1`. Names are DNS labels
+(lowercase letters, digits and `-`).
+
+```yaml title="tenants.yaml"
+apiVersion: kura.weebo.io/v1alpha1
+kind: KuraTenant
+metadata: { name: maxime }
+spec:
+  claimMappings:
+    claim: groups
+    roles: { owner: [kura-maxime-owners], admin: [], member: [kura-maxime] }
+  vaultNamespaces: [maxime]
+  quota: { storage: 20Gi, maxFileSize: 500Mi }
+---
+apiVersion: kura.weebo.io/v1alpha1
+kind: KuraVault
+metadata: { name: knowledge, namespace: maxime }
+spec:
+  tenantRef: { name: maxime }
+  bindings:
+    - { role: editor, claimValue: kura-maxime }
+```
+
+## Where the documents go
+
+The server reads every `*.yaml` and `*.yml` file in the directory named by
+`KURA_CONFIG_DIR`. A file may hold several documents separated by `---`.
+Files whose name starts with `.` are skipped (Kubernetes uses them for its
+own links). At most 256 files of at most 1 MiB each are read.
+
+With the Helm chart, put the files under the `documents` value, one key per
+file. The chart renders them into a ConfigMap mounted at `/etc/kura/config`:
+
+```yaml title="values.yaml"
+documents:
+  tenants.yaml: |
+    apiVersion: kura.weebo.io/v1alpha1
+    kind: KuraTenant
+    metadata: { name: maxime }
+    spec:
+      vaultNamespaces: [maxime]
+```
+
+The directory is **re-read live**: the server checks it every 10 seconds and
+runs a full reconciliation at least once a minute. A change needs no restart.
+The applied configuration is stored in PostgreSQL, and every replica serves
+from that stored copy.
+
+<Callout type="warn" title="At least one tenant">
+A directory with no `KuraTenant` is refused: an empty directory is never read
+as "remove everything". Until a first configuration is accepted, the server
+stays not ready (`/readyz` answers `503`).
+</Callout>
+
+## Tenant roles
+
+A person belongs to a tenant when a value of the claim named in
+`claimMappings.claim` (usually `groups`) is listed under one of the roles.
+With several matches, the highest role wins.
+
+| Role | What it may do |
+| --- | --- |
+| `owner` | Open every vault of the tenant as `manager`, and everything an `admin` may do. |
+| `admin` | Open every vault of the tenant as `manager`; create and delete API-managed vaults; manage bindings, scoped tokens and notification rules; see and revoke the tenant's devices. |
+| `member` | Belongs to the tenant, but opens only the vaults a binding grants. |
+
+Today `owner` and `admin` have the same rights in the API. Rotating a tenant's
+key and deleting a tenant are operator actions, outside the API.
+
+Without `claimMappings`, the tenant has no members through claims. A person
+named by `subject` in a binding of one of the tenant's vaults counts as a
+`member`.
+
+## Vault roles and bindings
+
+A binding grants one vault role to one claim value or to one person.
+
+| Role | Rights |
+| --- | --- |
+| `viewer` | Read notes, search, list history. |
+| `editor` | Everything a viewer may do, plus write and restore. |
+| `manager` | Everything an editor may do, plus manage the vault's bindings and scoped tokens. |
+
+Each binding sets exactly one of:
+
+- `claimValue`: a value of the tenant's mapped claim, such as a group name.
+  Everyone whose token carries it gets the role.
+- `subject`: one person's OIDC `sub`.
+
+A person's right on a vault is the **highest** of their tenant role's grant
+(`manager` for `owner` and `admin`) and every binding that matches them.
+Without any binding, only the tenant's `owner`s and `admin`s open the vault.
+
+### Viewers restricted to folders
+
+A `viewer` binding may list `paths`: 1 to 16 folders, each ending with `/`.
+Its holder sees the notes under those folders and nothing else, on every
+client. A hidden note answers `404`, as a missing one does, and is absent from
+listings, the change feed and search.
+
+```yaml
+bindings:
+  - { role: viewer, claimValue: kura-players, paths: [Sessions/, Resumes/] }
+```
+
+The widest grant wins: the tenant role `owner` or `admin`, or any other
+matching binding without `paths`, opens the whole vault. The server warns with
+`RestrictedBindingWidened` when a restricted binding names a claim value the
+tenant also maps to `owner` or `admin`. `paths` on `editor` or `manager` is
+refused. The design is in RFC 0005 ([Design](/docs/design)).
+
+## Tenant settings
+
+These fields are listed in the [KuraTenant reference](/docs/crds/kuratenant);
+here is what they mean in practice.
+
+- **`vaultNamespaces`**: the namespaces allowed to declare a `KuraVault` for
+  this tenant. Absent: no namespace may. A vault in another namespace is
+  refused.
+- **`quota`**: `storage` caps the encrypted bytes of all the tenant's vaults
+  together; an upload past it is refused. `maxFileSize` caps one file; larger
+  files stay on the device and are reported.
+- **`retention`**: how long history is kept, applied by the maintenance pass.
+  The current version of a file is never pruned.
+- **`search`**: off by default. The search index holds the plain text of
+  every Markdown note in PostgreSQL, so turning it on is a choice. Turning it
+  off drops the tenant's index.
+- **`scopedTokens.write`**: off by default. When on, the tenant's scoped
+  tokens may carry write rules. Setting it back to `false` stops every token
+  write at the next request; reads go on. See
+  [Scoped tokens](/docs/guides/scoped-tokens).
+
+## Vault settings
+
+- **`chunking`**: how files are cut into chunks (`min`, `avg`, `max`). Absent:
+  `256Ki`, `1Mi`, `4Mi`. It is **fixed when the vault is created**: a later
+  change is refused. `max` is at most `4Mi`.
+- **`configSync.categories`**: which parts of `.obsidian` sync: `plugins`,
+  `snippets`, `themes`, `hotkeys`. Absent: `.obsidian` does not sync. Each
+  person's configuration syncs per device profile (desktop, mobile), never
+  between members.
+
+## Removing a document
+
+`deletionPolicy`, on both kinds, says what removing the document does:
+
+| Policy | Effect |
+| --- | --- |
+| `Orphan` (default) | The object is disabled; its data is kept. |
+| `Delete` | The object is disabled and deleted 30 days later by the maintenance pass. Putting the document back within that time cancels the deletion. |
+
+The annotation `kura.weebo.io/force-orphan: "true"` cancels the `Delete`
+cleanup: the object is released as with `Orphan`. A force-orphaned vault is
+never purged with its tenant.
+
+When a tenant is purged, its Transit key `kura-<slug>` is kept. An operator
+destroys it under a separate Vault role; until then the tenant shows
+`AwaitingKeyDestruction`.
+
+```yaml
+metadata:
+  name: knowledge
+  namespace: maxime
+  annotations:
+    kura.weebo.io/force-orphan: "true"
+```
+
+## Validation
+
+The whole directory is checked as one set. If any document breaks a rule,
+**nothing changes**: the server keeps the last valid configuration and reports
+every error found. Refused:
+
+- an unknown `apiVersion`, kind, field or role;
+- two documents with the same name (two tenants, or two vaults in one
+  namespace);
+- a `KuraVault` without a namespace, naming an unknown tenant, or in a
+  namespace outside its tenant's `vaultNamespaces`;
+- one claim value mapped by two tenants, or an empty claim value;
+- `chunking` that is not `min < avg < max`, with `max` above `4Mi`, outside
+  the bounds the chunker accepts (`min` 64 bytes to `1Mi`, `avg` 256 bytes to
+  `4Mi`, `max` at least `1Ki`, all even), or different from the value the
+  vault was created with;
+- a binding without exactly one non-empty `claimValue` or `subject`;
+- `paths` on a binding above `viewer`, an empty list, more than 16 folders, a
+  folder not ending with `/`, inside `.obsidian`, or listed twice;
+- a file declaring a vault that was created through the API;
+- no `KuraTenant` at all, or a change that removes more than one tenant at
+  once.
+
+Each refusal is logged at `warn` as `file#index field.path: message`, counted
+in `kura_config_rejected_total`, and listed in `GET /v1/admin/status`.
+
+## Status and reason codes
+
+The server keeps a status for every declared or removed object: a `Ready`
+condition and, when needed, advisory conditions, each with a reason code.
+Platform admins read it with `GET /v1/admin/status`, with the last rejected
+change. Objects that are not `Ready`, or carry an advisory condition, are
+counted in `kura_config_warnings`.
+
+| Reason | Meaning |
+| --- | --- |
+| `Reconciled` | Applied; `Ready` is true. |
+| `InvalidDocument` | A rule above refused the change; the last valid configuration stays. Blocking. |
+| `Orphaned` | Removed with `Orphan` or force-orphan: disabled, data kept. |
+| `DeletionScheduled` | Removed with `Delete`; purged after 30 days unless it comes back. |
+| `AwaitingKeyDestruction` | A purged tenant's Transit key still exists. |
+| `QuotaBelowUsage` | The tenant stores more than its quota: reads go on, writes are refused. |
+| `CidrTokensWithoutTrustedProxies` | Scoped tokens bound to address ranges are refused while `trustedProxies` is empty. |
+| `TokenWriteDisabled` | Write tokens exist while `scopedTokens.write` is off: they read, their writes are refused. |
+| `RestrictedBindingWidened` | A folder-restricted viewer binding also opens the whole vault through a wider grant. |
+
+See [Reason codes](/docs/reference/reason-codes).
+
+## Vaults and bindings made through the API
+
+Objects declared in files are read-only through the API. Beside them, people
+can create objects through the API, the CLI or the web console; these are
+**API-managed**:
+
+- A tenant `admin` (or `owner`) creates a vault with `POST /v1/vaults`. It
+  lives in the namespace named after the tenant, with the default chunking.
+  Deleting it (`DELETE /v1/vaults/{v}`, tenant admin) disables it and purges
+  it after 30 days. A file-declared vault cannot be deleted this way: remove
+  its document.
+- A vault `manager` or tenant `admin` binds a role with
+  `PUT /v1/vaults/{v}/bindings/claim:<value>` or `.../user:<sub>`, on any
+  vault, file-declared or not. They may grant only a role no higher than
+  their own, and only to a claim value from the tenant's own `claimMappings`
+  or to a known member of the tenant. A binding declared in a file cannot be
+  changed through the API.
+
+A file may not later declare a vault that already exists as API-managed: the
+change is refused.
+
+See the [API reference](/docs/reference/api) and the
+[CLI guide](/docs/guides/cli).

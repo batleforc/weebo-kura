@@ -1,0 +1,15 @@
+---
+title: Compose tenants and vaults
+description: Build KuraTenant and KuraVault documents in the browser, linked and checked as you type, then download them for the chart's documents.
+full: true
+---
+
+import { RECIPES } from '@/lib/recipes';
+
+Start from a recipe or an empty project, fill in the blanks, and the issues
+list empties as the documents become valid: required fields, values, the
+binding rules, a vault naming a tenant that is not there. Download the result
+as one YAML file and paste it under `documents` in the chart's values
+([Tenants and vaults](/docs/guides/tenants-and-vaults)).
+
+<CrdIde recipes={RECIPES} />

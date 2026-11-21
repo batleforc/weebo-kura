@@ -1,0 +1,278 @@
+---
+title: API Reference
+description: How to call the kura-server HTTP API, authenticate, read its errors and retry safely, with every route.
+---
+
+kura-server exposes a JSON HTTP API. The CLI, the Obsidian plugin and the
+web console use it, and so can your scripts. Every route except the two
+health probes lives under the base path `/v1`. The API is described by an
+OpenAPI 3.1 document generated from the server's code, so it always matches
+the release you run.
+
+## The OpenAPI document
+
+- On GitHub:
+  [`docs/api/openapi.json`](https://github.com/batleforc/weebo-kura/blob/main/docs/api/openapi.json),
+  checked against the code on every CI run (`task openapi:check`).
+- From any server binary: `kura-server dump-spec` prints it to standard
+  output (`task dump-spec` writes it to `docs/api/openapi.json`).
+- On a running server: `/scalar`. This page is self-hosted and loads nothing
+  from a third party. The current build ships no Scalar bundle, so the page
+  says "API reference unavailable" and embeds the OpenAPI document in its
+  source.
+
+Generate a client from the document rather than writing calls by hand.
+
+## Authentication
+
+Every `/v1` route needs an `Authorization: Bearer <token>` header. There
+are three kinds of callers.
+
+<Tabs items={['Device (OIDC)', 'Scoped token', 'WebSocket']}>
+<Tab value="Device (OIDC)">
+
+An OIDC access token from your identity provider (Authentik), plus the id
+of a registered device:
+
+```http
+GET /v1/vaults/0b6c…/changes?since=42 HTTP/1.1
+Authorization: Bearer eyJhbGciOi…
+X-Kura-Device: 7f3a5c1e-…
+```
+
+- The token is verified with pinned algorithms, its issuer, audience,
+  expiry and `scope` claim. It must carry `sid` (a sign-in) or `auth_time`
+  (after a refresh); a token with neither is refused as `invalid_token`.
+- `X-Kura-Device` is required on every OIDC call except
+  `POST /v1/devices` (registration), `GET /v1/me` and
+  `POST /v1/devices/{d}/sign-out`. A missing, unknown or foreign device is
+  `device_unknown`; a revoked one is `device_revoked`.
+- Register a device with `POST /v1/devices` first. A user has at most 20
+  live devices.
+
+</Tab>
+<Tab value="Scoped token">
+
+A scoped token issued by a vault manager (`kura_<32 hex>_<64 hex>`), with
+no `X-Kura-Device` header:
+
+```http
+GET /v1/vaults/0b6c…/entries HTTP/1.1
+Authorization: Bearer kura_9f…_4c…
+```
+
+The server checks its hash, expiry and revocation, that the grant it was
+issued under still holds, and that the client address is inside the
+token's CIDR list (else `403 address_not_allowed`). Behind a proxy, set
+`trustedProxies` so the client address is known. A token reads only its
+own vault, under its folders.
+
+A token is accepted only on these routes; any other refuses it with
+`403 insufficient_role` ("scoped tokens are read only"):
+
+| Access | Routes |
+| --- | --- |
+| Read | `GET /v1/vaults`, `GET .../changes`, `GET .../entries`, `GET .../entries/{e}/revisions`, `GET .../chunks/{hash}`, `GET .../blobs/{hash}`, `POST .../chunks/batch`, `POST .../blobs/batch`, `POST .../search` |
+| Write (a `write` rule, and the tenant's `scopedTokens.write`) | `POST .../chunks/missing`, `PUT .../chunks/{hash}`, `PUT .../blobs/{hash}`, `POST .../chunks/upload`, `POST .../blobs/upload`, `POST .../commits` |
+
+See [Scoped tokens](/docs/guides/scoped-tokens).
+
+</Tab>
+<Tab value="WebSocket">
+
+`GET /v1/vaults/{v}/events` opens a WebSocket of change notifications. A
+browser cannot set headers on a WebSocket, so it is opened with a ticket:
+
+1. `POST /v1/vaults/{v}/events/ticket` with your device's bearer token
+   returns a ticket: single use, valid 30 seconds.
+2. Open `GET /v1/vaults/{v}/events?ticket=<ticket>`.
+
+The server sends JSON `change`, `pull` and `ping` notices. Close codes:
+`4001` the token behind the ticket expired, `4002` the device was revoked,
+`4003` a used, expired or unknown ticket, `4004` another vault's ticket,
+`4005` you no longer read the vault, `4008` more than 4 sockets for the
+device, `4009` the client reads too slowly.
+
+</Tab>
+</Tabs>
+
+### Client version
+
+Clients may send `X-Kura-Client: <name>/<version>`. The server refuses
+`kura-cli` and `kura-plugin` below 0.1.0 with `426 client_too_old`. Other
+names, and requests without the header, are not checked.
+
+### Browsers (CORS)
+
+Cross-origin calls are allowed only from the origins in the server's
+`cors.allowedOrigins`, with the methods `GET`, `POST`, `PUT`, `DELETE` and
+the headers `Authorization`, `Content-Type`, `X-Kura-Device` and
+`X-Kura-Client`. The API uses bearer tokens, never cookies.
+
+## Errors
+
+Every error is `application/problem+json` (RFC 9457) with a stable `type`
+such as `/v1/problems/quota_exceeded`, a `title`, the `status` and,
+sometimes, a `detail`. Match on `type`. The full list is in
+[Problem types](/docs/reference/problem-types).
+
+## Retries
+
+- **`429` and `503`** carry a `Retry-After` header in seconds. Wait that
+  long, then retry. A `503` (a failed dependency) always asks for 5
+  seconds. See [Rate limits](/docs/reference/rate-limits).
+- **Commits are idempotent.** Each `POST /v1/vaults/{v}/commits` carries an
+  `idempotencyKey` (1 to 128 visible ASCII characters), unique per device.
+  The server keeps the result of each commit for 7 days. Retrying with the
+  same key and the same body returns the stored result without applying it
+  twice; the same key with a different body is
+  `422 idempotency_conflict`.
+- **Uploads are content-addressed.** A chunk's address is its BLAKE3 hash,
+  so uploading the same chunk again is harmless.
+
+## Body limits
+
+| Routes | Largest body |
+| --- | --- |
+| Most routes | 64 KiB |
+| `POST .../commits` (up to 1,000 operations), `PUT .../blobs/{hash}`, `POST .../blobs/upload` | 1 MiB |
+| `POST .../blobs/batch`, `POST .../chunks/batch` (up to 1,000 hashes) | 128 KiB |
+| `PUT .../chunks/{hash}` | 4 MiB |
+| `POST .../chunks/upload` (up to 1,000 records) | 4 MiB of chunks plus a header per record |
+
+A `chunks/batch` answer carries at most 4 MiB of chunks; the client asks
+again for the rest. `chunks/missing` takes up to 1,000 hashes. A larger body is `413 payload_too_large`.
+
+## Probes
+
+`GET /healthz` (the process answers) and `GET /readyz` (configuration
+loaded and port bound) need no authentication and sit outside `/v1`.
+Metrics are on a separate port: see [Metrics](/docs/reference/metrics).
+
+## Every route
+
+Generated from
+[`docs/api/openapi.json`](https://github.com/batleforc/weebo-kura/blob/main/docs/api/openapi.json),
+grouped by tag. "Auth" is the OpenAPI security scheme: `bearer_token` is
+`Authorization: Bearer`, `ws_ticket` the `?ticket=` query parameter. The
+section signs (§) refer to the design RFCs.
+
+### probes
+
+Process health, no data.
+
+| Method | Path | Auth | Summary |
+| --- | --- | --- | --- |
+| `GET` | `/healthz` | `none` | Liveness: the process answers. |
+| `GET` | `/readyz` | `none` | Readiness: configuration loaded and port bound; never a shared dependency (§10.2). |
+
+### admin
+
+Platform administration.
+
+| Method | Path | Auth | Summary |
+| --- | --- | --- | --- |
+| `GET` | `/v1/admin/status` | `bearer_token` | Status of the reconciled configuration. |
+
+### devices
+
+Device registration and revocation.
+
+| Method | Path | Auth | Summary |
+| --- | --- | --- | --- |
+| `GET` | `/v1/devices` | `bearer_token` | List devices: your own, and those of the tenants you administer. |
+| `POST` | `/v1/devices` | `bearer_token` | Register this device. |
+| `DELETE` | `/v1/devices/{d}` | `bearer_token` | Revoke a device: yours, or one of a tenant you administer. |
+| `POST` | `/v1/devices/{d}/sign-out` | `bearer_token` | Sign this browser out (RFC 0003 §6.2): the caller's own `web` device stops counting as live and its id is refused as unknown. Unlike a revocation it bans nothing: the same Authentik session may sign in again, and the plugin or CLI it approved keep working (decision 24). |
+
+### me
+
+The signed-in caller.
+
+| Method | Path | Auth | Summary |
+| --- | --- | --- | --- |
+| `GET` | `/v1/me` | `bearer_token` | The signed-in caller: subject, tenant roles, platform admin flag. |
+
+### notifications
+
+A tenant's webhook rules and their deliveries.
+
+| Method | Path | Auth | Summary |
+| --- | --- | --- | --- |
+| `GET` | `/v1/tenants/{t}/notifications` | `bearer_token` | A tenant's rules: all of them for an admin, a manager's vaults' for a manager. |
+| `POST` | `/v1/tenants/{t}/notifications` | `bearer_token` | Create a rule; the signing secret is in this answer only. |
+| `PUT` | `/v1/tenants/{t}/notifications/{n}` | `bearer_token` | Change a rule; a re-enabled rule forgets its failures. |
+| `DELETE` | `/v1/tenants/{t}/notifications/{n}` | `bearer_token` | Delete a rule and its deliveries. |
+| `GET` | `/v1/tenants/{t}/notifications/{n}/deliveries` | `bearer_token` | The rule's last 50 deliveries, newest first (kept 7 days). |
+| `POST` | `/v1/tenants/{t}/notifications/{n}/test` | `bearer_token` | Send `ping` to this rule now; the answer is the attempt's coarse result. |
+
+### vaults
+
+Vaults and their role bindings.
+
+| Method | Path | Auth | Summary |
+| --- | --- | --- | --- |
+| `GET` | `/v1/vaults` | `bearer_token` | The vaults you can read. |
+| `POST` | `/v1/vaults` | `bearer_token` | Create an API-managed vault (tenant admin). |
+| `DELETE` | `/v1/vaults/{v}` | `bearer_token` | Delete an API-managed vault (tenant admin): disabled now, purged after 30 days. |
+| `GET` | `/v1/vaults/{v}/bindings` | `bearer_token` | The vault's bindings, from files and from the API (RFC 0003 §4.4): vault manager or tenant admin. |
+| `PUT` | `/v1/vaults/{v}/bindings/{b}` | `bearer_token` | Bind a role on a vault (vault manager or tenant admin, §6.2). |
+| `DELETE` | `/v1/vaults/{v}/bindings/{b}` | `bearer_token` | Remove an API-managed binding (vault manager or tenant admin). |
+| `GET` | `/v1/vaults/{v}/sync` | `bearer_token` | The devices syncing a vault: every one for its managers and the tenant's admins, the caller's own for anyone else who reads it. |
+| `PUT` | `/v1/vaults/{v}/sync/report` | `bearer_token` | Report what this device's last run left on its side: counts only, never paths (RFC 0006 phase 3). A device's own row; a scoped token is refused. |
+
+### chunks
+
+Encrypted chunks and file manifests.
+
+| Method | Path | Auth | Summary |
+| --- | --- | --- | --- |
+| `POST` | `/v1/vaults/{v}/blobs/batch` | `bearer_token` | Many file manifests in one call (RFC 0002 §4.4). |
+| `POST` | `/v1/vaults/{v}/blobs/upload` | `bearer_token` | Many manifests in one call (RFC 0002 phase 3), with the checks of `PUT /blobs/{hash}`: all stored, or none. |
+| `GET` | `/v1/vaults/{v}/blobs/{hash}` | `bearer_token` | A file version's manifest. |
+| `PUT` | `/v1/vaults/{v}/blobs/{hash}` | `bearer_token` | Store a file version's manifest; every chunk must already be present. |
+| `POST` | `/v1/vaults/{v}/chunks/batch` | `bearer_token` | Many chunks in one answer, decrypted, at most 4 MiB of them (RFC 0002 §4.4): records `hash[32] status[1] length[4, big-endian] bytes`, status 0 found, 1 missing (unknown or not visible). Hashes past the budget are left out; the client asks for them again. |
+| `POST` | `/v1/vaults/{v}/chunks/missing` | `bearer_token` | Which of these chunks the vault lacks; present ones are kept from garbage collection. |
+| `POST` | `/v1/vaults/{v}/chunks/upload` | `bearer_token` | Many chunks in one call (RFC 0002 phase 3): the records of `chunks/batch`, every one found. Each chunk's BLAKE3 is checked before any is stored (T7), as `put_chunk` checks one. |
+| `GET` | `/v1/vaults/{v}/chunks/{hash}` | `bearer_token` | Download one chunk, decrypted. |
+| `PUT` | `/v1/vaults/{v}/chunks/{hash}` | `bearer_token` | Upload one chunk; its BLAKE3 must be its address. |
+
+### sync
+
+Commits and changes.
+
+| Method | Path | Auth | Summary |
+| --- | --- | --- | --- |
+| `GET` | `/v1/vaults/{v}/changes` | `bearer_token` | Entries changed after a cursor, oldest first. |
+| `POST` | `/v1/vaults/{v}/commits` | `bearer_token` | Push operations; each comes back accepted or conflicted (merged from phase 4). |
+| `GET` | `/v1/vaults/{v}/entries` | `bearer_token` | Every live entry, by id: what `kura attach` matches local files against. |
+| `GET` | `/v1/vaults/{v}/events` | `ws_ticket` | The vault's notifications, over a WebSocket opened with a ticket. |
+| `POST` | `/v1/vaults/{v}/events/ticket` | `bearer_token` | A ticket for this device and vault. |
+
+### history
+
+Revisions and restore.
+
+| Method | Path | Auth | Summary |
+| --- | --- | --- | --- |
+| `POST` | `/v1/vaults/{v}/entries/{e}/restore` | `bearer_token` | Restores a revision: a new revision with its content, through the commit path, so the vault lock, `seq`, notifications and the conflict rules all apply (§6.9). A deletion is not restorable: restore the revision before it. |
+| `GET` | `/v1/vaults/{v}/entries/{e}/revisions` | `bearer_token` | An entry's history, newest first (§4.4, §6.9). |
+
+### tokens
+
+Scoped tokens for non-interactive readers and writers.
+
+| Method | Path | Auth | Summary |
+| --- | --- | --- | --- |
+| `GET` | `/v1/vaults/{v}/tokens` | `bearer_token` | The vault's tokens, newest first; never a secret. |
+| `POST` | `/v1/vaults/{v}/tokens` | `bearer_token` | Issues a token for this vault; the secret is in this answer only. |
+| `DELETE` | `/v1/vaults/{v}/tokens/{t}` | `bearer_token` | Revokes a token at once, on every replica (the next use is refused). |
+
+### search
+
+Opt-in full-text search.
+
+| Method | Path | Auth | Summary |
+| --- | --- | --- | --- |
+| `POST` | `/v1/vaults/{v}/search` | `bearer_token` | Full-text and file-name search in one vault (§6.7): the query travels in the body, never the URL (T19). |
+

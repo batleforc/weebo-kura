@@ -1,0 +1,14 @@
+{
+  "title": "Server reference",
+  "pages": [
+    "api",
+    "problem-types",
+    "cli",
+    "helm-values",
+    "metrics",
+    "alerts",
+    "rate-limits",
+    "reason-codes",
+    "..."
+  ]
+}

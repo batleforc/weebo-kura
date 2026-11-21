@@ -16,6 +16,7 @@ includes:
   perf: { taskfile: ./.tasks/perf.yaml, flatten: true }
   obsidian: { taskfile: ./.tasks/obsidian.yaml, flatten: true }
   release: { taskfile: ./.tasks/release.yaml, flatten: true }
+  docs: { taskfile: ./.tasks/docs.yaml, flatten: true }
 
 tasks:
   init:
@@ -69,8 +70,12 @@ tasks:
     desc: "Regenerate tracked artefacts (run by the pre-commit hook)"
     cmds:
       - task: dump-spec
+      # The CRDs of KuraTenant and KuraVault, from kura-api's specs.
+      - cargo run -q -p kura-crdgen
+      # Their reference pages and the IDE's schemas in the docs site.
+      - task: docs:gen
       # Re-staged by the pre-commit hook only when already staged.
-      - git add docs/api/openapi.json
+      - git add docs/api/openapi.json deploy/crd docs/content/docs/crds docs/public/crd-schemas
 
   lint:
     desc: "Lint the whole project: clippy, rustfmt, fuzz targets compile, the plugin shell, the web console, the Helm chart and its alerts, shell scripts (run by the pre-commit hook)"

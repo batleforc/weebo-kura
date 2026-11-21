@@ -1,0 +1,171 @@
+---
+title: Helm Values
+description: Every value of the kura Helm chart, its default, and what it changes in the rendered resources.
+---
+
+The chart `oci://ghcr.io/batleforc/weebo-kura/charts/kura` deploys
+kura-server. This page lists every key of its
+[`values.yaml`](https://github.com/batleforc/weebo-kura/blob/main/deploy/helm/kura/values.yaml),
+with its default and the templates that read it. The defaults run two
+replicas against a CloudNativePG cluster the chart creates, read the
+database URL and the bucket credentials from Vault, and expose the API
+through a Traefik ingress. See [Install](/docs/guides/install) for a
+walkthrough.
+
+## Render-time checks
+
+The chart refuses to render (`helm install` and `helm template` fail) in
+these cases:
+
+| Condition | Error |
+| --- | --- |
+| `backupsWaived` is `false` and `backup.enabled` is `false` | `backup.enabled is false: the bucket would have no backup (RFC 0001 §10.3). Enable it, or set backupsWaived: true` |
+| `backupsWaived` is `false`, `cnpg.enabled` is `true` and `cnpg.backup.destinationPath` is empty | `cnpg.backup.destinationPath is empty: PostgreSQL would have no backup (RFC 0001 §10.3). Set it, or set backupsWaived: true` |
+| `migrate.databaseUrlSecret.name` is empty and `cnpg.enabled` is `false` | `set migrate.databaseUrlSecret.name, or cnpg.enabled` |
+
+With the defaults (`backup.enabled: false`, empty
+`cnpg.backup.destinationPath`), the chart does not render: you must set up
+both backups, or set `backupsWaived: true` for a test install.
+
+## Image
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `image.repository` | `ghcr.io/batleforc/kura-server` | The server image. Used by the Deployment, the migration Job and the backup CronJob. |
+| `image.tag` | `""` | The tag; empty means the chart's `appVersion`. |
+| `image.digest` | `""` | When set, the image is pulled as `<repository>@<digest>` and the tag is ignored. Pin a digest in production. |
+| `image.pullPolicy` | `IfNotPresent` | The Deployment's `imagePullPolicy`. |
+
+## Workload
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `replicas` | `2` | Server pods. They are spread over nodes (`topologySpreadConstraints` on the host name, `ScheduleAnyway`). Rate limits are counted per replica. |
+| `resources` | requests `cpu: 100m`, `memory: 128Mi`; limits `memory: 512Mi` | The server container's resources. The migration and backup jobs have their own fixed resources. |
+| `podDisruptionBudget.minAvailable` | `1` | The PodDisruptionBudget of the server pods. |
+| `serviceAccount.name` | `kura` | The ServiceAccount the chart creates and the server and backup pods use. Vault's Kubernetes auth role `kura` binds this account. |
+
+Pods run as UID and GID 65532, non-root, with a read-only root filesystem,
+no privilege escalation, every capability dropped and the `RuntimeDefault`
+seccomp profile. These are not values.
+
+## server
+
+`server` is the content of `server.yaml`, rendered as is into the
+`<release>-server` ConfigMap (see
+[Server configuration](/docs/guides/configuration) for every key). The chart
+sets `listen` itself (`api: 0.0.0.0:8080`, `metrics: 0.0.0.0:9090`); a
+`listen` you set is replaced. A change to `server` or `webhookCa` restarts
+the pods (checksum annotation). The keys the default values set:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `server.oidc.issuer` | `https://auth.example.org/` | The OIDC issuer access tokens must carry. |
+| `server.oidc.discovery` | `https://auth.example.org/application/o/kura-cli/` | Where the OIDC discovery document is read (Authentik's per-application path). |
+| `server.oidc.audiences` | `[kura-cli, kura-plugin]` | Accepted token audiences. Add the console's client id when you turn the console on. |
+| `server.oidc.platformAdmin` | `{ claim: groups, value: kura-platform-admins }` | The claim and value that make a user a platform admin. |
+| `server.trustedProxies` | `[]` | The ingress controller's pod CIDR, so client addresses survive the proxy. Needed for scoped tokens bound to addresses. |
+| `server.vault.address` | `https://vault.vault:8200` | Vault (or OpenBao). Required in a cluster: the database URL and the bucket come from Vault KV. |
+| `server.vault.kubernetesAuth` | `{ mount: kubernetes, role: kura }` | The Kubernetes auth mount and role the server logs in with. |
+| `server.vault.secrets` | `{ database: mv/data/kura/database, bucket: mv/data/kura/bucket }` | The KV paths of the database URL and the bucket settings. |
+| `server.vault.transit` | `{ mount: transit }` | The Transit mount holding the per-tenant keys. |
+| `server.maintenance.window` | `"01:00-05:00"` | When maintenance passes (retention, garbage collection, purges) may run. |
+| `server.ui.enabled` | `false` | Serve the web console under `/app`. |
+| `server.ui.oidc.clientId` | `kura-web` | The console's OIDC client id; it must also be in `oidc.audiences`. A commented `discovery` shows where to point the console's own Authentik application. |
+| `server.notifications.enabled` | `false` | Turn webhooks on. |
+| `server.notifications.webhook.allowedCidrs` | `[]` | Private ranges webhooks may reach (a hub inside the cluster); never `0.0.0.0/0`. |
+
+## webhookCa
+
+An extra trust root for webhooks only (a receiver behind a private CA).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `webhookCa.secretName` | `""` | A Secret holding the PEM bundle. When set, it is mounted read-only at `/etc/kura/webhook-ca` and the chart sets `server.notifications.webhook.caFile` to `/etc/kura/webhook-ca/<key>`. |
+| `webhookCa.key` | `ca.pem` | The key of the bundle in that Secret. |
+
+## documents
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `documents` | `{}` | The `KuraTenant` and `KuraVault` documents, one key per file name, its value the YAML text. Rendered into the `<release>-documents` ConfigMap, mounted at `/etc/kura/config` (`KURA_CONFIG_DIR`) without `subPath`, and re-read live: a change needs no restart. |
+
+```yaml title="values.yaml"
+documents:
+  tenants.yaml: |
+    apiVersion: kura.weebo.io/v1alpha1
+    kind: KuraTenant
+    ...
+```
+
+See [KuraTenant](/docs/crds/kuratenant) and [KuraVault](/docs/crds/kuravault).
+
+## ingress
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `ingress.enabled` | `true` | Create an Ingress for the API (path `/` to the `api` port 8080). The metrics port is never routed. |
+| `ingress.className` | `traefik` | `ingressClassName`. |
+| `ingress.host` | `kura.example.org` | The API's public name. |
+| `ingress.tlsSecret` | `kura-tls` | The TLS Secret for that host. |
+| `ingress.annotations` | `{}` | Extra annotations on the Ingress. |
+
+## networkPolicy
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `networkPolicy.enabled` | `true` | Create NetworkPolicies (ingress only; egress stays open). The server admits the API port 8080 from the ingress namespace and the metrics port 9090 from the monitoring namespace. With `cnpg.enabled`, PostgreSQL admits port 5432 from kura's pods and its own instances, ports 8000 and 5432 from the CloudNativePG operator, and its exporter port 9187 from the monitoring namespace. |
+| `networkPolicy.ingressNamespace` | `traefik` | The namespace of the ingress controller. |
+| `networkPolicy.monitoringNamespace` | `monitoring` | The namespace of Prometheus. |
+
+## monitoring
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `monitoring.serviceMonitor.enabled` | `true` | Create a ServiceMonitor on the `<release>-metrics` Service. Needs the Prometheus operator CRDs. |
+| `monitoring.serviceMonitor.interval` | `30s` | Scrape interval. |
+| `monitoring.prometheusRule.enabled` | `true` | Create the PrometheusRule with the [alerts](/docs/reference/alerts); the backup alert is left out when `backupsWaived` is `true`. |
+
+## migrate
+
+A Job runs `kura-server migrate` as the database owner after the first
+install and before every upgrade (Helm hooks `post-install,pre-upgrade`).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `migrate.databaseUrlSecret.name` | `""` | A Secret holding the owner's database URL. Required when `cnpg.enabled` is `false`. When empty with `cnpg.enabled`, the Job reads the `uri` key of `<cnpg.name>-app`. |
+| `migrate.databaseUrlSecret.key` | `uri` | The key of the URL in that Secret. |
+
+## cnpg
+
+A CloudNativePG `Cluster` with barman backups. Needs the CloudNativePG
+operator.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `cnpg.enabled` | `true` | Create the cluster (database `kura`, owner `kura_owner`, and the `kura_app` role from `files/bootstrap-roles.sql`). |
+| `cnpg.name` | `kura-db` | The cluster's name. Its `<name>-app` Secret holds the owner's URL for migrations. |
+| `cnpg.instances` | `2` | PostgreSQL instances (asynchronous replication). |
+| `cnpg.storage.size` | `10Gi` | Volume size per instance. |
+| `cnpg.storage.storageClass` | `""` | Storage class; empty uses the cluster default. |
+| `cnpg.operatorNamespace` | `cnpg-system` | Where the CloudNativePG operator runs, so its NetworkPolicy lets it in. |
+| `cnpg.backup.destinationPath` | `""` | `s3://bucket/path` for WAL archives and base backups, on a location other than the kura bucket. Required unless `backupsWaived`. When empty, no backup or ScheduledBackup is rendered. |
+| `cnpg.backup.endpointURL` | `""` | The S3 endpoint, for storage other than AWS. |
+| `cnpg.backup.credentialsSecret` | `kura-db-backup` | A Secret with `ACCESS_KEY_ID` and `ACCESS_SECRET_KEY`. |
+| `cnpg.backup.retention` | `30d` | barman's `retentionPolicy`. |
+| `cnpg.backup.schedule` | `"0 0 0 * * *"` | The daily base backup (ScheduledBackup, six fields with seconds). |
+
+After the first install, create the `kura_app` login password and store
+its URL in the KV path `server.vault.secrets.database`.
+
+## Backups
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `backupsWaived` | `false` | `true` skips the render-time backup checks and the `KuraBackupMissing` alert: for a test install, or backups done by other means (then alert on them yourself). |
+| `backup.enabled` | `false` | Create the `<release>-backup` CronJob running `kura-server backup`: it holds the backup lock, records the time T, copies every new object to a second bucket, then releases the lock. Required unless `backupsWaived`. |
+| `backup.schedule` | `"30 23 * * *"` | When the copy runs; keep it outside `server.maintenance.window`. |
+| `backup.targetSecret` | `kura-backup-target` | A Secret with `KURA_BACKUP_ENDPOINT`, `KURA_BACKUP_BUCKET`, `KURA_BACKUP_REGION`, `KURA_BACKUP_ACCESS_KEY_ID` and `KURA_BACKUP_SECRET_ACCESS_KEY`, passed to the job as environment. |
+
+See [Backup and restore](/docs/guides/backup-and-restore) for the third
+part (Vault snapshots) and the restore drill.

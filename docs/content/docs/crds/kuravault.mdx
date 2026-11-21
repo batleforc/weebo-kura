@@ -1,0 +1,86 @@
+---
+title: KuraVault
+description: >-
+  A vault: the tenant it belongs to, how its files are cut into chunks, what of
+  .obsidian syncs, and who may open it.
+full: true
+---
+
+- **API version:** `kura.weebo.io/v1alpha1`
+- **Scope:** Namespaced
+- **Short names:** none
+- **Guide:** [Tenants and vaults](/docs/guides/tenants-and-vaults)
+
+A vault: the tenant it belongs to, how its files are cut into chunks,
+what of `.obsidian` syncs, and who may open it. Namespaced: the namespace
+must be one of its tenant's `vaultNamespaces`.
+
+## Example
+
+```yaml
+apiVersion: kura.weebo.io/v1alpha1
+kind: KuraVault
+metadata:
+  name: my-vault
+  namespace: maxime
+spec:
+  tenantRef:
+    name: maxime
+  configSync:
+    categories:
+      - plugins
+      - snippets
+  bindings:
+    - role: editor
+      claimValue: kura-maxime
+```
+
+## Spec fields
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| [`bindings`](#spec.bindings) | `object[]` | no | `[]` | Vault roles granted to claim values or subjects. Absent: only tenant `owner` and `admin` can open the vault. |
+| [`chunking`](#spec.chunking) | `object` | no |  | Content-defined chunking sizes. Absent: the value stored when the vault was created (256Ki, 1Mi, 4Mi by default); fixed once set. |
+| [`configSync`](#spec.configSync) | `object` | no |  | Which parts of the `.obsidian` folder sync, per user and per device profile, never between members. Absent: the folder does not sync. |
+| `deletionPolicy` | `string` | no | `"Orphan"` | What removing this document does: `Orphan` (default) disables the vault and keeps its data; `Delete` also deletes it after 30 days, cancelled if the document comes back.<br /><br />Values: `"Orphan"`, `"Delete"` |
+| [`tenantRef`](#spec.tenantRef) | `object` | yes |  | The `KuraTenant` this vault belongs to. |
+
+### `spec.bindings[]` [#spec.bindings]
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `claimValue` | `string` | no |  | A value of the tenant's mapped claim, such as a group name. |
+| `paths` | `string[]` | no |  | `viewer` only: 1 to 16 folders, each ending with `/`, that the holder reads; absent: the whole vault (RFC 0005 §4.1). |
+| `role` | `string` | yes |  | The vault role granted: `viewer` reads, `editor` also writes, `manager` also manages bindings and scoped tokens.<br /><br />Values: `"viewer"`, `"editor"`, `"manager"` |
+| `subject` | `string` | no |  | One OIDC subject (`sub`). |
+
+**Rules**
+
+- a binding names exactly one of claimValue and subject — `has(self.claimValue) != has(self.subject)`
+- paths restrict a viewer only — `!has(self.paths) || self.role == 'viewer'`
+
+### `spec.chunking` [#spec.chunking]
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `avg` | `int-or-string` | yes |  | Average chunk the cut points aim at. |
+| `max` | `int-or-string` | yes |  | Largest chunk, at most 4Mi (a mobile client's body). |
+| `min` | `int-or-string` | yes |  | Smallest chunk, except a file's last. |
+
+### `spec.configSync` [#spec.configSync]
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `categories` | `string[]` | no | `[]` | The parts of `.obsidian` that sync: `plugins`, `snippets`, `themes`, `hotkeys`.<br /><br />Values: `"plugins"`, `"snippets"`, `"themes"`, `"hotkeys"` |
+
+### `spec.tenantRef` [#spec.tenantRef]
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `name` | `string` | yes |  |  |
+
+## Build a manifest
+
+Answer the questions and fill in the fields: the YAML preview updates as you type, ready to copy or download and `kubectl apply`.
+
+<CrdForm kind="KuraVault" />

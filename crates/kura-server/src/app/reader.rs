@@ -191,7 +191,8 @@ impl FromRequestParts<SharedState> for Reader {
 }
 
 /// Who may write content: a device, or a token under its `write` folders
-/// (RFC 0004 §6.3). Only the four routes of its §4.4 name this extractor.
+/// (RFC 0004 §6.3). Only the routes a write token may call name this
+/// extractor: the four of its §4.4, and the batched chunk and blob uploads.
 pub enum Writer {
     Device(DeviceCaller),
     Key(KeyCaller),

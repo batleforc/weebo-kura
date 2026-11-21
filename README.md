@@ -31,7 +31,7 @@ The chart expects these to be installed in the cluster:
 - an ingress controller (Traefik by default);
 - the Prometheus Operator CRDs, unless `monitoring.*` is turned off.
 
-See [Operating kura-server](docs/operator.md). You can install the Obsidian
+See the [install guide](https://batleforc.github.io/weebo-kura/docs/guides/install). You can install the Obsidian
 plugin from the web console's Help page, or with
 [BRAT](https://github.com/TfTHacker/obsidian42-brat) from this repository's
 releases.
@@ -52,9 +52,9 @@ task audit
 
 ## Documentation
 
-- [Operating kura-server](docs/operator.md)
-- [API reference](docs/api/openapi.json), served by the server under `/scalar`
-- [RFCs](docs/readme.md#rfcs)
+- [The documentation site](https://batleforc.github.io/weebo-kura): install, configuration, the plugin, the CLI, operations, reference (sources in [`docs/`](docs))
+- [API reference](https://batleforc.github.io/weebo-kura/docs/reference/api) and the [OpenAPI document](docs/api/openapi.json) (`/scalar` on the server embeds it; no Scalar bundle ships yet)
+- [Design (RFCs)](https://batleforc.github.io/weebo-kura/docs/design)
 - [Security policy](SECURITY.md)
 
 ## License

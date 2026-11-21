@@ -1,0 +1,173 @@
+---
+title: Obsidian Plugin
+description: Install Kura Sync in Obsidian, sign in, and understand what it syncs, when, and what it does with conflicts, deletions and settings.
+---
+
+Kura Sync is the Obsidian plugin that keeps a vault in sync with a kura server. It runs on desktop and on mobile (Android, iPhone, iPad). It needs Obsidian 1.11.4 or later, because it keeps your sign-in in Obsidian's secret storage. On an older Obsidian it shows "Kura Sync needs Obsidian 1.11.4 or later" and does nothing.
+
+The plugin is not in Obsidian's community catalogue. You install it once per device.
+
+## Install
+
+<Tabs items={['From the console', 'With BRAT']}>
+<Tab value="From the console">
+
+Open the web console's **Help** page (`/app/help`). Pick your device (Computer, Android, or iPhone/iPad) and follow the steps. The page offers a download, `kura-sync.zip`, with its version and size. If the server was built without the plugin, the page says so: ask your administrator for the files.
+
+<Steps>
+<Step>
+
+Download `kura-sync.zip` on the device.
+
+</Step>
+<Step>
+
+Unzip it into the vault's plugin folder, so you get `<your vault>/.obsidian/plugins/weebo-kura/` holding `main.js` and `manifest.json`. `.obsidian` is a hidden folder: show hidden files first, and create `plugins` if it does not exist.
+
+- Android: extract it with Files by Google, turn on **Show hidden files**, then move the `weebo-kura` folder to `Documents/<your vault>/.obsidian/plugins/`.
+- iPhone and iPad: the Files app does not show `.obsidian`. Keep the vault in iCloud Drive, download and unzip the file on a computer signed in to the same iCloud account, and copy `weebo-kura` to `iCloud Drive/Obsidian/<your vault>/.obsidian/plugins/`. Wait for iCloud to send it to the device.
+
+</Step>
+<Step>
+
+In Obsidian, open **Settings › Community plugins**, turn off Restricted mode if asked, and turn on **Kura Sync**. If it is not listed, select the reload icon next to **Installed plugins**.
+
+</Step>
+</Steps>
+
+</Tab>
+<Tab value="With BRAT">
+
+Each GitHub release of weebo-kura carries the plugin files `main.js`, `manifest.json` and `styles.css`, so the BRAT community plugin can install and update Kura Sync from the repository `batleforc/weebo-kura`. The release files are signed with cosign (keyless) and listed in `checksums.txt`.
+
+</Tab>
+</Tabs>
+
+## Connect and sign in
+
+The easiest way is the console's **Open in Obsidian** link, on the vault list or the Help page. It opens `obsidian://kura-setup?…` with the server, the identity provider, the client id and, if you picked one, the vault. The plugin treats the link as untrusted: it shows you what the link sets and applies it only when you select **Connect and sign in**. It refuses a link whose server or identity provider is not `https://`. If the link points to a different server than the one you use now, this device signs out and registers again on the new server.
+
+You can also set it up by hand in **Settings › Kura Sync › Set up by hand**: paste the server and the identity provider shown in the console's Help page, then select **Sign in**.
+
+Sign-in uses the OAuth device flow (RFC 8628), the same one TVs use:
+
+1. The plugin opens a **Sign in to Kura** window with a short code.
+2. Select **Open the sign-in page**. When your identity provider supports it, the code is already filled in on that page: check it matches. Otherwise type it in. **Copy the code** helps.
+3. Approve the device with the account you use in the console. The window waits and shows when the code expires (10 minutes unless the provider says otherwise).
+4. Once approved, the plugin registers this device on the server (as `desktop` or `mobile`) and lists the vaults open to you.
+
+If the link named a vault, syncing starts at once ("Signed in to Kura: syncing …"). Otherwise choose a vault in the settings.
+
+The plugin asks for `openid profile email offline_access`. It keeps only the refresh token, in Obsidian's secret storage, never in the vault or in `data.json`.
+
+## The settings tab
+
+**Settings › Kura Sync** reads from top to bottom.
+
+| Section | Setting | What it does |
+| --- | --- | --- |
+| (top) | State | The same word as the status bar: `in sync`, `syncing`, `offline`, and so on. |
+| Connection | Account line | Who you are signed in as, and on which server. **Sign in** or **Sign out**. |
+| Set up by hand | Server | The kura server URL, for example `https://kura.example.org`. Must be `https://`. |
+| Set up by hand | Identity provider | The OIDC issuer URL. Must be `https://`. |
+| Set up by hand | Client id | The OIDC client the plugin signs in with. Default `kura-plugin`; empty resets it to that. |
+| Set up by hand | This device's name | How the device appears in **My devices**. Set it before signing in: it is locked once the device is registered. Default `desktop` or `mobile`. At most 64 characters. |
+| Vault | Vault | The Kura vault this Obsidian vault syncs with, with your role. A button opens it in the console. |
+| Synchronisation | Sync now | Runs a sync. The line shows the last sync ("2 sent, 3 received") and how many local changes wait. |
+| Problems | (list) | Shown only when there are conflicts, unsyncable files, or files that could not be written. |
+| Advanced | Skip files larger than (MiB) | Default 200. On this device only. Larger files are listed as unsyncable. |
+| Advanced | Synced settings | Which parts of `.obsidian` the vault shares (set by its managers, read-only here). |
+
+The **Set up by hand** block folds away once the server and identity provider are set.
+
+Switching to another vault asks first. The files in Obsidian stay; the plugin forgets what it knew about them and compares them with the new vault.
+
+## What syncs, and when
+
+The plugin syncs every file of the vault except dot-folders: `.obsidian`, `.trash`, `.git` and any other folder whose name starts with a dot are never treated as notes. Folders sync too, so an empty folder reaches your other devices.
+
+A sync runs:
+
+- when Obsidian starts and the layout is ready;
+- 5 seconds after the last local change (create, edit, delete, rename). Edits keep pushing the timer back, so autosave while you type does not create a revision per keystroke;
+- when the server announces a change over the live connection (see below);
+- every 5 minutes, as a safety net;
+- when Obsidian comes back to the foreground (for example, on mobile);
+- when you select **Sync now**.
+
+Only one sync runs at a time. A request during a run queues one more run after it.
+
+The live connection is a WebSocket to the server. The server sends a notice when the vault changes, and a keep-alive every 30 seconds. If nothing arrives for 75 seconds, the plugin marks itself `offline`, pulls on a timer (about every 60 seconds), and reconnects with a growing, randomised delay between 1 and 60 seconds. When it reconnects, it pulls what it missed.
+
+## The status bar and notices
+
+On desktop, the status bar shows an icon and a word. The word is the state; the icon repeats it, colour is never the only cue. The tooltip shows when the last sync ran and how many local changes wait. Clicking it opens a menu: **Sync now** (or **Sign in**), **Show problems** when there are some, **Open this note in the console**, **Open the vault in the console**, and **Kura settings**.
+
+| Word | Meaning |
+| --- | --- |
+| `in sync` | Nothing left to do. |
+| `syncing`, `syncing N` | A run is going, with N local changes to send. |
+| `offline` | The server cannot be reached. Changes wait on the device. |
+| `sign in` | No session, the session expired, or the device was revoked. Sign in again. |
+| `update required` | The server needs a newer plugin. |
+| `resyncing` | A full resync is running (see below). |
+| `confirm deletions` | A full resync wants to move many files to the trash and waits for you. |
+| `quota full` | The vault's storage quota is reached. Your changes stay on the device. |
+| `read-only (reader)` | You are a viewer of this vault. Your changes stay on this device and are not sent. |
+| `1 conflict`, `N conflicts` | The last run created conflict copies. |
+| `unsyncable` | Some files cannot sync or could not be written. |
+
+The plugin also adds commands to the command palette: **Sync now**, **Sign in**, **Sign out**, **Show the sync status**, **Show conflicts and unsyncable files**, **Open the settings**, **Open the current note in the console**, **Show the current note's history in the console**, and **Copy the current note's Kura link**. The file menu of a note offers the console links too.
+
+## Conflicts and merges
+
+When two devices edit the same note before syncing, the server decides:
+
+- For Markdown (`.md`) and plain text (`.txt`) files, it tries a three-way line merge. If the edits touch different lines, the result is merged and nothing else happens. Files over 4 MiB or 20,000 lines per side, files that are not UTF-8, and edits on the same lines are not merged.
+- Anything that cannot be merged becomes a **conflict copy**. The other version takes the note's name; your version is kept beside it as `name (conflict <device> <date>).md`. Nothing is lost.
+
+A notice says "a conflict on … Both versions are kept", with a button to open it. **Show problems** lists every conflict: merge the two versions by hand, then delete the copy.
+
+Other file types (`.canvas`, images, PDFs and so on) are never merged: a diverging edit is always a conflict copy.
+
+## Deleted notes, large files, open notes
+
+- **Deleted elsewhere.** When a note is deleted on another device, the plugin moves the local file to Obsidian's own `.trash` folder. It never deletes it outright.
+- **Full resync.** If a device was away longer than the vault keeps deletions, it runs a full resync. When that would move more than 10% of the local files or more than 50 files to the trash, it asks first ("Move to trash" or "Not now"). If you say no, it does not ask again on every automatic sync, only when you select **Sync now**. If the server lost recent history, nothing is removed on the device and files the server no longer had are sent again.
+- **Too large or unsyncable.** Files over your size limit, or with a name the server cannot accept, are listed as unsyncable with the reason. They stay on this device. A file that is too large is never treated as a deletion.
+- **Open notes are never overwritten.** If a remote change arrives for a note open in the editor, the plugin does not write it. It is listed as "not written" and applied once you close the note. A note being renamed or trashed waits the same way.
+- **Changed while syncing.** If you edit a file while a remote version of it arrives, your edit wins locally and is pushed on the next run, against the old version, so the server merges or makes a conflict copy.
+
+## Configuration sync
+
+A vault's managers can choose which parts of `.obsidian` the vault shares: `plugins`, `snippets`, `themes`, and `hotkeys` (`hotkeys.json`). The settings tab lists them under **Synced settings**. These files sync per **device profile**: all your desktop devices share one copy, all your mobile devices another, so a phone layout does not overwrite a desktop one. Configuration is yours only; other members do not see it.
+
+Some files never sync: `community-plugins.json` (which plugins are turned on), the `workspace*.json` layout files, and the Kura Sync plugin itself.
+
+Configuration is checked at most every 5 minutes, and when Obsidian comes back to the foreground. For configuration, the last write wins; nothing is merged. If a configuration sync fails, a notice says so and it is retried in 5 minutes.
+
+### Synced plugins need your consent
+
+A plugin runs code with access to your vault. So a plugin received from another of your devices, or a new version of its code (`main.js`), never runs on this device until you agree:
+
+1. If the plugin is running and its code is about to change, Kura Sync turns it off before writing the new code.
+2. After the sync, a window says "The plugin … was synced from another of your devices. It is installed but disabled on this device." Choose **Enable** or **Keep disabled**.
+3. Your answer is remembered on this device, for that exact code. You are asked again only when the code changes. A plugin you turned off yourself stays off.
+
+Snippets and themes are CSS and need no consent.
+
+## On mobile
+
+Obsidian mobile has no status bar for plugins. The ribbon's Kura icon carries the state instead: its icon follows the state, its label reads the word, and tapping it opens the same menu. A mobile device registers with the `mobile` profile, so its synced settings are separate from your desktop ones. Opening the app again triggers a pull.
+
+## Signing out
+
+Select **Sign out** in the settings, the command palette, or the menu. The plugin deletes its stored refresh token and stops the live connection. Your files stay in the vault, and the device stays registered on the server: sign in again to resume.
+
+To cut off a lost or stolen device, revoke it from the console's **My devices** page (see [Web console](/docs/guides/web-console)). A revoked device shows `sign in` and stops at its next request.
+
+## See also
+
+- [How sync works](/docs/concepts/sync)
+- [Web console](/docs/guides/web-console)
+- [CLI guide](/docs/guides/cli)

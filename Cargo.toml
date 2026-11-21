@@ -3,7 +3,7 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/kura-api", "crates/kura-core", "crates/kura-server", "crates/kura-cli", "crates/kura-wasm"]
+members = ["crates/kura-api", "crates/kura-core", "crates/kura-server", "crates/kura-cli", "crates/kura-wasm", "crates/kura-crdgen"]
 
 [workspace.package]
 version = "0.1.0-rc.1"
@@ -21,6 +21,10 @@ weebo-kit-api = { git = "https://github.com/batleforc/weebo-operator-kit", tag =
 weebo-kit-domain = { git = "https://github.com/batleforc/weebo-operator-kit", tag = "v0.31.0" }
 # The kit's version, with the Kubernetes version it leaves to the application (plan P2).
 k8s-openapi = { version = "0.28", features = ["v1_36"] }
+# The CRDs of KuraTenant and KuraVault (kura-api's `crd` feature, kura-crdgen),
+# for the docs' reference and the future operator: the kit's kube and schemars.
+kube = { version = "4.0", default-features = false, features = ["derive"] }
+schemars = "1.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # YAML: the kit's own choice (serde_yaml is unmaintained), plan D6.

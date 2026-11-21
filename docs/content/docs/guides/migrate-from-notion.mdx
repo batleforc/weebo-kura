@@ -1,0 +1,65 @@
+---
+title: Migrate from Notion
+description: Move a Notion workspace into a Kura vault, check that nothing was lost, then retire Notion.
+---
+
+This is the path a team takes once, when Kura replaces Notion. It uses the
+[CLI](/docs/guides/cli) because the CLI shows, before anything is sent, every
+file it would push and every name that cannot sync.
+
+<Steps>
+<Step>
+
+### Export and convert
+
+Export the Notion workspace as **Markdown & CSV**, subpages included. Open an
+empty folder as an Obsidian vault and convert the export into it with
+Obsidian's importer.
+
+</Step>
+<Step>
+
+### Freeze Notion
+
+From the export date, remove the members' edit rights in Notion, so nothing is
+written there that the export does not hold.
+
+</Step>
+<Step>
+
+### Check the names
+
+```sh
+kura attach notes ./notion-export
+```
+
+Answer **no** when it asks. It prints what it would push (files and bytes) and
+every name that cannot sync, with the rule it breaks, and changes nothing.
+Rename those files and run it again until none is listed. Once attached,
+`kura sync notes --dry-run` gives the same check, and exits with code `4`
+while a name still cannot sync.
+
+</Step>
+<Step>
+
+### Push and verify
+
+```sh
+kura sync notes
+kura verify notes
+```
+
+`kura verify` must print `Equal.`: the vault holds the same files, bytes and
+content as the folder.
+
+</Step>
+<Step>
+
+### Move everyone over
+
+Attach every other device, with `kura attach` or the
+[Obsidian plugin](/docs/guides/obsidian-plugin). Keep Notion readable for a
+month of use, then close it.
+
+</Step>
+</Steps>
