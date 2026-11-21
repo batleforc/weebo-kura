@@ -12,7 +12,7 @@ export default defineConfig({
     "Kura reads these documents from the files of `KURA_CONFIG_DIR` (the chart's `documents`), reconciled live; or applied as custom resources through kura-operator, whose `KuraInstance` names the server. The YAML is the same. Each page lists every field, its default and its rules.",
   order: ["KuraInstance", "KuraTenant", "KuraVault"],
   guides: {
-    KuraInstance: ["Tenants and vaults", "/docs/guides/tenants-and-vaults"],
+    KuraInstance: ["Operator", "/docs/guides/operator"],
     KuraTenant: ["Tenants and vaults", "/docs/guides/tenants-and-vaults"],
     KuraVault: ["Tenants and vaults", "/docs/guides/tenants-and-vaults"],
   },

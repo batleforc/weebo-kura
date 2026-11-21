@@ -184,8 +184,15 @@ async fn server_rejects_what_the_webhook_would() {
     intruder["spec"]["tenantRef"]["name"] = json!("maxime");
     set.push(intruder);
     let (s, b) = push(&e, &key.operator(), set).await;
-    assert_eq!((s, b["outcome"].as_str()), (StatusCode::OK, Some("rejected")), "{b}");
-    assert_eq!(b["errors"][0]["location"]["file"], "KuraVault/team-b/recipes", "{b}");
+    assert_eq!(
+        (s, b["outcome"].as_str()),
+        (StatusCode::OK, Some("rejected")),
+        "{b}"
+    );
+    assert_eq!(
+        b["errors"][0]["location"]["file"], "KuraVault/team-b/recipes",
+        "{b}"
+    );
     assert_eq!(stored_generation(&e).await, before);
     let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM vault WHERE namespace = 'team-b'")
         .fetch_one(&e.t.owner)

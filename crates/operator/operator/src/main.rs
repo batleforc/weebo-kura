@@ -3,7 +3,6 @@
 //! `KuraTenant`, `KuraVault` and `KuraInstance`, and the push loop on the
 //! leader only.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,14 +13,15 @@ use kura_api::{KuraInstance, KuraTenantResource, KuraVaultResource};
 use kura_operator_adapters_inbound::pusher::Pusher;
 use kura_operator_adapters_inbound::{FIELD_MANAGER, METRIC_PREFIX, webhook};
 use kura_operator_adapters_outbound::HttpGatewayFactory;
-use kura_operator_adapters_outbound::http_gateway::DEFAULT_TOKEN_FILE;
 use weebo_kit_runtime::shared::{LISTED_TIMEOUT, SharedWatches};
 use weebo_kit_runtime::{Health, Shutdown, WatchScope, leader, telemetry, webhook_server};
 
 /// Keep it across releases: old and new pods of a rollout compete for it.
 const DEFAULT_LEASE_NAME: &str = "kura-operator-leader";
-/// Where the projected ServiceAccount token is read (`KURA_TOKEN_FILE`).
-const TOKEN_FILE_ENV: &str = "KURA_TOKEN_FILE";
+/// The operator's own ServiceAccount, whose tokens it mints for Kura (the
+/// chart sets it from `spec.serviceAccountName`); its namespace is the pod's.
+const SERVICE_ACCOUNT_ENV: &str = "KURA_SERVICE_ACCOUNT";
+const NAMESPACE_ENV: &str = "POD_NAMESPACE";
 
 fn main() -> anyhow::Result<()> {
     weebo_kit_runtime::runtime::build()?.block_on(operator())
@@ -109,8 +109,10 @@ async fn run(telemetry: &telemetry::Telemetry) -> anyhow::Result<()> {
     ]);
 
     let holder_id = std::env::var("HOSTNAME").unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
-    let token_file = std::env::var_os(TOKEN_FILE_ENV)
-        .map_or_else(|| PathBuf::from(DEFAULT_TOKEN_FILE), PathBuf::from);
+    let service_account = std::env::var(SERVICE_ACCOUNT_ENV)
+        .map_err(|_| anyhow::anyhow!("{SERVICE_ACCOUNT_ENV} is not set"))?;
+    let namespace =
+        std::env::var(NAMESPACE_ENV).map_err(|_| anyhow::anyhow!("{NAMESPACE_ENV} is not set"))?;
     let pusher = Pusher {
         client: client.clone(),
         recorder: Recorder::new(
@@ -120,7 +122,11 @@ async fn run(telemetry: &telemetry::Telemetry) -> anyhow::Result<()> {
                 instance: Some(holder_id.clone()),
             },
         ),
-        gateways: Arc::new(HttpGatewayFactory::new(client.clone(), token_file)),
+        gateways: Arc::new(HttpGatewayFactory::new(
+            client.clone(),
+            namespace,
+            service_account,
+        )),
         tenants,
         vaults,
         instances,

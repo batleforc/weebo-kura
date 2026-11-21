@@ -14,7 +14,15 @@ data:
     {{- $_ := set $notifications "webhook" $webhook }}
     {{- $_ := set $server "notifications" $notifications }}
     {{- end }}
+    {{- if eq (include "kura.documentsSource" .) "operator" }}
+    {{- $operator := default dict $server.documents.operator }}
+    {{- /* The cluster issuer serves its keys to authenticated ServiceAccounts, under the cluster CA. */}}
+    {{- $_ := set $operator "caFile" (default "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt" $operator.caFile) }}
+    {{- $_ := set $operator "tokenFile" (default "/var/run/secrets/kubernetes.io/serviceaccount/token" $operator.tokenFile) }}
+    {{- $_ := set $server.documents "operator" $operator }}
+    {{- end }}
     {{- toYaml $server | nindent 4 }}
+{{- if eq (include "kura.documentsSource" .) "files" }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -25,3 +33,4 @@ data:
   {{- range $file, $body := .Values.documents }}
   {{ $file }}: {{ $body | quote }}
   {{- end }}
+{{- end }}

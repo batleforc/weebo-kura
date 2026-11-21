@@ -44,6 +44,18 @@ server:
     enabled: false
     webhook:
       allowedCidrs: []
+  # Where the KuraTenant and KuraVault documents come from (RFC 0009):
+  # `files`, the `documents` below, or `operator`: kura-operator pushes them
+  # from the custom resources, and the files are not read. The issuer,
+  # audience and subject name kura-operator's ServiceAccount token; the
+  # chart adds the ServiceAccount's CA and token, with which kura-server
+  # reads the cluster issuer's keys.
+  documents:
+    source: files
+    # operator:
+    #   issuer: https://kubernetes.default.svc.cluster.local
+    #   audience: kura
+    #   subject: system:serviceaccount:kura-operator:kura-operator
 
 # An extra trust root for webhooks only (a hub behind a private CA): a
 # Secret holding the PEM bundle. Mounted read-only; sets
@@ -52,8 +64,9 @@ webhookCa:
   secretName: ""
   key: ca.pem
 
-# The resource documents (KuraTenant, KuraVault), one key per file. They are
-# re-read live: no restart on change (§6.10).
+# The resource documents (KuraTenant, KuraVault), one key per file, with
+# `server.documents.source: files` (the default). They are re-read live: no
+# restart on change (§6.10). Not rendered with `source: operator`.
 documents: {}
   # tenants.yaml: |
   #   apiVersion: kura.weebo.io/v1alpha1
@@ -89,6 +102,9 @@ networkPolicy:
   # metrics port (Prometheus').
   ingressNamespace: traefik
   monitoringNamespace: monitoring
+  # With `server.documents.source: operator`: kura-operator's namespace,
+  # allowed on the API port to push the documents.
+  operatorNamespace: kura-operator
 
 monitoring:
   serviceMonitor: { enabled: true, interval: 30s }

@@ -30,8 +30,10 @@ spec:
           image: {{ include "kura.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: [--config, /etc/kura/server/server.yaml]
+          {{- if eq (include "kura.documentsSource" .) "files" }}
           env:
             - { name: KURA_CONFIG_DIR, value: /etc/kura/config }
+          {{- end }}
           ports:
             - { name: api, containerPort: 8080 }
             - { name: metrics, containerPort: 9090 }
@@ -45,16 +47,20 @@ spec:
           securityContext: {{- include "kura.securityContext" . | nindent 12 }}
           volumeMounts:
             - { name: server, mountPath: /etc/kura/server, readOnly: true }
+            {{- if eq (include "kura.documentsSource" .) "files" }}
             # Never with subPath: the files must follow the ConfigMap (§6.10).
             - { name: documents, mountPath: /etc/kura/config, readOnly: true }
+            {{- end }}
             {{- if .Values.webhookCa.secretName }}
             - { name: webhook-ca, mountPath: /etc/kura/webhook-ca, readOnly: true }
             {{- end }}
       volumes:
         - name: server
           configMap: { name: {{ include "kura.name" . }}-server }
+        {{- if eq (include "kura.documentsSource" .) "files" }}
         - name: documents
           configMap: { name: {{ include "kura.name" . }}-documents }
+        {{- end }}
         {{- if .Values.webhookCa.secretName }}
         - name: webhook-ca
           secret:

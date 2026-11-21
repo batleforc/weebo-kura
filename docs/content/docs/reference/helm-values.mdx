@@ -74,6 +74,8 @@ the pods (checksum annotation). The keys the default values set:
 | `server.ui.oidc.clientId` | `kura-web` | The console's OIDC client id; it must also be in `oidc.audiences`. A commented `discovery` shows where to point the console's own Authentik application. |
 | `server.notifications.enabled` | `false` | Turn webhooks on. |
 | `server.notifications.webhook.allowedCidrs` | `[]` | Private ranges webhooks may reach (a hub inside the cluster); never `0.0.0.0/0`. |
+| `server.documents.source` | `files` | `files`: the `documents` below. `operator`: kura-operator pushes them (see [Operator](/docs/guides/operator)); the documents ConfigMap, its mount and `KURA_CONFIG_DIR` are not rendered. |
+| `server.documents.operator` | none | With `source: operator`: `issuer`, `audience` and `subject` of kura-operator's token. The chart adds `caFile` and `tokenFile`, the ServiceAccount's own, unless set. |
 
 ## webhookCa
 
@@ -88,7 +90,7 @@ An extra trust root for webhooks only (a receiver behind a private CA).
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `documents` | `{}` | The `KuraTenant` and `KuraVault` documents, one key per file name, its value the YAML text. Rendered into the `<release>-documents` ConfigMap, mounted at `/etc/kura/config` (`KURA_CONFIG_DIR`) without `subPath`, and re-read live: a change needs no restart. |
+| `documents` | `{}` | With `server.documents.source: files`, the `KuraTenant` and `KuraVault` documents, one key per file name, its value the YAML text. Rendered into the `<release>-documents` ConfigMap, mounted at `/etc/kura/config` (`KURA_CONFIG_DIR`) without `subPath`, and re-read live: a change needs no restart. |
 
 ```yaml title="values.yaml"
 documents:
@@ -117,6 +119,7 @@ See [KuraTenant](/docs/crds/kuratenant) and [KuraVault](/docs/crds/kuravault).
 | `networkPolicy.enabled` | `true` | Create NetworkPolicies (ingress only; egress stays open). The server admits the API port 8080 from the ingress namespace and the metrics port 9090 from the monitoring namespace. With `cnpg.enabled`, PostgreSQL admits port 5432 from kura's pods and its own instances, ports 8000 and 5432 from the CloudNativePG operator, and its exporter port 9187 from the monitoring namespace. |
 | `networkPolicy.ingressNamespace` | `traefik` | The namespace of the ingress controller. |
 | `networkPolicy.monitoringNamespace` | `monitoring` | The namespace of Prometheus. |
+| `networkPolicy.operatorNamespace` | `kura-operator` | With `server.documents.source: operator`, kura-operator's namespace, admitted on port 8080. |
 
 ## monitoring
 

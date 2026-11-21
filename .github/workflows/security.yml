@@ -68,3 +68,15 @@ jobs:
         with:
           sarif_file: trivy.sarif
           category: trivy-image
+
+  # kura-operator's image (RFC 0009): built and scanned like the server's.
+  operator-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - run: docker build -f Containerfile.operator -t kura-operator:ci .
+      - run: docker run --rm kura-operator:ci --version
+      - run: task audit:image IMAGE=kura-operator:ci

@@ -25,6 +25,6 @@ tasks:
       - PATH="{{.GO_BIN}}:$PATH" cargo test -p kura-operator-testkit
 
   operator:run:
-    desc: "Run kura-operator against the current kubeconfig's cluster (KURA_TOKEN_FILE names the projected token; the webhook needs WEBHOOK_CERT_FILE and WEBHOOK_KEY_FILE)"
+    desc: "Run kura-operator against the current kubeconfig's cluster (POD_NAMESPACE and KURA_SERVICE_ACCOUNT name the ServiceAccount it mints tokens for; the webhook needs WEBHOOK_TLS_CERT_FILE and WEBHOOK_TLS_KEY_FILE)"
     cmds:
       - cargo run -p kura-operator

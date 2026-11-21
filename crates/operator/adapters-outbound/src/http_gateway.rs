@@ -1,10 +1,15 @@
-//! `PUT {url}/v1/admin/documents`, bearer = the projected token file's
-//! content (the kubelet rotates it; read on every push). Every failure maps
-//! onto a [`GatewayError`], which decides the reason code a resource shows.
+//! `PUT {url}/v1/admin/documents`, bearer = a token of the operator's own
+//! ServiceAccount for the instance's audience, minted through the
+//! TokenRequest API and renewed before it expires (no secret at rest). Every
+//! failure maps onto a [`GatewayError`], which decides the reason code a
+//! resource shows.
 
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
+
+use k8s_openapi::api::authentication::v1::{TokenRequest, TokenRequestSpec};
+use k8s_openapi::api::core::v1::ServiceAccount;
+use kube::api::{Api, PostParams};
 
 use kura_api::{KuraInstance, ReasonCode};
 use kura_operator_application::ports::{GatewayError, GatewayFactory, KuraGateway};
@@ -15,18 +20,20 @@ use serde_json::{Value, json};
 
 /// A hung server must not hold a push forever.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
-/// Where the chart projects the token (audience `kura`, 1 h).
-pub const DEFAULT_TOKEN_FILE: &str = "/var/run/secrets/kura/token";
+/// How long a minted token lives (the TokenRequest's `expirationSeconds`).
+pub const TOKEN_TTL: Duration = Duration::from_secs(3600);
+/// A token is renewed when less than this is left of it.
+pub const TOKEN_RENEW: Duration = Duration::from_secs(600);
 
 pub struct HttpKuraGateway {
     endpoint: Url,
-    token_file: PathBuf,
+    token: String,
     client: Client,
 }
 
 impl HttpKuraGateway {
     /// `url`: the instance's `spec.url`.
-    pub fn new(url: &str, token_file: PathBuf, client: Client) -> Result<Self, String> {
+    pub fn new(url: &str, token: String, client: Client) -> Result<Self, String> {
         let base = Url::parse(url).map_err(|e| format!("url {url:?}: {e}"))?;
         if base.cannot_be_a_base() || !matches!(base.scheme(), "http" | "https") {
             return Err(format!("url {url:?}: not an http(s) base URL"));
@@ -39,7 +46,7 @@ impl HttpKuraGateway {
             .map_err(|e| format!("url {url:?}: {e}"))?;
         Ok(Self {
             endpoint,
-            token_file,
+            token,
             client,
         })
     }
@@ -64,15 +71,10 @@ async fn detail(response: reqwest::Response) -> String {
 #[async_trait::async_trait]
 impl KuraGateway for HttpKuraGateway {
     async fn push(&self, documents: &[Value]) -> Result<PushResult, GatewayError> {
-        let token = tokio::fs::read_to_string(&self.token_file)
-            .await
-            .map_err(|e| {
-                GatewayError::Unauthorized(format!("token {}: {e}", self.token_file.display()))
-            })?;
         let response = self
             .client
             .put(self.endpoint.clone())
-            .bearer_auth(token.trim())
+            .bearer_auth(&self.token)
             .json(&json!({ "documents": documents }))
             .send()
             .await
@@ -97,16 +99,75 @@ impl KuraGateway for HttpKuraGateway {
     }
 }
 
-/// Builds the gateway of a `KuraInstance`: its URL, its CA (`tls`), the
-/// operator's token file.
+/// A minted token: for which audience, until when.
+struct Minted {
+    audience: String,
+    token: String,
+    renew_at: Instant,
+}
+
+/// Builds the gateway of a `KuraInstance`: its URL, its CA (`tls`), a token
+/// of the operator's ServiceAccount for its audience.
 pub struct HttpGatewayFactory {
     client: kube::Client,
-    token_file: PathBuf,
+    /// The operator's own ServiceAccount: `(namespace, name)`.
+    service_account: (String, String),
+    minted: Mutex<Option<Minted>>,
 }
 
 impl HttpGatewayFactory {
-    pub fn new(client: kube::Client, token_file: PathBuf) -> Self {
-        Self { client, token_file }
+    pub fn new(client: kube::Client, namespace: String, service_account: String) -> Self {
+        Self {
+            client,
+            service_account: (namespace, service_account),
+            minted: Mutex::new(None),
+        }
+    }
+
+    /// A token for `audience`: the cached one while it has more than
+    /// [`TOKEN_RENEW`] left, else a new one.
+    async fn token(&self, audience: &str) -> Result<String, Failure> {
+        let cached = self
+            .minted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .filter(|m| m.audience == audience && Instant::now() < m.renew_at)
+            .map(|m| m.token.clone());
+        if let Some(token) = cached {
+            return Ok(token);
+        }
+        let (namespace, name) = &self.service_account;
+        let refused = |m: String| Failure::new(ReasonCode::InstanceUnauthorized, m);
+        let request = TokenRequest {
+            spec: Some(TokenRequestSpec {
+                audiences: Some(vec![audience.to_owned()]),
+                expiration_seconds: Some(i64::try_from(TOKEN_TTL.as_secs()).unwrap_or(3600)),
+                bound_object_ref: None,
+            }),
+            ..TokenRequest::default()
+        };
+        let answer = Api::<ServiceAccount>::namespaced(self.client.clone(), namespace)
+            .create_token_request(name, &PostParams::default(), &request)
+            .await
+            .map_err(|e| {
+                refused(format!(
+                    "no token of ServiceAccount {namespace}/{name} for audience {audience:?}: {e}"
+                ))
+            })?;
+        let token = answer
+            .status
+            .and_then(|s| s.token)
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| refused("the TokenRequest answered without a token".into()))?;
+        *self.minted.lock().unwrap_or_else(PoisonError::into_inner) = Some(Minted {
+            audience: audience.to_owned(),
+            token: token.clone(),
+            renew_at: Instant::now()
+                .checked_add(TOKEN_TTL.saturating_sub(TOKEN_RENEW))
+                .unwrap_or_else(Instant::now),
+        });
+        Ok(token)
     }
 
     async fn http_client(&self, instance: &KuraInstance) -> Result<Client, Failure> {
@@ -143,7 +204,10 @@ impl HttpGatewayFactory {
 impl GatewayFactory for HttpGatewayFactory {
     async fn gateway_for(&self, instance: &KuraInstance) -> Result<Arc<dyn KuraGateway>, Failure> {
         let client = self.http_client(instance).await?;
-        let gateway = HttpKuraGateway::new(&instance.spec.url, self.token_file.clone(), client)
+        let token = self
+            .token(&instance.spec.auth.service_account_token.audience)
+            .await?;
+        let gateway = HttpKuraGateway::new(&instance.spec.url, token, client)
             .map_err(|e| Failure::new(ReasonCode::InstanceUnreachable, e))?;
         Ok(Arc::new(gateway))
     }
@@ -183,19 +247,10 @@ mod tests {
         (url, handle)
     }
 
-    fn token_file(content: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "kura-operator-token-{}-{}",
-            std::process::id(),
-            content.len()
-        ));
-        std::fs::write(&path, content).unwrap();
-        path
-    }
-
     async fn push(status: Code, body: Value, token: &str) -> Result<PushResult, GatewayError> {
+        provider();
         let (url, handle) = server(status, body).await;
-        let gw = HttpKuraGateway::new(&url, token_file(token), Client::new()).unwrap();
+        let gw = HttpKuraGateway::new(&url, token.into(), Client::new()).unwrap();
         let r = gw.push(&[json!({})]).await;
         handle.abort();
         r
@@ -206,7 +261,7 @@ mod tests {
         let ok = push(
             Code::OK,
             json!({ "applied": true, "outcome": "applied", "objects": [] }),
-            "projected-token\n",
+            "projected-token",
         )
         .await;
         assert_eq!(ok.unwrap().outcome, "applied");
@@ -232,27 +287,23 @@ mod tests {
             push(Code::BAD_REQUEST, bad, "projected-token").await,
             Err(GatewayError::Refused("documents[0]: kind".into()))
         );
-        // Nobody listening, and no token file.
-        let gw =
-            HttpKuraGateway::new("http://127.0.0.1:1", token_file("x"), Client::new()).unwrap();
+        // Nobody listening.
+        provider();
+        let gw = HttpKuraGateway::new("http://127.0.0.1:1", "x".into(), Client::new()).unwrap();
         assert!(matches!(
             gw.push(&[]).await,
             Err(GatewayError::Unreachable(_))
         ));
-        let gw = HttpKuraGateway::new(
-            "http://127.0.0.1:1",
-            "/nonexistent/token".into(),
-            Client::new(),
-        )
-        .unwrap();
-        assert!(matches!(
-            gw.push(&[]).await,
-            Err(GatewayError::Unauthorized(_))
-        ));
+    }
+
+    /// kube's rustls and reqwest's are both linked: as in `main`, one provider.
+    fn provider() {
+        drop(rustls::crypto::ring::default_provider().install_default());
     }
 
     #[test]
     fn only_http_base_urls_are_taken() {
+        provider();
         for bad in ["ftp://kura", "not a url", "mailto:a@b"] {
             assert!(
                 HttpKuraGateway::new(bad, "/t".into(), Client::new()).is_err(),

@@ -1,4 +1,4 @@
-# Moves every FROM tag and digest in both Containerfiles together (weebo-containerfile).
+# Moves every FROM tag and digest in the Containerfiles together (weebo-containerfile).
 # No scm/action: it edits the working tree, and update.yml opens the PR.
 name: Upgrade Containerfile base images
 
@@ -9,3 +9,4 @@ autodiscovery:
       filematch:
         - "Containerfile"
         - "Containerfile.hardened"
+        - "Containerfile.operator"

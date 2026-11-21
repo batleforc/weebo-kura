@@ -1,0 +1,35 @@
+{{ include "weebo-operator.notes" . }}
+
+1. Switch kura-server to the operator (the `kura` chart's values), with this
+   release's ServiceAccount as the one identity allowed to push:
+
+     server:
+       documents:
+         source: operator
+         operator:
+           issuer: https://kubernetes.default.svc.cluster.local
+           audience: kura
+           subject: system:serviceaccount:{{ .Release.Namespace }}:{{ include "weebo-operator.serviceAccountName" . }}
+     networkPolicy:
+       operatorNamespace: {{ .Release.Namespace }}
+
+2. Name the server:
+
+     kubectl apply -f - <<YAML
+     apiVersion: kura.weebo.io/v1alpha1
+     kind: KuraInstance
+     metadata:
+       name: kura
+     spec:
+       url: http://kura.kura.svc:8080
+       auth:
+         serviceAccountToken:
+           audience: kura
+     YAML
+
+3. Apply your KuraTenant and KuraVault documents with kubectl; each shows
+   Ready and a reason (`kubectl get kuravaults -A`).
+
+Argo CD: paste the health check of the
+{{ include "weebo-operator.fullname" . }}-argocd-health ConfigMap into argocd-cm under
+`resource.customizations.health.kura.weebo.io_*`.
