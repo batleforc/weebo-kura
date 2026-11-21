@@ -1,7 +1,7 @@
 {
   "id": "weebo-kura",
   "name": "Kura Sync",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "minAppVersion": "1.11.4",
   "description": "Sync this vault with a self-hosted kura server, signed in with your organisation's identity provider.",
   "author": "weebo",

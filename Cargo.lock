@@ -1434,7 +1434,7 @@ dependencies = [
 
 [[package]]
 name = "kura-api"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "k8s-openapi",
  "serde",
@@ -1448,7 +1448,7 @@ dependencies = [
 
 [[package]]
 name = "kura-cli"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -1466,7 +1466,7 @@ dependencies = [
 
 [[package]]
 name = "kura-core"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "blake3",
  "caseless",
@@ -1484,7 +1484,7 @@ dependencies = [
 
 [[package]]
 name = "kura-server"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -1529,7 +1529,7 @@ dependencies = [
 
 [[package]]
 name = "kura-wasm"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "js-sys",
  "kura-core",
