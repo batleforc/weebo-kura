@@ -176,7 +176,7 @@ pub async fn put_chunk(
     store_chunk(&state, &a, v, hash, body).await?;
     // Sending the bytes is the proof, stored already or not (RFC 0004 §6.4).
     if let Some(k) = caller.key() {
-        k.uploaded(&state, &a, &hash, true).await?;
+        k.uploaded(&state, &a, &[hash], true).await?;
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -567,7 +567,7 @@ pub async fn put_blob(
     }
     store_blob(&state, &a, v, hash, body.size, &chunks).await?;
     if let Some(k) = caller.key() {
-        k.uploaded(&state, &a, &hash, false).await?;
+        k.uploaded(&state, &a, &[hash], false).await?;
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1063,9 +1063,7 @@ pub async fn upload_chunks(
     let stored = chunks.len();
     store_chunks(&state, &a, v, chunks).await?;
     if let Some(k) = caller.key() {
-        for h in &hashes {
-            k.uploaded(&state, &a, h, true).await?;
-        }
+        k.uploaded(&state, &a, &hashes, true).await?;
     }
     state
         .metrics
@@ -1152,15 +1150,17 @@ pub async fn upload_blobs(
             ));
         }
     }
+    // One lock order for every writer: two batches naming the same new blobs
+    // in another order would deadlock.
+    parsed.sort_by_key(|(h, _, _)| *h);
     let mut tx = db::begin_tenant(&state.db, a.tenant, None).await?;
     for (hash, size, chunks) in &parsed {
         record_blob(&mut tx, &a, v, *hash, *size, chunks).await?;
     }
     tx.commit().await?;
     if let Some(k) = caller.key() {
-        for (hash, _, _) in &parsed {
-            k.uploaded(&state, &a, hash, false).await?;
-        }
+        let hashes: Vec<ChunkHash> = parsed.iter().map(|(h, _, _)| *h).collect();
+        k.uploaded(&state, &a, &hashes, false).await?;
     }
     Ok(StatusCode::NO_CONTENT)
 }

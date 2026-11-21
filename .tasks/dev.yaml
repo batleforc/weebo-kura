@@ -18,7 +18,7 @@ vars:
   S3_CONTAINER: kura-dev-s3
   S3_PORT: '{{.S3_PORT | default "59000"}}'
   # RustFS: S3-compatible, Apache-2.0; MinIO no longer publishes images.
-  S3_IMAGE: docker.io/rustfs/rustfs:latest
+  S3_IMAGE: docker.io/rustfs/rustfs:1.0.6@sha256:ee717072290bec9b11abfc0365f8310b00df1cd9b3639943edae47bdef05044a
   AK_IMAGE: ghcr.io/goauthentik/server:2026.8.3
   AK_PORT: '{{.AK_PORT | default "59443"}}'
   # Waits up to 60 s for a command to succeed: `{{.WAIT}} <command>`.

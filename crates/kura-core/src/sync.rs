@@ -722,8 +722,9 @@ async fn recover<H: Host>(
     Ok(())
 }
 
-/// The blob address of a file's content, chunked with the vault's parameters.
-fn blob_of(data: &[u8], params: ChunkParams) -> (ChunkHash, Vec<ChunkHash>) {
+/// The blob address of a file's content, chunked with the vault's parameters,
+/// and its chunks' hashes.
+pub fn blob_of(data: &[u8], params: ChunkParams) -> (ChunkHash, Vec<ChunkHash>) {
     let hashes: Vec<ChunkHash> = chunks(data, params).iter().map(|c| c.hash).collect();
     (blob_hash(data.len() as u64, &hashes), hashes)
 }
@@ -805,6 +806,7 @@ async fn plan_ops<H: Host>(
     opts: &Options,
     local: &HashMap<VaultPath, FileMeta>,
     mut gone: Vec<EntryId>,
+    report: &mut Report,
 ) -> Result<Vec<(Operation, Option<Pushed>)>, SyncError> {
     let mut ops: Vec<(Operation, Option<Pushed>)> = Vec::new();
     let by_path: HashMap<VaultPath, EntryId> = state
@@ -826,7 +828,16 @@ async fn plan_ops<H: Host>(
         {
             continue;
         }
-        let data = host.read(path).await?;
+        // One unreadable file (deleted since the scan, or listed under a name
+        // that is not its NFC form on a disk that does not normalize) skips
+        // that file, not the whole push and the pull after it.
+        let data = match host.read(path).await {
+            Ok(d) => d,
+            Err(e) => {
+                report.failed.push((path.clone(), e.to_string()));
+                continue;
+            }
+        };
         let (blob, _) = blob_of(&data, opts.params);
         let size = data.len() as u64;
         let (entry, base) = match known_id.and_then(|e| state.entries.get_mut(&e).map(|k| (e, k))) {
@@ -897,7 +908,7 @@ async fn push<H: Host, R: Remote>(
         .filter(|(_, k)| !local.contains_key(&k.path) && !oversized.contains(&k.path))
         .map(|(e, _)| *e)
         .collect();
-    let ops = plan_ops(host, state, opts, &local, gone).await?;
+    let ops = plan_ops(host, state, opts, &local, gone, report).await?;
     // Counted before any upload, so a refusal can say how many files it kept.
     report.pushed = ops.len();
     report.pushed_bytes = ops
@@ -1445,6 +1456,13 @@ async fn apply<H: Host, R: Remote>(
         (Some(k), _) if only_moved => host.rename(&k.path, &item.path).await?,
         _ => {
             let data = download(remote, blob, item.size).await?;
+            // Saved here during the download: deferred, as above, not overwritten.
+            if let Some(k) = &known
+                && !untouched(host, k).await?
+            {
+                report.deferred.push(k.path.clone());
+                return Ok(Applied::Deferred);
+            }
             state.pending = Some(Pending {
                 state: item.clone(),
             });

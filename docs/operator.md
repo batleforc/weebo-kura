@@ -1,4 +1,4 @@
-# Operating kura-server (phases 1 and 2)
+# Operating kura-server
 
 What a deployment needs today: the server's own `server.yaml`, the
 `KuraTenant` and `KuraVault` documents, PostgreSQL, and Authentik. Design:
@@ -6,9 +6,9 @@ What a deployment needs today: the server's own `server.yaml`, the
 it while it is built: the Divergences of the
 [implementation plan](RFC/rfc0001-implementation-plan.md).
 
-Phase 1 serves identity, devices, vaults and bindings; phase 2 adds encrypted
-chunk and blob storage. Notes do not sync end to end yet (phase 3); the Helm
-chart arrives in phase 6.
+The server serves identity, devices, vaults and bindings, encrypted chunk and
+blob storage, note and configuration sync, the web console and notifications.
+The Helm chart is under [`deploy/helm/kura`](../deploy/helm/kura).
 
 ## 1. The process
 

@@ -62,8 +62,11 @@ export class ObsidianHost implements KuraHost {
   }
 
   async loadState(): Promise<string> {
-    const p = this.statePath();
-    return (await this.o.adapter.exists(p)) ? new TextDecoder().decode(await this.o.adapter.readBinary(p)) : "";
+    // The temporary copy stands in when a save was killed between its two steps.
+    for (const p of [this.statePath(), `${this.statePath()}.tmp`]) {
+      if (await this.o.adapter.exists(p)) return new TextDecoder().decode(await this.o.adapter.readBinary(p));
+    }
+    return "";
   }
 
   private async file(path: string): Promise<KuraFile | null> {
@@ -178,7 +181,13 @@ export class ObsidianHost implements KuraHost {
   }
 
   async save(state: string): Promise<void> {
-    await this.o.adapter.write(this.statePath(), state);
+    // Never half written (the OS kills a backgrounded app): a torn state would
+    // be read as none, bringing deleted notes back (review 2026-11-21 #2).
+    const p = this.statePath();
+    const tmp = `${p}.tmp`;
+    await this.o.adapter.write(tmp, state);
+    if (await this.o.adapter.exists(p)) await this.o.adapter.remove(p);
+    await this.o.adapter.rename(tmp, p);
   }
 
   nowMs(): number {

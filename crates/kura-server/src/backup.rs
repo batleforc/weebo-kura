@@ -161,6 +161,19 @@ async fn copy_locked(
     Ok(out)
 }
 
+/// An object's bytes, or none when it went since the listing: an upload that
+/// lost a race or its quota, which no row names, so not part of the copy.
+async fn fetch(
+    source: &dyn ObjectStore,
+    location: &ObjectPath,
+) -> Result<Option<bytes::Bytes>, BackupError> {
+    match source.get(location).await {
+        Ok(r) => Ok(Some(r.bytes().await?)),
+        Err(object_store::Error::NotFound { .. }) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Copies the objects `target` lacks, vault by vault, and appends every key
 /// of the copy to `keys` (newline-separated, no trailing one), a multipart
 /// upload opened at the first key.
@@ -181,6 +194,14 @@ async fn copy_objects(
             .await?;
         let mut listing = source.list(Some(&prefix));
         while let Some(meta) = listing.try_next().await? {
+            let bytes = if have.contains(&meta.location) {
+                None
+            } else {
+                let Some(b) = fetch(source, &meta.location).await? else {
+                    continue;
+                };
+                Some(b)
+            };
             let up = match keys {
                 Some(up) => {
                     up.wait_for_capacity(4).await?;
@@ -198,10 +219,7 @@ async fn copy_objects(
             };
             up.write(meta.location.as_ref().as_bytes());
             out.objects = out.objects.saturating_add(1);
-            if have.contains(&meta.location) {
-                continue;
-            }
-            let bytes = source.get(&meta.location).await?.bytes().await?;
+            let Some(bytes) = bytes else { continue };
             target.put(&meta.location, PutPayload::from(bytes)).await?;
             out.copied = out.copied.saturating_add(1);
         }
@@ -260,4 +278,23 @@ pub async fn check_chunks(
         }
     }
     Ok((checked, failed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use object_store::memory::InMemory;
+
+    /// Review 2026-11-21 #9: an object deleted between the listing and the
+    /// read is skipped; the backup does not fail.
+    #[tokio::test]
+    async fn an_object_gone_since_the_listing_is_skipped() {
+        let store = InMemory::new();
+        let kept = ObjectPath::from("v/kept");
+        store.put(&kept, PutPayload::from_static(b"x")).await.ok();
+        let fetched = fetch(&store, &kept).await.ok().flatten();
+        assert_eq!(fetched.as_deref(), Some(&b"x"[..]));
+        let gone = fetch(&store, &ObjectPath::from("v/gone")).await;
+        assert!(matches!(gone, Ok(None)), "{gone:?}");
+    }
 }

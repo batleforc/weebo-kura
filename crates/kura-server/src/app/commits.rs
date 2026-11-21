@@ -1567,9 +1567,36 @@ async fn store(
     if writes.is_empty() {
         return Ok(());
     }
+    // An entry written twice (a config Put that displaces a holder, which a
+    // later Put moves again) splits the upsert: ON CONFLICT DO UPDATE refuses
+    // to touch one row twice in a statement.
+    let mut seen = std::collections::HashSet::new();
+    let mut start = 0;
+    for (i, w) in writes.iter().enumerate() {
+        if !seen.insert(w.head.id) {
+            upsert_entries(
+                tx,
+                v,
+                tenant,
+                space,
+                writes.get(start..i).unwrap_or_default(),
+            )
+            .await?;
+            seen.clear();
+            seen.insert(w.head.id);
+            start = i;
+        }
+    }
+    upsert_entries(
+        tx,
+        v,
+        tenant,
+        space,
+        writes.get(start..).unwrap_or_default(),
+    )
+    .await?;
     let ids: Vec<Uuid> = writes.iter().map(|w| w.head.id).collect();
     let paths: Vec<&str> = writes.iter().map(|w| w.head.path.as_str()).collect();
-    let keys: Vec<&str> = writes.iter().map(|w| w.head.key.as_str()).collect();
     let revs: Vec<RevisionId> = writes.iter().map(|w| w.head.revision).collect();
     let seqs: Vec<i64> = writes.iter().map(|w| w.head.seq).collect();
     let deleted: Vec<bool> = writes.iter().map(|w| w.head.deleted).collect();
@@ -1579,6 +1606,46 @@ async fn store(
         .map(|w| w.head.blob.map(|b| b.as_bytes().to_vec()))
         .collect();
     let sizes: Vec<i64> = writes.iter().map(|w| w.head.size).collect();
+    sqlx::query(
+        "INSERT INTO revision (id, vault_id, tenant_id, entry_id, seq, base_revision, path, deleted, blob_hash, size, device_id, user_sub)
+         SELECT u.rev, $1, $2, u.id, u.seq, u.base, u.path, u.deleted, u.blob, u.size, $3, $4
+         FROM unnest($5::uuid[], $6::uuid[], $7::bigint[], $8::uuid[], $9::text[], $10::bool[], $11::bytea[], $12::bigint[])
+              AS u(rev, id, seq, base, path, deleted, blob, size)",
+    )
+    .bind(v)
+    .bind(tenant)
+    .bind(device)
+    .bind(sub)
+    .bind(&revs)
+    .bind(&ids)
+    .bind(&seqs)
+    .bind(&bases)
+    .bind(&paths)
+    .bind(&deleted)
+    .bind(&blobs)
+    .bind(&sizes)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// The entries' new heads, in seq order; no id twice in `run`.
+async fn upsert_entries(
+    tx: &mut Tx,
+    v: Uuid,
+    tenant: Uuid,
+    space: &super::space::Space,
+    run: &[Write],
+) -> Result<(), ApiError> {
+    if run.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<Uuid> = run.iter().map(|w| w.head.id).collect();
+    let paths: Vec<&str> = run.iter().map(|w| w.head.path.as_str()).collect();
+    let keys: Vec<&str> = run.iter().map(|w| w.head.key.as_str()).collect();
+    let revs: Vec<RevisionId> = run.iter().map(|w| w.head.revision).collect();
+    let seqs: Vec<i64> = run.iter().map(|w| w.head.seq).collect();
+    let deleted: Vec<bool> = run.iter().map(|w| w.head.deleted).collect();
     sqlx::query(
         "INSERT INTO entry (vault_id, tenant_id, id, path, path_key, head_revision, last_seq, deleted, namespace, owner_sub)
          SELECT $1, $2, u.id, u.path, u.key, u.rev, u.seq, u.deleted, $9, $10
@@ -1598,26 +1665,6 @@ async fn store(
     .bind(&deleted)
     .bind(&space.namespace)
     .bind(space.owner.as_deref())
-    .execute(&mut **tx)
-    .await?;
-    sqlx::query(
-        "INSERT INTO revision (id, vault_id, tenant_id, entry_id, seq, base_revision, path, deleted, blob_hash, size, device_id, user_sub)
-         SELECT u.rev, $1, $2, u.id, u.seq, u.base, u.path, u.deleted, u.blob, u.size, $3, $4
-         FROM unnest($5::uuid[], $6::uuid[], $7::bigint[], $8::uuid[], $9::text[], $10::bool[], $11::bytea[], $12::bigint[])
-              AS u(rev, id, seq, base, path, deleted, blob, size)",
-    )
-    .bind(v)
-    .bind(tenant)
-    .bind(device)
-    .bind(sub)
-    .bind(&revs)
-    .bind(&ids)
-    .bind(&seqs)
-    .bind(&bases)
-    .bind(&paths)
-    .bind(&deleted)
-    .bind(&blobs)
-    .bind(&sizes)
     .execute(&mut **tx)
     .await?;
     Ok(())

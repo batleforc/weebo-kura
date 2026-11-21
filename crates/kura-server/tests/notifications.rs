@@ -960,3 +960,43 @@ async fn old_events_are_purged_while_notifications_are_off() {
         "rules are kept"
     );
 }
+
+/// `token.expiring` is recorded once per token, by one pass, however many
+/// run (review 2026-11-21 #4: the mark and the event share a transaction).
+#[tokio::test]
+async fn token_expiring_is_recorded_once() {
+    let r = receiver().await;
+    let Some(e) = setup(module_path!(), &r, &["127.0.0.1/32"]).await else {
+        return;
+    };
+    let admin = Admin::new(&e, &["maxime-admins"]).await;
+    let v = vault_id(&e, "knowledge").await;
+    let (st, b) = admin
+        .call(
+            &e,
+            "POST",
+            "/tenants/maxime/notifications",
+            Some(rule(&r.url, &["token.expiring"], Some(&v))),
+        )
+        .await;
+    assert_eq!(st, StatusCode::CREATED, "{b}");
+    let (st, b) = admin
+        .call(
+            &e,
+            "POST",
+            &format!("/vaults/{v}/tokens"),
+            Some(json!({ "expiresInDays": 3, "cidrs": ["10.42.0.0/16"] })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::CREATED, "{b}");
+    kura_server::notifier::hourly(&e.state).await.unwrap();
+    kura_server::notifier::hourly(&e.state).await.unwrap();
+    let (events, marked): (i64, bool) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM notification_event WHERE type = 'token.expiring'),
+                (SELECT bool_and(expiring_notified) FROM scoped_token)",
+    )
+    .fetch_one(&e.t.owner)
+    .await
+    .unwrap();
+    assert_eq!((events, marked), (1, true));
+}

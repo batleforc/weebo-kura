@@ -41,6 +41,16 @@ jobs:
       - run: task plugin:test
       - run: task plugin:build
 
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      # The web console: tests with the 80% gate, and the build with its budget checks.
+      - run: task ui:install
+      - run: task ui:test
+      - run: task ui:build
+
   test:
     runs-on: ubuntu-latest
     services:
@@ -60,7 +70,8 @@ jobs:
           BAO_DEV_ROOT_TOKEN_ID: kura-ci
         ports: ["8200:8200"]
       s3:
-        image: docker.io/rustfs/rustfs:latest
+        # The same pin as task dev:s3; bump both together.
+        image: docker.io/rustfs/rustfs:1.0.6@sha256:ee717072290bec9b11abfc0365f8310b00df1cd9b3639943edae47bdef05044a
         env:
           RUSTFS_ACCESS_KEY: kura-dev
           RUSTFS_SECRET_KEY: kura-dev-secret

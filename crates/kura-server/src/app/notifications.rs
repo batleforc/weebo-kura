@@ -678,11 +678,13 @@ pub async fn test_rule(
     )
     .await?
     .ok_or(ApiError::Unavailable("test event not recorded".into()))?;
-    let delivery: Uuid =
-        sqlx::query_scalar("SELECT id FROM notification_delivery WHERE event_id = $1")
-            .bind(event)
-            .fetch_one(&mut *tx)
-            .await?;
+    // Claimed here, so no replica's worker sends the same ping meanwhile.
+    let delivery: Uuid = sqlx::query_scalar(
+        "UPDATE notification_delivery SET claimed_at = now() WHERE event_id = $1 RETURNING id",
+    )
+    .bind(event)
+    .fetch_one(&mut *tx)
+    .await?;
     tx.commit().await?;
     let outcome = notifier::deliver(&state, delivery, scope.tenant, &scope.slug).await?;
     tracing::info!(target: "audit", event = "notification_rule_tested", sub = %caller.caller.principal.sub, tenant = %scope.slug, rule = %n, result = %outcome.result());

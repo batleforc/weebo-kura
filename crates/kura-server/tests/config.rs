@@ -632,3 +632,39 @@ async fn a_note_sharing_bytes_with_hidden_configuration_stays_readable() {
     assert_eq!(st, StatusCode::OK, "{r}");
     assert_eq!(s.get(&web, &format!("blobs/{b}")).await.0, StatusCode::OK);
 }
+
+/// Two Puts in one commit that write one entry twice (review 2026-11-21 #3):
+/// A takes B's path (B is deleted), then B takes A's old path. Both land.
+#[tokio::test]
+async fn configuration_swap_in_one_commit() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    let d = s.device("u1", "desktop").await;
+    let (a, b) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
+    let (_, ra) = s.put(&d, &a, "snippets/a.css", "aaa", None).await;
+    let (_, rb) = s.put(&d, &b, "snippets/b.css", "bbb", None).await;
+    let rev = |r: &Value| {
+        r["results"][0]["head"]["revision"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let (blob_a, size_a) = s.upload(&d, b"aaa").await;
+    let (blob_b, size_b) = s.upload(&d, b"bbb").await;
+    let (st, r) = s
+        .commit(
+            &d,
+            Some("config"),
+            json!([
+                { "op": "put", "entry": a, "path": "snippets/b.css", "blob": blob_a, "size": size_a, "base": rev(&ra) },
+                { "op": "put", "entry": b, "path": "snippets/a.css", "blob": blob_b, "size": size_b, "base": rev(&rb) },
+            ]),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(r["results"][0]["outcome"], "accepted", "{r}");
+    assert_eq!(r["results"][1]["outcome"], "accepted", "{r}");
+    assert_eq!(r["results"][1]["head"]["entry"], b.as_str(), "{r}");
+    assert_eq!(r["results"][1]["head"]["path"], "snippets/a.css", "{r}");
+}

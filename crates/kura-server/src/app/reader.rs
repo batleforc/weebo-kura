@@ -339,19 +339,24 @@ impl KeyCaller {
         &self,
         state: &SharedState,
         a: &VaultAccess,
-        hash: &kura_core::ChunkHash,
+        hashes: &[kura_core::ChunkHash],
         chunk: bool,
     ) -> Result<(), ApiError> {
+        let mut hashes: Vec<&[u8]> = hashes.iter().map(|h| h.as_bytes().as_slice()).collect();
+        // ON CONFLICT refuses the same row twice in one statement.
+        hashes.sort_unstable();
+        hashes.dedup();
         let mut tx = crate::db::begin_tenant(&state.db, a.tenant, None).await?;
         sqlx::query(
-            "INSERT INTO token_upload (token_id, vault_id, tenant_id, kind, hash) VALUES ($1, $2, $3, $4, $5)
+            "INSERT INTO token_upload (token_id, vault_id, tenant_id, kind, hash)
+             SELECT $1, $2, $3, $4, h FROM unnest($5::bytea[]) AS h
              ON CONFLICT (token_id, kind, hash) DO UPDATE SET created_at = now()",
         )
         .bind(self.id)
         .bind(a.vault)
         .bind(a.tenant)
         .bind(if chunk { "chunk" } else { "blob" })
-        .bind(hash.as_bytes().as_slice())
+        .bind(&hashes)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;

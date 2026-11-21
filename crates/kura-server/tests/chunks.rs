@@ -706,3 +706,57 @@ async fn manifests_are_stored_all_or_none(
     assert_eq!(st, StatusCode::NO_CONTENT);
     assert_eq!(blobs().await, 2);
 }
+
+/// Review 2026-11-21 #10: two `blobs/upload` calls naming the same new blobs
+/// in opposite orders both land; without one lock order they deadlock (40P01,
+/// a 503).
+#[tokio::test]
+async fn crossed_manifest_batches_do_not_deadlock() {
+    let Some(s) = Stored::new(module_path!(), ("u1", "s1", &["maxime-members"]), "laptop").await
+    else {
+        return;
+    };
+    let uri = format!("/v1/vaults/{}/blobs/upload", s.v);
+    for round in 0..20 {
+        let mut chunks = Vec::new();
+        for i in 0..8 {
+            let data = format!("round {round} chunk {i}").into_bytes();
+            s.e.put_chunk(&s.tok, &s.d, &s.v, &data).await;
+            chunks.push((ChunkHash::of(&data), data.len() as u64));
+        }
+        // Every ordered pair of distinct chunks: 56 new blobs this round.
+        let mut manifests = Vec::new();
+        for (a, sa) in &chunks {
+            for (b, sb) in &chunks {
+                if a != b {
+                    let size = sa + sb;
+                    manifests.push(json!({ "hash": blob_hash(size, &[*a, *b]), "size": size, "chunks": [a, b] }));
+                }
+            }
+        }
+        let reversed: Vec<_> = manifests.iter().rev().cloned().collect();
+        let (one, two) = tokio::join!(
+            s.e.call(
+                "POST",
+                &uri,
+                &s.tok,
+                Some(&s.d),
+                Some(json!({ "manifests": manifests }))
+            ),
+            s.e.call(
+                "POST",
+                &uri,
+                &s.tok,
+                Some(&s.d),
+                Some(json!({ "manifests": reversed }))
+            ),
+        );
+        assert_eq!(
+            (one.0, two.0),
+            (StatusCode::NO_CONTENT, StatusCode::NO_CONTENT),
+            "round {round}: {} {}",
+            one.1,
+            two.1
+        );
+    }
+}

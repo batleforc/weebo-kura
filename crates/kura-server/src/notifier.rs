@@ -565,31 +565,56 @@ async fn quota_check(state: &SharedState, n: &Notifier) -> Result<(), ApiError> 
 
 /// `token.expiring`, once per token, 7 days before (§4.2); and the 7-day
 /// purge of events and deliveries.
-async fn hourly(state: &SharedState) -> Result<(), ApiError> {
+pub async fn hourly(state: &SharedState) -> Result<(), ApiError> {
     let Some(snapshot) = state.snapshot() else {
         return Ok(());
     };
-    let rows: Vec<(Uuid, Uuid, Uuid, String, time::OffsetDateTime)> = sqlx::query_as(
-        "SELECT tenant_id, vault_id, id, name, expires_at FROM kura_tokens_expiring()",
+    let rows: Vec<Expiring> = sqlx::query_as(
+        "SELECT tenant_id, vault_id, id, name, expires_at FROM kura_tokens_expiring_due()",
     )
     .fetch_all(&state.db)
     .await?;
-    for (tenant, vault, token, name, expires) in rows {
-        let Some(a) = crate::authz::key_access(
-            &state.db,
-            &snapshot,
-            tenant,
-            vault,
-            kura_api::VaultRole::Viewer,
-        )
-        .await?
-        else {
-            continue;
-        };
+    for row in rows {
+        // One token's failure leaves it for the next hour, not the others.
+        if let Err(e) = token_expiring(state, &snapshot, row).await {
+            tracing::warn!(error = %e, "token.expiring not recorded, retried next hour");
+        }
+    }
+    purge(&state.db).await?;
+    Ok(())
+}
+
+type Expiring = (Uuid, Uuid, Uuid, String, time::OffsetDateTime);
+
+/// Marks the token and records its event in one transaction, so it is
+/// warned about exactly once, by one replica.
+async fn token_expiring(
+    state: &SharedState,
+    snapshot: &crate::reconcile::snapshot::Snapshot,
+    (tenant, vault, token, name, expires): Expiring,
+) -> Result<(), ApiError> {
+    let mut tx = db::begin_tenant(&state.db, tenant, None).await?;
+    let marked: Option<i32> = sqlx::query_scalar(
+        "UPDATE scoped_token SET expiring_notified = true WHERE id = $1 AND NOT expiring_notified RETURNING 1",
+    )
+    .bind(token)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if marked.is_none() {
+        return Ok(());
+    }
+    if let Some(a) = crate::authz::key_access(
+        &state.db,
+        snapshot,
+        tenant,
+        vault,
+        kura_api::VaultRole::Viewer,
+    )
+    .await?
+    {
         let at = expires
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap_or_default();
-        let mut tx = db::begin_tenant(&state.db, tenant, None).await?;
         record(
             state,
             &mut tx,
@@ -605,9 +630,8 @@ async fn hourly(state: &SharedState) -> Result<(), ApiError> {
             ),
         )
         .await?;
-        tx.commit().await?;
     }
-    purge(&state.db).await?;
+    tx.commit().await?;
     Ok(())
 }
 

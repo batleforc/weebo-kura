@@ -117,7 +117,7 @@ impl Host for Mem {
 
 /// A server that refuses uploads, or serves one entry, possibly corrupt.
 #[derive(Default)]
-struct Scripted {
+struct Scripted<'a> {
     refuse: bool,
     serve: Vec<(EntryState, Vec<u8>)>,
     corrupt: bool,
@@ -152,9 +152,11 @@ struct Scripted {
     /// Single `get_blob` and `get_chunk` calls, and batch calls.
     singles: Cell<usize>,
     batches: Cell<usize>,
+    /// The user saves this file on that host while a chunk downloads.
+    saved_meanwhile: Option<(&'a Mem, &'static str)>,
 }
 
-impl Remote for Scripted {
+impl Remote for Scripted<'_> {
     async fn missing(&self, hashes: &[ChunkHash]) -> Result<Vec<ChunkHash>, RemoteError> {
         self.calls.set(self.calls.get() + 1);
         if self.refuse {
@@ -194,6 +196,11 @@ impl Remote for Scripted {
     }
     async fn get_chunk(&self, h: &ChunkHash) -> Result<Vec<u8>, RemoteError> {
         self.singles.set(self.singles.get() + 1);
+        if let Some((host, path)) = self.saved_meanwhile {
+            host.files
+                .borrow_mut()
+                .insert(path.into(), b"saved meanwhile".to_vec());
+        }
         let data = self
             .serve
             .iter()
@@ -389,6 +396,53 @@ async fn unsyncable_and_dot_files_are_reported_or_skipped() {
     let names: Vec<&str> = r.unsyncable.iter().map(|(p, _)| p.as_str()).collect();
     assert_eq!(names, ["Q3: budget.md", "big.bin"]);
     assert_eq!(remote.calls.get(), 0, "a dry run sends nothing");
+}
+
+/// A name listed decomposed (NFD) on a disk that does not normalize reads
+/// back under no NFC path: that file fails, the rest still pushes and pulls
+/// (review 2026-11-21 #1).
+#[tokio::test]
+async fn an_unreadable_file_fails_alone() {
+    let host = Mem::default();
+    for p in ["ok.md", "Cafe\u{301}.md"] {
+        host.files.borrow_mut().insert(p.into(), b"x".to_vec());
+    }
+    let remote = Scripted {
+        refuse: true,
+        serve: vec![served("theirs.md", b"remote")],
+        ..Scripted::default()
+    };
+    let r = sync(&host, &remote, &mut state(), &opts(false))
+        .await
+        .unwrap();
+    let failed: Vec<&str> = r.failed.iter().map(|(p, _)| p.as_str()).collect();
+    assert_eq!(failed, ["Caf\u{e9}.md"], "{r:?}");
+    assert_eq!(r.pushed, 1, "ok.md still goes: {r:?}");
+    assert_eq!(host.files.borrow()["theirs.md"], b"remote", "the pull ran");
+}
+
+/// A save made while the remote version downloads is not overwritten: the
+/// item waits and the next push conflicts (review 2026-11-21 #7).
+#[tokio::test]
+async fn a_save_during_the_download_is_kept() {
+    let host = Mem::default();
+    let mut s = state();
+    let first = Scripted {
+        refuse: true,
+        serve: vec![served_as("note.md", b"v1", 1, 1)],
+        ..Scripted::default()
+    };
+    sync(&host, &first, &mut s, &opts(false)).await.unwrap();
+    assert_eq!(host.files.borrow()["note.md"], b"v1");
+    let second = Scripted {
+        refuse: true,
+        serve: vec![served_as("note.md", b"v2", 1, 2)],
+        saved_meanwhile: Some((&host, "note.md")),
+        ..Scripted::default()
+    };
+    let r = sync(&host, &second, &mut s, &opts(false)).await.unwrap();
+    assert_eq!(host.files.borrow()["note.md"], b"saved meanwhile", "{r:?}");
+    assert_eq!(r.deferred.len(), 1, "{r:?}");
 }
 
 #[tokio::test]

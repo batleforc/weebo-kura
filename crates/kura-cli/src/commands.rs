@@ -4,9 +4,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
-use kura_core::sync::{Host as _, Known, LocalState, Options, RemoteError, Stamp, sync};
+use kura_core::sync::{Host as _, Known, LocalState, Options, RemoteError, Stamp, blob_of, sync};
 use kura_core::wire::EntryState;
-use kura_core::{ChunkHash, ChunkParams, PathError, VaultPath, blob_hash, chunks};
+use kura_core::{ChunkParams, PathError, VaultPath};
 use uuid::Uuid;
 
 use crate::api::{self, Api, oidc};
@@ -296,7 +296,7 @@ async fn diff(
         };
         seen.insert(path.clone());
         let data = host.read(&path).await.map_err(Fail::local)?;
-        if it.blob == Some(blob_of(&data, p)) {
+        if it.blob == Some(blob_of(&data, p).0) {
             d.matched.push((it.clone(), Stamp::from(&f)));
         } else {
             d.differ.push(path.to_string());
@@ -321,11 +321,6 @@ fn human(bytes: u64) -> String {
         v /= 1024.0;
     }
     format!("{v:.1} TiB")
-}
-
-fn blob_of(data: &[u8], p: ChunkParams) -> ChunkHash {
-    let hashes: Vec<ChunkHash> = chunks(data, p).iter().map(|c| c.hash).collect();
-    blob_hash(data.len() as u64, &hashes)
 }
 
 pub async fn attach(ctx: &Ctx, vault: &str, folder: PathBuf, yes: bool) -> Result<u8, Fail> {
@@ -1386,6 +1381,7 @@ pub async fn search(ctx: &Ctx, vault: &str, query: &str) -> Result<u8, Fail> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kura_core::{ChunkHash, blob_hash};
 
     #[test]
     fn backoff_stays_between_one_and_sixty_seconds() {
@@ -1457,7 +1453,8 @@ mod tests {
                 max: 1024,
             })
             .unwrap_or_else(|f| panic!("{}", f.1)),
-        );
+        )
+        .0;
         assert_eq!(a, blob_hash(1, &[ChunkHash::of(b"x")]));
     }
 

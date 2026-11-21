@@ -55,6 +55,20 @@ describe("the vault host", () => {
   });
 });
 
+describe("the state file", () => {
+  it("is replaced whole, and a save killed after removing the old one still loads", async () => {
+    const { adapter, h } = host();
+    await h.save('{"cursor":1}');
+    await h.save('{"cursor":2}');
+    expect(await h.loadState()).toBe('{"cursor":2}');
+    expect(adapter.files.has(`${h.statePath()}.tmp`)).toBe(false);
+    // Killed between remove and rename: only the complete copy is left.
+    await adapter.write(`${h.statePath()}.tmp`, '{"cursor":3}');
+    await adapter.remove(h.statePath());
+    expect(await h.loadState()).toBe('{"cursor":3}');
+  });
+});
+
 describe("folders (RFC 0007)", () => {
   it("lists every folder but dot-folders, makes one, and removes only an empty one", async () => {
     const adapter = new MemAdapter();
