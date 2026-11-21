@@ -114,15 +114,15 @@
     "semantic_hash": ""
   },
   "Cargo.toml": {
-    "mtime": 1794937979.921116,
-    "seen": 1794939114.1365473,
+    "mtime": 1795286361.2218428,
+    "seen": 1795286498.8715885,
     "ast_hash": "4cb9d9e325ca2ffa22ef52a0772e37cb",
     "semantic_hash": ""
   },
   "Taskfile.yaml": {
-    "mtime": 1795276977.0959303,
-    "seen": 1795277117.9986079,
-    "ast_hash": "a7c5c615b7773653d8209817ea1266d6",
+    "mtime": 1795286335.6408663,
+    "seen": 1795286498.8715897,
+    "ast_hash": "19355863564541720e7a16a52ddd8b78",
     "semantic_hash": ""
   },
   "crates/kura-api/Cargo.toml": {
@@ -414,8 +414,8 @@
     "semantic_hash": ""
   },
   "docs/api/openapi.json": {
-    "mtime": 1795285132.300164,
-    "seen": 1795285136.8684192,
+    "mtime": 1795286361.2339296,
+    "seen": 1795286498.8764257,
     "ast_hash": "4e2883e5741ef263269705be639b9936",
     "semantic_hash": ""
   },
@@ -762,14 +762,14 @@
     "semantic_hash": ""
   },
   "plugin/manifest.json": {
-    "mtime": 1794662711.5803668,
-    "seen": 1794665647.176915,
+    "mtime": 1795286361.23031,
+    "seen": 1795286498.8771627,
     "ast_hash": "600973ff03b530bf21c08f43546036b0",
     "semantic_hash": ""
   },
   "plugin/package.json": {
-    "mtime": 1794662711.9793632,
-    "seen": 1794665647.1769154,
+    "mtime": 1795286361.2272434,
+    "seen": 1795286498.877164,
     "ast_hash": "b76d6e98fd9b7a920eee3660eccf8150",
     "semantic_hash": ""
   },
@@ -942,8 +942,8 @@
     "semantic_hash": ""
   },
   "deploy/helm/kura/Chart.yaml": {
-    "mtime": 1794674860.0299368,
-    "seen": 1794682497.834743,
+    "mtime": 1795286361.2367027,
+    "seen": 1795286498.875962,
     "ast_hash": "c439ec72be3d82cfa3913c19849988c6",
     "semantic_hash": ""
   },
@@ -1206,9 +1206,9 @@
     "semantic_hash": ""
   },
   "ui/package.json": {
-    "mtime": 1795039124.5646505,
-    "seen": 1795039295.1740918,
-    "ast_hash": "a276d147cdd5abd5b0eee2a80a193ad0",
+    "mtime": 1795286361.2244143,
+    "seen": 1795286498.8793817,
+    "ast_hash": "94741f85ccf79123494d41e0d820f88c",
     "semantic_hash": ""
   },
   "ui/pnpm-workspace.yaml": {
@@ -2106,9 +2106,21 @@
     "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1795284122.0720835,
-    "seen": 1795284455.996729,
-    "ast_hash": "57a2d979dc408d9fb0de252efe0046d4",
+    "mtime": 1795286459.5087838,
+    "seen": 1795286498.8829927,
+    "ast_hash": "10b76e29074aef71bc512bbdd5ceea24",
+    "semantic_hash": ""
+  },
+  ".github/workflows/release.yml": {
+    "mtime": 1795286433.687703,
+    "seen": 1795286498.8708024,
+    "ast_hash": "9cd70fe1d98416f5a304f43074f41009",
+    "semantic_hash": ""
+  },
+  ".tasks/release.yaml": {
+    "mtime": 1795286339.3684113,
+    "seen": 1795286498.8713367,
+    "ast_hash": "2550d671df50ecf8c308c83aae9c7a82",
     "semantic_hash": ""
   },
   "plugin/pnpm-lock.yaml": {

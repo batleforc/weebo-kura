@@ -14,7 +14,29 @@ Vault/OpenBao Transit. The metadata lives in PostgreSQL.
 | Web console | [`ui`](ui) |
 | Helm chart | [`deploy/helm/kura`](deploy/helm/kura) |
 
-## Getting started
+## Install
+
+Each `v*` tag publishes a release. All of its parts are signed with cosign (keyless) and come with CycloneDX SBOMs. The release notes give the commands to verify them.
+
+```sh
+# Server: the chart deploys ghcr.io/batleforc/kura-server at the same version
+helm install kura oci://ghcr.io/batleforc/weebo-kura/charts/kura --version <x.y.z> -f values.yaml
+# CLI
+mise use -g github:batleforc/weebo-kura
+```
+
+The chart expects these to be installed in the cluster:
+- CloudNativePG;
+- Vault or OpenBao, with Kubernetes auth, KV and Transit;
+- an ingress controller (Traefik by default);
+- the Prometheus Operator CRDs, unless `monitoring.*` is turned off.
+
+See [Operating kura-server](docs/operator.md). You can install the Obsidian
+plugin from the web console's Help page, or with
+[BRAT](https://github.com/TfTHacker/obsidian42-brat) from this repository's
+releases.
+
+## Development
 
 Tools come from [mise](https://mise.jdx.dev) and every command is a
 [Task](https://taskfile.dev) task (`task --list`).

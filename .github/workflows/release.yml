@@ -1,0 +1,321 @@
+# From weebo-release (batlehub@20879e5 build.yaml), adapted to weebo-kura:
+# - the server ships as its image only (no raw binary: `mise use github:` would
+#   have two linux-amd64 assets to choose from);
+# - the image is linux/amd64 only: the Containerfile's WASM stage fetches
+#   binaryen's x86_64 build (its `shortcut:`);
+# - the Obsidian plugin's files are release assets (the BRAT convention);
+# - one job opens the draft first, so parallel uploads never open two drafts.
+# Every asset lands in one DRAFT release; a person reviews it and publishes it.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  # The repository deploy/helm/kura/values.yaml pulls.
+  IMAGE: ghcr.io/${{ github.repository_owner }}/kura-server
+  CHART_NAMESPACE: oci://ghcr.io/${{ github.repository }}/charts
+  # mise.toml's exact pin.
+  RUST_TOOLCHAIN: "1.100.0"
+
+jobs:
+  draft:
+    name: Open the draft release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - id: version
+        shell: bash
+        run: |
+          echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Create the draft (once; a re-run keeps it)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "release $TAG exists"; exit 0
+          fi
+          prerelease=()
+          case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
+          cat > notes.md <<EOF
+          ### What's in the box
+          - **Container image**: \`${IMAGE}:${VERSION}\` (linux/amd64), signed
+          - **Helm chart**: \`helm install kura ${CHART_NAMESPACE}/kura --version ${VERSION}\`
+          - **CLI \`kura\`**: Linux (amd64/arm64), Windows (amd64), macOS (arm64); \`mise use github:${REPO}\`
+          - **Obsidian plugin**: \`main.js\`, \`manifest.json\`, \`styles.css\` (BRAT, or the console's Help page)
+          - **SBOMs** (CycloneDX), attested; **\`checksums.txt\`** with a Sigstore bundle covering every asset
+
+          ### Verify it
+          \`\`\`bash
+          cosign verify \\
+            --certificate-identity-regexp '^https://github.com/${REPO}/' \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+            ${IMAGE}:${VERSION}
+          cosign verify-blob --bundle checksums.txt.sigstore.json \\
+            --certificate-identity-regexp '^https://github.com/${REPO}/' \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+            checksums.txt
+          sha256sum -c checksums.txt
+          gh attestation verify kura-linux-amd64.tar.gz --repo ${REPO}
+          \`\`\`
+
+          Upgrading: the chart's migration Job runs before the new pods (\`pre-upgrade\`).
+          EOF
+          gh release create "$TAG" --repo "$REPO" --draft --verify-tag "${prerelease[@]}" \
+            --title "weebo-kura $TAG" --notes-file notes.md --generate-notes
+
+  cli:
+    name: CLI — ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    needs: draft
+    permissions:
+      contents: write
+      id-token: write # keyless attestation
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux x86_64, os: ubuntu-latest, target: x86_64-unknown-linux-musl, archive: kura-linux-amd64.tar.gz, cross: true }
+          - { name: Linux aarch64, os: ubuntu-latest, target: aarch64-unknown-linux-musl, archive: kura-linux-arm64.tar.gz, cross: true }
+          - { name: Windows x86_64, os: windows-latest, target: x86_64-pc-windows-msvc, archive: kura-windows-amd64.zip, cross: false }
+          - { name: macOS aarch64, os: macos-latest, target: aarch64-apple-darwin, archive: kura-darwin-arm64.tar.gz, cross: false }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install cross
+        if: matrix.cross
+        uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
+        with:
+          tool: cross
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --locked -p kura-cli --target ${{ matrix.target }}
+      - name: Build (native)
+        if: "!matrix.cross"
+        run: cargo build --release --locked -p kura-cli --target ${{ matrix.target }}
+      - name: Stage (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cp "target/${{ matrix.target }}/release/kura" kura
+          tar czf "${{ matrix.archive }}" kura
+      - name: Stage (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item "target\${{ matrix.target }}\release\kura.exe" kura.exe
+          Compress-Archive -Path kura.exe -DestinationPath "${{ matrix.archive }}"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ matrix.archive }}
+      - name: Upload to the draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.draft.outputs.tag }}" "${{ matrix.archive }}" --repo "$GITHUB_REPOSITORY" --clobber
+
+  sbom:
+    name: Rust SBOMs
+    runs-on: ubuntu-latest
+    needs: draft
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
+        with:
+          tool: cargo-cyclonedx
+      # One CycloneDX document per shipped crate, so a crate CVE disclosed
+      # later can be matched against this exact release (`trivy sbom <file>`).
+      - name: Generate and upload
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cargo cyclonedx --format json --manifest-path crates/kura-server/Cargo.toml
+          cargo cyclonedx --format json --manifest-path crates/kura-cli/Cargo.toml
+          cp crates/kura-server/kura-server.cdx.json sbom-kura-server.cdx.json
+          cp crates/kura-cli/kura-cli.cdx.json sbom-kura-cli.cdx.json
+          gh release upload "${{ needs.draft.outputs.tag }}" sbom-kura-server.cdx.json sbom-kura-cli.cdx.json \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+  plugin:
+    name: Obsidian plugin
+    runs-on: ubuntu-latest
+    needs: draft
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      # The WASM core, then the bundle within its 3 MB budget, as CI builds it.
+      - run: task plugin:install
+      - run: task plugin:build
+      - name: The manifest names this release
+        shell: bash
+        run: test "$(jq -r .version plugin/manifest.json)" = "${{ needs.draft.outputs.version }}"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            plugin/main.js
+            plugin/manifest.json
+            plugin/styles.css
+      - name: Upload to the draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.draft.outputs.tag }}" plugin/main.js plugin/manifest.json plugin/styles.css --repo "$GITHUB_REPOSITORY" --clobber
+
+  image:
+    name: Container image
+    runs-on: ubuntu-latest
+    needs: draft
+    permissions:
+      contents: write
+      packages: write
+      id-token: write # signing and attestations
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./Containerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ env.IMAGE }}:${{ needs.draft.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.draft.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=Apache-2.0
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # By digest: a tag is a mutable pointer.
+      - name: Sign
+        run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
+      - name: SBOM (Syft)
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: cyclonedx-json
+          output-file: sbom-image.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: sbom-image.cdx.json
+          push-to-registry: true
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Upload the SBOM to the draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.draft.outputs.tag }}" sbom-image.cdx.json --repo "$GITHUB_REPOSITORY" --clobber
+      # The gate: fixable HIGH/CRITICAL fail the release, with the house ignore file.
+      - run: task audit:image IMAGE="${IMAGE}@${{ steps.build.outputs.digest }}"
+
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    needs: draft
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # keyless signing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # helm as task helm:lint runs it.
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # The version and the image tag come from the git tag, whatever Chart.yaml says.
+      - name: Package, push and sign
+        shell: bash
+        env:
+          VERSION: ${{ needs.draft.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          helm package deploy/helm/kura --destination dist --version "$VERSION" --app-version "$VERSION"
+          helm push "dist/kura-${VERSION}.tgz" "${CHART_NAMESPACE}" 2>&1 | tee push.log
+          digest=$(grep -oE 'sha256:[0-9a-f]{64}' push.log | head -n1)
+          [ -n "$digest" ] || { echo "helm push printed no digest: refusing to sign a tag" >&2; exit 1; }
+          cosign sign --yes "${CHART_NAMESPACE#oci://}/kura@${digest}"
+
+  sign:
+    name: Checksums and detached signature
+    runs-on: ubuntu-latest
+    needs: [draft, cli, sbom, plugin, image, chart]
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Checksum every asset, sign, attach
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.draft.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir assets --clobber
+          # Sorted, and without a previous attempt's checksum files.
+          (cd assets && find . -maxdepth 1 -type f ! -name 'checksums.txt*' -printf '%f\n' | sort | xargs -d '\n' sha256sum) > checksums.txt
+          cat checksums.txt
+          cosign sign-blob --yes --bundle checksums.txt.sigstore.json checksums.txt
+          gh release upload "$TAG" checksums.txt checksums.txt.sigstore.json --repo "$GITHUB_REPOSITORY" --clobber

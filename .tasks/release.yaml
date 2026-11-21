@@ -1,0 +1,63 @@
+# From weebo-release (batlehub@20879e5 .tasks/release.yaml), adapted: two
+# package.json (console, plugin), the plugin's Obsidian manifest, the spec under
+# docs/api, the chart under deploy/helm; no chart README (no helm-docs here).
+version: "3"
+
+# One release version, written in every file that declares it. `cog bump` runs
+# `version:set` as its pre-bump hook (cog.toml), so the v* tag and the files it
+# points at never disagree. Every crate inherits the workspace version.
+
+tasks:
+  version:set:
+    desc: "Set the release version everywhere it is written (usage: task version:set VERSION=1.2.0)"
+    silent: true
+    requires:
+      vars: [VERSION]
+    cmds:
+      - |
+        set -euo pipefail
+        v='{{.VERSION}}'
+        # cog hands the version bare; a `v` reaching the files would break
+        # Cargo.toml, the chart's semver and Obsidian's manifest.
+        case "$v" in
+          [0-9]*.[0-9]*.[0-9]*) ;;
+          *) echo "VERSION must be a bare semver like 1.2.0, got '$v'" >&2; exit 1 ;;
+        esac
+        # Scoped to [workspace.package]: dependencies carry `version =` too.
+        sed -i '/^\[workspace\.package\]/,/^\[/ s/^version = ".*"$/version = "'"$v"'"/' Cargo.toml
+        # The first "version" key of each file is the package's own.
+        for f in ui/package.json plugin/package.json plugin/manifest.json; do
+          sed -i '0,/"version": ".*"/s//"version": "'"$v"'"/' "$f"
+        done
+        # info.version, as `task dump-spec` writes it from the workspace version.
+        sed -i '0,/^    "version": ".*"$/s//    "version": "'"$v"'"/' docs/api/openapi.json
+        sed -i 's/^version: .*/version: '"$v"'/; s/^appVersion: .*/appVersion: "'"$v"'"/' deploy/helm/kura/Chart.yaml
+        # Rewrites the workspace crates' entries in Cargo.lock, offline.
+        cargo metadata --format-version 1 --offline >/dev/null
+      - task: version:check
+
+  version:check:
+    desc: Fail, naming the file, when a version declaration disagrees with Cargo.toml
+    silent: true
+    cmds:
+      - |
+        set -euo pipefail
+        cargo_v=$(sed -n '/^\[workspace\.package\]/,/^\[/ s/^version = "\(.*\)"$/\1/p' Cargo.toml)
+        fail=0
+        check() {
+          if [ "$2" != "$cargo_v" ]; then
+            echo "$1 says '$2', Cargo.toml says '$cargo_v'" >&2
+            fail=1
+          fi
+        }
+        for crate in kura-api kura-core kura-server kura-cli kura-wasm; do
+          check "Cargo.lock ($crate)" "$(sed -n '/^name = "'"$crate"'"$/{n;s/^version = "\(.*\)"$/\1/p;}' Cargo.lock)"
+        done
+        check ui/package.json "$(jq -r .version ui/package.json)"
+        check plugin/package.json "$(jq -r .version plugin/package.json)"
+        check plugin/manifest.json "$(jq -r .version plugin/manifest.json)"
+        check docs/api/openapi.json "$(jq -r .info.version docs/api/openapi.json)"
+        check "Chart.yaml version" "$(sed -n 's/^version: //p' deploy/helm/kura/Chart.yaml)"
+        check "Chart.yaml appVersion" "$(sed -n 's/^appVersion: "\(.*\)"$/\1/p' deploy/helm/kura/Chart.yaml)"
+        [ "$fail" -eq 0 ] || { echo "run 'task version:set VERSION=<x.y.z>'" >&2; exit 1; }
+        echo "every version declaration says $cargo_v"

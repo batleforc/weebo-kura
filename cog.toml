@@ -10,7 +10,10 @@ post_bump_hooks = []
 post_package_bump_hooks = []
 tag_prefix = "v"
 
-pre_bump_hooks = []
+# The bare version (1.2.0) into every file that declares it, staged into the
+# bump commit (weebo-release). The tag stays lightweight: push it with the
+# commit, `git push --atomic origin HEAD vX.Y.Z`, or the release never runs.
+pre_bump_hooks = ["task version:set VERSION={{version}}"]
 
 
 [git_hooks]

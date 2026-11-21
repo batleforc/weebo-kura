@@ -15,6 +15,7 @@ includes:
   deploy: { taskfile: ./.tasks/deploy.yaml, flatten: true }
   perf: { taskfile: ./.tasks/perf.yaml, flatten: true }
   obsidian: { taskfile: ./.tasks/obsidian.yaml, flatten: true }
+  release: { taskfile: ./.tasks/release.yaml, flatten: true }
 
 tasks:
   init:
@@ -74,6 +75,7 @@ tasks:
   lint:
     desc: "Lint the whole project: clippy, rustfmt, fuzz targets compile, the plugin shell, the web console, the Helm chart and its alerts, shell scripts (run by the pre-commit hook)"
     cmds:
+      - task: version:check
       - task: rust:lint
       - task: fuzz:check
       - task: openapi:lint
