@@ -141,13 +141,12 @@ impl Verifier {
             .unwrap_or_else(PoisonError::into_inner)
             .get(&digest)
             .cloned();
-        let info = match cached {
-            Some((info, _)) => info,
-            None => {
-                let info = self.keys.userinfo(token.expose()).await?;
-                self.cache_userinfo(digest, info.clone(), principal.exp);
-                info
-            }
+        let info = if let Some((info, _)) = cached {
+            info
+        } else {
+            let info = self.keys.userinfo(token.expose()).await?;
+            self.cache_userinfo(digest, info.clone(), principal.exp);
+            info
         };
         for claim in needed {
             if let Some(v) = info.get(*claim) {

@@ -1,10 +1,13 @@
 /** Shared test helpers: a fake identity provider and storage reset. */
 
+import { flushPromises, mount } from "@vue/test-utils";
 import { AxiosError, AxiosHeaders } from "axios";
 import { vi } from "vitest";
+import { createMemoryHistory, createRouter } from "vue-router";
 
 import { forgetDiscovery } from "@/auth/discovery";
 import { setConfig } from "@/config";
+import { i18n } from "@/i18n";
 
 export const IDP = "https://auth.example.org";
 
@@ -65,4 +68,20 @@ export function refusal(
     config,
     data: type ? { type: `/v1/problems/${type}`, detail } : {},
   });
+}
+
+/** Mounts a page at a path, any other route an empty stub; returns the wrapper. */
+export async function at(component: object, path: string, routePath: string) {
+  const router = createRouter({
+    history: createMemoryHistory("/app/"),
+    routes: [
+      { path: routePath, component },
+      { path: "/:any(.*)*", component: { template: "<p/>" } },
+    ],
+  });
+  await router.push(path);
+  const wrapper = mount(component, { global: { plugins: [router, i18n] } });
+  await flushPromises();
+  await flushPromises();
+  return wrapper;
 }

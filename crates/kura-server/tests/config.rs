@@ -9,10 +9,7 @@
 
 mod common;
 
-use std::net::SocketAddr;
-
 use axum::body::Body;
-use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode};
 use common::app::{CONFIG, Env, env_with, problem, storage, vault_id};
 use kura_core::{ChunkHash, blob_hash};
@@ -40,19 +37,7 @@ async fn setup(test: &str) -> Option<S> {
         "  tenantRef: { name: maxime }\n  bindings:",
         "  tenantRef: { name: maxime }\n  configSync: { categories: [plugins, snippets] }\n  bindings:",
     );
-    let dir = std::env::temp_dir().join(format!("kura-config-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("config.yaml"), docs).unwrap();
-    let files = kura_server::reconcile::files::read_dir(&dir).unwrap();
-    kura_server::reconcile::reconcile(&e.t.app, &files, true)
-        .await
-        .unwrap();
-    e.state.set_snapshot(
-        kura_server::reconcile::snapshot::load_if_changed(&e.t.app, None)
-            .await
-            .unwrap()
-            .unwrap(),
-    );
+    e.apply_config(&docs).await;
     let v = vault_id(&e, "knowledge").await;
     Some(S { e, v })
 }
@@ -82,34 +67,7 @@ impl S {
     }
 
     async fn upload(&self, d: &D, data: &[u8]) -> (String, u64) {
-        let c = ChunkHash::of(data).to_string();
-        let req = Request::put(format!("/v1/vaults/{}/chunks/{c}", self.v))
-            .header("authorization", format!("Bearer {}", d.tok))
-            .header("x-kura-device", &d.id)
-            .body(Body::from(data.to_vec()))
-            .unwrap();
-        assert!(
-            app(self.e.state.clone())
-                .oneshot(req)
-                .await
-                .unwrap()
-                .status()
-                .is_success()
-        );
-        let size = data.len() as u64;
-        let b = blob_hash(size, &[ChunkHash::of(data)]).to_string();
-        let (st, body) = self
-            .e
-            .call(
-                "PUT",
-                &format!("/v1/vaults/{}/blobs/{b}", self.v),
-                &d.tok,
-                Some(&d.id),
-                Some(json!({ "size": size, "chunks": [c] })),
-            )
-            .await;
-        assert_eq!(st, StatusCode::NO_CONTENT, "{body}");
-        (b, size)
+        self.e.upload(&d.tok, &d.id, &self.v, data).await
     }
 
     async fn commit(&self, d: &D, space: Option<&str>, ops: Value) -> (StatusCode, Value) {
@@ -168,23 +126,11 @@ impl S {
     }
 }
 
-/// T14: a configuration space is its owner's, for one profile; another
-/// member, a scoped token and the other profile see nothing of it, not even
-/// its content by address; categories and the Kura plugin are enforced.
-#[tokio::test]
-async fn config_namespace_hidden_from_other_member() {
-    let Some(s) = setup(module_path!()).await else {
-        return;
-    };
-    let (a, a_phone, b) = (
-        s.device("u1", "desktop").await,
-        s.device("u1", "mobile").await,
-        s.device("u2", "desktop").await,
-    );
+async fn seed_and_list(s: &S, a: &D, a_phone: &D, b: &D) -> String {
     let plugin = Uuid::now_v7().to_string();
     let (st, r) = s
         .put(
-            &a,
+            a,
             &plugin,
             "plugins/dataview/main.js",
             "module.exports = 1;",
@@ -194,7 +140,7 @@ async fn config_namespace_hidden_from_other_member() {
     assert_eq!(st, StatusCode::OK, "{r}");
     let (st, _) = s
         .put(
-            &a,
+            a,
             &Uuid::now_v7().to_string(),
             "snippets/wide.css",
             ".x{}",
@@ -209,7 +155,7 @@ async fn config_namespace_hidden_from_other_member() {
         "workspace.json",
     ] {
         let (st, b) = s
-            .put(&a, &Uuid::now_v7().to_string(), path, "{}", None)
+            .put(a, &Uuid::now_v7().to_string(), path, "{}", None)
             .await;
         assert_eq!(
             (st, problem(&b)),
@@ -221,19 +167,23 @@ async fn config_namespace_hidden_from_other_member() {
         );
     }
     assert_eq!(
-        s.paths(&a, "config").await,
+        s.paths(a, "config").await,
         ["plugins/dataview/main.js", "snippets/wide.css"]
     );
     assert!(
-        s.paths(&a, "notes").await.is_empty(),
+        s.paths(a, "notes").await.is_empty(),
         "never among the notes"
     );
     assert!(
-        s.paths(&a_phone, "config").await.is_empty(),
+        s.paths(a_phone, "config").await.is_empty(),
         "another profile"
     );
-    assert!(s.paths(&b, "config").await.is_empty(), "another member");
-    assert!(s.paths(&b, "notes").await.is_empty());
+    assert!(s.paths(b, "config").await.is_empty(), "another member");
+    assert!(s.paths(b, "notes").await.is_empty());
+    plugin
+}
+
+async fn hidden_by_address(s: &S, a: &D, b: &D) {
     // Not by content address either.
     let c = ChunkHash::of(b"module.exports = 1;");
     let get = |d: &D| {
@@ -249,8 +199,8 @@ async fn config_namespace_hidden_from_other_member() {
             app(state).oneshot(req).await.unwrap().status()
         }
     };
-    assert_eq!(get(&a).await, StatusCode::OK);
-    assert_eq!(get(&b).await, StatusCode::NOT_FOUND);
+    assert_eq!(get(a).await, StatusCode::OK);
+    assert_eq!(get(b).await, StatusCode::NOT_FOUND);
     // RFC 0002 T2: nor in a batch, where it reads as an unknown hash.
     let batch = |d: &D| {
         let uri = format!("/v1/vaults/{}/chunks/batch", s.v);
@@ -271,18 +221,24 @@ async fn config_namespace_hidden_from_other_member() {
                 .to_vec()
         }
     };
-    assert_eq!(batch(&a).await[32], 0, "the owner gets it");
-    let theirs = batch(&b).await;
+    assert_eq!(batch(a).await[32], 0, "the owner gets it");
+    let theirs = batch(b).await;
     assert_eq!(theirs.len(), 37, "batch_hides_other_members_config");
     assert_eq!(theirs[32..], [1, 0, 0, 0, 0]);
+}
+
+async fn no_overwrite_by_id(s: &S, b: &D, plugin: &str) {
     // Another member cannot write over it by naming its id.
-    let (bb, size) = s.upload(&b, b"evil").await;
+    let (bb, size) = s.upload(b, b"evil").await;
     for space in [Some("config"), None] {
         let (st, body) = s
-            .commit(&b, space, json!([{ "op": "put", "entry": plugin, "path": "plugins/dataview/main.js", "blob": bb, "size": size }]))
+            .commit(b, space, json!([{ "op": "put", "entry": plugin, "path": "plugins/dataview/main.js", "blob": bb, "size": size }]))
             .await;
         assert_eq!(st, StatusCode::BAD_REQUEST, "{space:?}: {body}");
     }
+}
+
+async fn scoped_token_sees_notes_only(s: &S, a: &D) {
     // A scoped token: notes only, never configuration.
     let admin = s.e.key.token("boss", "sb", &["maxime-admins"]);
     let ad = s.e.register(&admin, "admin-desk").await;
@@ -300,23 +256,41 @@ async fn config_namespace_hidden_from_other_member() {
         ("space=config", StatusCode::FORBIDDEN),
         ("space=notes", StatusCode::OK),
     ] {
-        let mut req = Request::get(format!("/v1/vaults/{}/changes?since=0&{q}", s.v))
-            .header("authorization", format!("Bearer {key}"))
-            .body(Body::empty())
-            .unwrap();
-        req.extensions_mut()
-            .insert(ConnectInfo("10.1.1.1:1".parse::<SocketAddr>().unwrap()));
-        assert_eq!(
-            app(s.e.state.clone()).oneshot(req).await.unwrap().status(),
-            want,
-            "{q}"
-        );
+        let (st, _) =
+            s.e.call_peer(
+                "10.1.1.1:1",
+                "GET",
+                &format!("/v1/vaults/{}/changes?since=0&{q}", s.v),
+                key,
+                None,
+            )
+            .await;
+        assert_eq!(st, want, "{q}");
     }
     // The vault tells clients what syncs.
     let (_, vaults) =
         s.e.call("GET", "/v1/vaults", &a.tok, Some(&a.id), None)
             .await;
     assert_eq!(vaults[0]["configSync"], json!(["plugins", "snippets"]));
+}
+
+/// T14: a configuration space is its owner's, for one profile; another
+/// member, a scoped token and the other profile see nothing of it, not even
+/// its content by address; categories and the Kura plugin are enforced.
+#[tokio::test]
+async fn config_namespace_hidden_from_other_member() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    let (a, a_phone, b) = (
+        s.device("u1", "desktop").await,
+        s.device("u1", "mobile").await,
+        s.device("u2", "desktop").await,
+    );
+    let plugin = seed_and_list(&s, &a, &a_phone, &b).await;
+    hidden_by_address(&s, &a, &b).await;
+    no_overwrite_by_id(&s, &b, &plugin).await;
+    scoped_token_sees_notes_only(&s, &a).await;
 }
 
 /// §6.5: configuration never conflicts; the last write wins, the earlier
@@ -424,44 +398,15 @@ impl S {
     }
 }
 
-/// RFC 0008 T1, T2, T4, T6: the console lists its owner's configuration by
-/// profile, reads what holds no secret, is never given a hidden file's hash
-/// or content, and writes nothing.
-#[tokio::test]
-async fn a_web_device_lists_and_reads_only_what_holds_no_secret() {
-    let Some(s) = setup(module_path!()).await else {
-        return;
-    };
-    let (desk, web, phone) = (
-        s.device("u1", "desktop").await,
-        s.device("u1", "web").await,
-        s.device("u1", "mobile").await,
-    );
-    let secret = format!("{{\"token\":\"s3cret-{}\"}}", Uuid::new_v4());
-    let (snippet, data) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
-    for (entry, path, text) in [
-        (snippet.as_str(), "snippets/wide.css", ".x{}"),
-        (data.as_str(), "plugins/dataview/data.json", secret.as_str()),
-        (
-            &Uuid::now_v7().to_string(),
-            "plugins/dataview/manifest.json",
-            "{\"name\":\"Dataview\"}",
-        ),
-    ] {
-        let (st, r) = s.put(&desk, entry, path, text, None).await;
-        assert_eq!(st, StatusCode::OK, "{path}: {r}");
-    }
-    let data_blob = blob_hash(secret.len() as u64, &[ChunkHash::of(secret.as_bytes())]).to_string();
-    let data_chunk = ChunkHash::of(secret.as_bytes()).to_string();
-
+async fn listed_by_profile(s: &S, desk: &D, web: &D) -> std::collections::BTreeMap<String, Value> {
     // Listed by profile, the hidden file without its hash.
-    let items = s.listed(&web, "space=config&profile=desktop").await;
+    let items = s.listed(web, "space=config&profile=desktop").await;
     assert_eq!(items.len(), 3, "{items:?}");
     assert!(items["snippets/wide.css"]["blob"].is_string());
     assert!(items["plugins/dataview/manifest.json"]["blob"].is_string());
     assert!(items["plugins/dataview/data.json"].get("blob").is_none());
     assert!(
-        s.listed(&web, "space=config&profile=mobile")
+        s.listed(web, "space=config&profile=mobile")
             .await
             .is_empty()
     );
@@ -474,37 +419,45 @@ async fn a_web_device_lists_and_reads_only_what_holds_no_secret() {
         ("entries?space=config&profile=web", StatusCode::BAD_REQUEST),
         ("changes?since=0&space=config", StatusCode::FORBIDDEN),
     ] {
-        assert_eq!(s.get(&web, q).await.0, want, "{q}");
+        assert_eq!(s.get(web, q).await.0, want, "{q}");
     }
     // T6: an Obsidian device names its own profile only.
     assert_eq!(
-        s.listed(&desk, "space=config&profile=desktop").await.len(),
+        s.listed(desk, "space=config&profile=desktop").await.len(),
         3
     );
     assert_eq!(
-        s.get(&desk, "entries?space=config&profile=mobile").await.0,
+        s.get(desk, "entries?space=config&profile=mobile").await.0,
         StatusCode::BAD_REQUEST
     );
+    items
+}
 
+async fn content_of_viewable_only(
+    s: &S,
+    (desk, web): (&D, &D),
+    items: &std::collections::BTreeMap<String, Value>,
+    (data_blob, data_chunk): (&str, &str),
+) -> String {
     // T2: content of the viewable file only; the hidden one as a random hash.
     let snippet_blob = items["snippets/wide.css"]["blob"]
         .as_str()
         .unwrap()
         .to_owned();
     assert_eq!(
-        s.get(&web, &format!("blobs/{snippet_blob}")).await.0,
+        s.get(web, &format!("blobs/{snippet_blob}")).await.0,
         StatusCode::OK
     );
-    let hidden = s.get(&web, &format!("blobs/{data_blob}")).await;
-    let random = s.get(&web, &format!("blobs/{}", "ab".repeat(32))).await;
+    let hidden = s.get(web, &format!("blobs/{data_blob}")).await;
+    let random = s.get(web, &format!("blobs/{}", "ab".repeat(32))).await;
     assert_eq!(hidden, random, "a hidden file reads as an unknown hash");
     assert_eq!(hidden.0, StatusCode::NOT_FOUND);
     assert_eq!(
-        s.get(&web, &format!("chunks/{data_chunk}")).await.0,
+        s.get(web, &format!("chunks/{data_chunk}")).await.0,
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        s.get(&desk, &format!("blobs/{data_blob}")).await.0,
+        s.get(desk, &format!("blobs/{data_blob}")).await.0,
         StatusCode::OK
     );
     let (st, batch) =
@@ -537,9 +490,12 @@ async fn a_web_device_lists_and_reads_only_what_holds_no_secret() {
         [1, 0, 0, 0, 0],
         "a hidden chunk reads as missing"
     );
+    snippet_blob
+}
 
+async fn hidden_history(s: &S, desk: &D, web: &D, snippet: &str, data: &str) {
     // History: the hidden file's revisions carry no hash for the console.
-    let (_, revs) = s.get(&web, &format!("entries/{data}/revisions")).await;
+    let (_, revs) = s.get(web, &format!("entries/{data}/revisions")).await;
     assert!(
         revs["items"]
             .as_array()
@@ -548,26 +504,33 @@ async fn a_web_device_lists_and_reads_only_what_holds_no_secret() {
             .all(|i| i.get("blob").is_none()),
         "{revs}"
     );
-    let (_, revs) = s.get(&web, &format!("entries/{snippet}/revisions")).await;
+    let (_, revs) = s.get(web, &format!("entries/{snippet}/revisions")).await;
     assert!(revs["items"][0]["blob"].is_string(), "{revs}");
-    let (_, revs) = s.get(&desk, &format!("entries/{data}/revisions")).await;
+    let (_, revs) = s.get(desk, &format!("entries/{data}/revisions")).await;
     assert!(
         revs["items"][0]["blob"].is_string(),
         "the owner's device keeps it"
     );
+}
 
+async fn console_writes_nothing(
+    s: &S,
+    (desk, web, phone): (&D, &D, &D),
+    snippet: &str,
+    data_blob: &str,
+    size: u64,
+) {
     // T3, T4: no content write from the console, not even a note on the hash.
-    let size = secret.len() as u64;
     let note = json!([{ "op": "put", "entry": Uuid::now_v7().to_string(), "path": "leak.md", "blob": data_blob, "size": size }]);
-    let (st, b) = s.commit(&web, None, note).await;
+    let (st, b) = s.commit(web, None, note).await;
     assert_eq!(
         (st, problem(&b)),
         (StatusCode::FORBIDDEN, "/v1/problems/insufficient_role"),
         "{b}"
     );
-    let (_, revs) = s.get(&desk, &format!("entries/{snippet}/revisions")).await;
+    let (_, revs) = s.get(desk, &format!("entries/{snippet}/revisions")).await;
     let first = revs["items"][0]["revision"].as_str().unwrap().to_owned();
-    for d in [&web, &phone] {
+    for d in [web, phone] {
         let (st, b) =
             s.e.call(
                 "POST",
@@ -589,7 +552,9 @@ async fn a_web_device_lists_and_reads_only_what_holds_no_secret() {
         app(s.e.state.clone()).oneshot(req).await.unwrap().status(),
         StatusCode::FORBIDDEN
     );
+}
 
+async fn other_members_console(s: &S, snippet_blob: &str) {
     // T1: another member's console sees none of it.
     let other = s.device("u2", "web").await;
     assert!(
@@ -601,6 +566,50 @@ async fn a_web_device_lists_and_reads_only_what_holds_no_secret() {
         s.get(&other, &format!("blobs/{snippet_blob}")).await.0,
         StatusCode::NOT_FOUND
     );
+}
+
+/// RFC 0008 T1, T2, T4, T6: the console lists its owner's configuration by
+/// profile, reads what holds no secret, is never given a hidden file's hash
+/// or content, and writes nothing.
+#[tokio::test]
+async fn a_web_device_lists_and_reads_only_what_holds_no_secret() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    let (desk, web, phone) = (
+        s.device("u1", "desktop").await,
+        s.device("u1", "web").await,
+        s.device("u1", "mobile").await,
+    );
+    let secret = format!("{{\"token\":\"s3cret-{}\"}}", Uuid::new_v4());
+    let (snippet, data) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
+    for (entry, path, text) in [
+        (snippet.as_str(), "snippets/wide.css", ".x{}"),
+        (data.as_str(), "plugins/dataview/data.json", secret.as_str()),
+        (
+            &Uuid::now_v7().to_string(),
+            "plugins/dataview/manifest.json",
+            "{\"name\":\"Dataview\"}",
+        ),
+    ] {
+        let (st, r) = s.put(&desk, entry, path, text, None).await;
+        assert_eq!(st, StatusCode::OK, "{path}: {r}");
+    }
+    let data_blob = blob_hash(secret.len() as u64, &[ChunkHash::of(secret.as_bytes())]).to_string();
+    let data_chunk = ChunkHash::of(secret.as_bytes()).to_string();
+    let items = listed_by_profile(&s, &desk, &web).await;
+    let snippet_blob =
+        content_of_viewable_only(&s, (&desk, &web), &items, (&data_blob, &data_chunk)).await;
+    hidden_history(&s, &desk, &web, &snippet, &data).await;
+    console_writes_nothing(
+        &s,
+        (&desk, &web, &phone),
+        &snippet,
+        &data_blob,
+        secret.len() as u64,
+    )
+    .await;
+    other_members_console(&s, &snippet_blob).await;
 }
 
 /// RFC 0008 §5.2: hidden revisions sharing a note's bytes never crowd the

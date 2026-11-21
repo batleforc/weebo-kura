@@ -18,7 +18,6 @@ use std::time::Duration;
 
 use common::app::{Env, env, vault_id};
 use futures_util::StreamExt as _;
-use kura_core::{ChunkHash, blob_hash};
 use kura_server::app::{AppState, app};
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
@@ -55,8 +54,7 @@ struct S {
 
 async fn setup(test: &str) -> Option<S> {
     let e = env(test).await?;
-    let tok = e.key.token("u1", "s1", &["maxime-members"]);
-    let d = e.register(&tok, "desk").await;
+    let (tok, d) = e.login(("u1", "s1"), &["maxime-members"], "desk").await;
     let v = vault_id(&e, "knowledge").await;
     let stop = CancellationToken::new();
     let addr = replica(e.state.clone(), &stop).await;
@@ -93,27 +91,10 @@ impl S {
     }
 
     async fn commit(&self, path: &str) {
-        let size = path.len() as u64;
-        let b = blob_hash(size, &[ChunkHash::of(path.as_bytes())]);
-        sqlx::query("INSERT INTO blob (vault_id, tenant_id, hash, size) SELECT id, tenant_id, $2, $3 FROM vault WHERE id = $1::uuid ON CONFLICT DO NOTHING")
-            .bind(&self.v)
-            .bind(b.as_bytes().as_slice())
-            .bind(i64::try_from(size).unwrap())
-            .execute(&self.e.t.owner)
-            .await
-            .unwrap();
-        let op = json!({ "op": "put", "entry": Uuid::now_v7(), "path": path, "blob": b.to_string(), "size": size });
-        let (st, body) = self
-            .e
-            .call(
-                "POST",
-                &format!("/v1/vaults/{}/commits", self.v),
-                &self.tok,
-                Some(&self.d),
-                Some(json!({ "idempotencyKey": Uuid::new_v4().to_string(), "operations": [op] })),
-            )
-            .await;
-        assert_eq!(st.as_u16(), 200, "{body}");
+        let (b, size) = self.e.blob_row(&self.v, path).await;
+        let op =
+            json!({ "op": "put", "entry": Uuid::now_v7(), "path": path, "blob": b, "size": size });
+        self.e.commit_head(&self.tok, &self.d, &self.v, op).await;
     }
 }
 

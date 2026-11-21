@@ -25,6 +25,7 @@ import { retryable } from "@/api/problem";
 import AsyncState from "@/components/ui/AsyncState.vue";
 import Chevron from "@/components/ui/Chevron.vue";
 import PaneResizer from "@/components/ui/PaneResizer.vue";
+import { theme } from "@/prefs";
 import { fileBytes } from "@/reader/content";
 import { type Watch, watchVault } from "@/reader/events";
 import FolderTree from "@/reader/FolderTree.vue";
@@ -188,6 +189,24 @@ async function lastEdit(v: string, entry: string): Promise<void> {
   }
 }
 
+/** What the frame shows for a note: its page, a download, or neither (missing). */
+async function prepare(
+  found: EntryState | undefined,
+): Promise<{ doc: string | null; download: string | null; missing: boolean }> {
+  const bytes = found?.blob ? await fileBytes(vaultId.value, found.blob) : null;
+  if (!found || !bytes) return { doc: null, download: null, missing: true };
+  // Rendered: Markdown up to 1 MiB; anything else is a download.
+  if (!/\.md$/i.test(found.path) || bytes.length > MAX_RENDER) {
+    const download = URL.createObjectURL(new Blob([new Uint8Array(bytes)]));
+    return { doc: null, download, missing: false };
+  }
+  const rendered = renderNote(new TextDecoder().decode(bytes), entries.value);
+  const doc = await frameDocument(rendered, (e) =>
+    e.blob ? fileBytes(vaultId.value, e.blob) : Promise.resolve(null),
+  );
+  return { doc, download: null, missing: false };
+}
+
 /**
  * The note of the address. The one on screen stays until the next is ready,
  * so moving from note to note never blanks the page; only the latest asked wins.
@@ -198,28 +217,12 @@ async function open(): Promise<void> {
   shown.value = null;
   const id = entryId.value;
   const found = entries.value.find((e) => e.entry === id && !e.deleted);
-  let nextDoc: string | null = null;
-  let nextDownload: string | null = null;
-  let nextMissing = false;
-  if (id) {
-    const bytes = found?.blob
-      ? await fileBytes(vaultId.value, found.blob)
-      : null;
-    if (!found || !bytes) {
-      nextMissing = true;
-    } else if (!/\.md$/i.test(found.path) || bytes.length > MAX_RENDER) {
-      // Rendered: Markdown up to 1 MiB; anything else is a download.
-      nextDownload = URL.createObjectURL(new Blob([new Uint8Array(bytes)]));
-    } else {
-      const rendered = renderNote(
-        new TextDecoder().decode(bytes),
-        entries.value,
-      );
-      nextDoc = await frameDocument(rendered, (e) =>
-        e.blob ? fileBytes(vaultId.value, e.blob) : Promise.resolve(null),
-      );
-    }
-  }
+  const next = id
+    ? await prepare(found)
+    : { doc: null, download: null, missing: false };
+  const nextDoc = next.doc;
+  const nextDownload = next.download;
+  const nextMissing = next.missing;
   if (mine !== opening) {
     if (nextDownload) URL.revokeObjectURL(nextDownload);
     return;
@@ -320,6 +323,13 @@ function typing(target: EventTarget | null): boolean {
       ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
   );
 }
+function onEscape(e: Event): void {
+  if (e.target === finder.value && query.value) {
+    query.value = "";
+  } else if (historyOpen.value) {
+    closeHistory();
+  }
+}
 function onKey(e: KeyboardEvent): void {
   if (e.defaultPrevented || e.altKey) return;
   const mod = e.ctrlKey || e.metaKey;
@@ -330,11 +340,7 @@ function onKey(e: KeyboardEvent): void {
     return;
   }
   if (e.key === "Escape") {
-    if (e.target === finder.value && query.value) {
-      query.value = "";
-    } else if (historyOpen.value) {
-      closeHistory();
-    }
+    onEscape(e);
     return;
   }
   if (mod || typing(e.target)) return;
@@ -376,6 +382,13 @@ watch(
   { immediate: true },
 );
 watch(entryId, () => void open());
+// Diagrams are drawn in the theme the note opened in: a switch draws them again.
+watch(theme, async () => {
+  if (!doc.value?.includes('class="diagram"')) return;
+  const mine = ++opening;
+  const next = await prepare(note.value);
+  if (mine === opening && next.doc) doc.value = next.doc;
+});
 </script>
 
 <template>

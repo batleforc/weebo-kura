@@ -334,10 +334,6 @@ pub enum RecordError {
     Status(u8),
 }
 
-/// The records of a `chunks/batch` answer, in order: a hash with its bytes,
-/// or with `None` when the server has nothing it may send. Lengths are
-/// checked against the rest of the body and the largest chunk before any
-/// slice is taken; the bytes are not checked against their hash here.
 /// A hash with its bytes, or `None` for a chunk the server may not send.
 pub type Record<'a> = (ChunkHash, Option<&'a [u8]>);
 
@@ -356,6 +352,10 @@ pub fn write_record(out: &mut Vec<u8>, hash: &ChunkHash, data: Option<&[u8]>) {
     out.extend_from_slice(data);
 }
 
+/// The records of a `chunks/batch` answer, in order: a hash with its bytes,
+/// or with `None` when the server has nothing it may send. Lengths are
+/// checked against the rest of the body and the largest chunk before any
+/// slice is taken; the bytes are not checked against their hash here.
 pub fn parse_records(mut body: &[u8]) -> Result<Vec<Record<'_>>, RecordError> {
     let mut out = Vec::new();
     while !body.is_empty() {

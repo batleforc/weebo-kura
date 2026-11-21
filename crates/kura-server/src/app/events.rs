@@ -198,6 +198,43 @@ fn jitter() -> Duration {
     Duration::from_millis(u64::from(u16::from_le_bytes(b)) % 5000)
 }
 
+/// A ping tick: the notice to send, or the close code if the device or the role is gone.
+async fn on_ping(
+    state: &SharedState,
+    principal: &crate::auth::Principal,
+    device: Uuid,
+    v: Uuid,
+) -> Result<Notice, (u16, &'static str)> {
+    // Revoked since the ticket, or its session was: close (review 4 L1).
+    let active: Option<bool> = sqlx::query_scalar("SELECT kura_device_active($1)")
+        .bind(device)
+        .fetch_one(&state.db)
+        .await
+        .ok()
+        .flatten();
+    if active == Some(false) {
+        return Err((close::DEVICE_REVOKED, "device_revoked"));
+    }
+    // The role, as the next request would see it: a binding or a
+    // mapping removed, or the vault gone, closes the socket (plan V4).
+    // A failing dependency keeps it open, as above.
+    if let Some(snap) = state.snapshot()
+        && let Err(crate::problem::ApiError::Problem(..)) =
+            authz::require_role(&state.db, &snap, principal, v, VaultRole::Viewer).await
+    {
+        return Err((close::ACCESS_REVOKED, "access_revoked"));
+    }
+    let head: Option<i64> = sqlx::query_scalar("SELECT kura_vault_head($1)")
+        .bind(v)
+        .fetch_one(&state.db)
+        .await
+        .ok()
+        .flatten();
+    Ok(Notice::Ping {
+        head_seq: head.and_then(|h| u64::try_from(h).ok()).unwrap_or_default(),
+    })
+}
+
 async fn serve(
     mut socket: WebSocket,
     state: SharedState,
@@ -249,22 +286,10 @@ async fn serve(
                 if socket.send(text(&Notice::Pull)).await.is_err() { return; }
             }
             _ = ping.tick() => {
-                // Revoked since the ticket, or its session was: close (review 4 L1).
-                let active: Option<bool> = sqlx::query_scalar("SELECT kura_device_active($1)").bind(device).fetch_one(&state.db).await.ok().flatten();
-                if active == Some(false) {
-                    return shut(socket, close::DEVICE_REVOKED, "device_revoked").await;
-                }
-                // The role, as the next request would see it: a binding or a
-                // mapping removed, or the vault gone, closes the socket (plan V4).
-                // A failing dependency keeps it open, as above.
-                if let Some(snap) = state.snapshot()
-                    && let Err(crate::problem::ApiError::Problem(..)) =
-                        authz::require_role(&state.db, &snap, &principal, v, VaultRole::Viewer).await
-                {
-                    return shut(socket, close::ACCESS_REVOKED, "access_revoked").await;
-                }
-                let head: Option<i64> = sqlx::query_scalar("SELECT kura_vault_head($1)").bind(v).fetch_one(&state.db).await.ok().flatten();
-                let n = Notice::Ping { head_seq: head.and_then(|h| u64::try_from(h).ok()).unwrap_or_default() };
+                let n = match on_ping(&state, &principal, device, v).await {
+                    Ok(n) => n,
+                    Err((code, reason)) => return shut(socket, code, reason).await,
+                };
                 if socket.send(text(&n)).await.is_err() { return; }
             }
             e = rx.recv() => match e {

@@ -97,9 +97,9 @@ pub const MAX_CHUNK: usize = 4 << 20;
 
 impl ChunkParams {
     pub fn new(min: u64, avg: u64, max: u64) -> Result<Self, ChunkError> {
+        use fastcdc::v2020::{AVERAGE_MAX, AVERAGE_MIN, MAXIMUM_MIN, MINIMUM_MAX, MINIMUM_MIN};
         let conv = |v: u64| usize::try_from(v).map_err(|_| ChunkError::Params("too large"));
         let (min, avg, max) = (conv(min)?, conv(avg)?, conv(max)?);
-        use fastcdc::v2020::{AVERAGE_MAX, AVERAGE_MIN, MAXIMUM_MIN, MINIMUM_MAX, MINIMUM_MIN};
         if !(min < avg && avg < max) {
             return Err(ChunkError::Params("expected min < avg < max"));
         }

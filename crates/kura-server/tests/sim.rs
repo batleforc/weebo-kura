@@ -177,12 +177,11 @@ impl AppRemote<'_> {
             .uri(format!("/v1/vaults/{}{path}", self.vault))
             .header("authorization", format!("Bearer {}", self.tok))
             .header("x-kura-device", &self.device);
-        let req = match body {
-            Some((b, ct)) => req.header("content-type", ct).body(Body::from(b)),
-            None => {
-                req = req.header("x-kura-client", "kura-cli/0.1.0");
-                req.body(Body::empty())
-            }
+        let req = if let Some((b, ct)) = body {
+            req.header("content-type", ct).body(Body::from(b))
+        } else {
+            req = req.header("x-kura-client", "kura-cli/0.1.0");
+            req.body(Body::empty())
         };
         let r = app(self.e.state.clone())
             .oneshot(req.unwrap())
@@ -415,48 +414,7 @@ async fn run(seed: u64) -> (usize, u64) {
     let mut n = 0u32;
     for _round in 0..20 {
         for (i, d) in devices.iter_mut().enumerate() {
-            for _ in 0..rng.below(3) {
-                n += 1;
-                let names: Vec<String> = d.host.notes().into_keys().collect();
-                // Unique lines, so a merge can be told from a loss.
-                let body: Vec<u8> = (0..1 + rng.below(40))
-                    .map(|j| format!("device {i} edit {n} line {j}\n"))
-                    .collect::<String>()
-                    .into_bytes();
-                match (rng.below(5), names.is_empty()) {
-                    (0 | 1, false) => {
-                        // One line replaced or inserted: what merges (phase 4).
-                        let p = names[rng.below(names.len())].clone();
-                        let old = d.host.files.borrow()[&p].0.clone();
-                        let mut lines: Vec<String> = String::from_utf8(old)
-                            .unwrap()
-                            .lines()
-                            .map(str::to_owned)
-                            .collect();
-                        let k = rng.below(lines.len() + 1);
-                        let line = format!("device {i} edit {n} line 0");
-                        if k < lines.len() && rng.below(2) == 0 {
-                            lines[k] = line;
-                        } else {
-                            lines.insert(k, line);
-                        }
-                        d.host.put(&p, (lines.join("\n") + "\n").as_bytes());
-                    }
-                    (2, false) => {
-                        let p = names[rng.below(names.len())].clone();
-                        let f = d.host.files.borrow_mut().remove(&p).unwrap();
-                        d.host
-                            .files
-                            .borrow_mut()
-                            .insert(format!("moved/{n}-{}", p.rsplit('/').next().unwrap()), f);
-                    }
-                    (3, false) => {
-                        let p = &names[rng.below(names.len())];
-                        d.host.files.borrow_mut().remove(p);
-                    }
-                    _ => d.host.put(&format!("notes/n{}.md", rng.below(12)), &body),
-                }
-            }
+            edit_notes(d, i, &mut n, &rng);
             // Offline about one round in three.
             if rng.below(3) == 0 {
                 continue;
@@ -490,6 +448,93 @@ async fn run(seed: u64) -> (usize, u64) {
         .await
         .unwrap();
     assert_eq!(usize::try_from(live).unwrap(), first.len());
+    no_line_is_lost(&e, &devices, &pushed, seed).await;
+    let merged = e
+        .state
+        .metrics
+        .merge_total
+        .with_label_values(&["merged"])
+        .get();
+    let attempted = e
+        .state
+        .metrics
+        .merge_total
+        .with_label_values(&["conflict"])
+        .get();
+    eprintln!(
+        "seed {seed}: {merged} merged, {attempted} merge conflicts, {conflicts} conflict files"
+    );
+    both_batch_routes_carried_chunks(&e).await;
+    (conflicts, merged)
+}
+
+/// both batch routes carried chunks: one phase of the test below.
+async fn both_batch_routes_carried_chunks(e: &Env) {
+    // Half the devices read through the batch routes, half one by one.
+    let batched = e
+        .state
+        .metrics
+        .batch_items_total
+        .with_label_values(&["chunks", "found"])
+        .get();
+    assert!(batched > 0, "no chunk came through chunks/batch");
+    let uploaded = e
+        .state
+        .metrics
+        .batch_items_total
+        .with_label_values(&["upload", "stored"])
+        .get();
+    assert!(uploaded > 0, "no chunk came through chunks/upload");
+}
+
+/// edit notes: one phase of the test below.
+fn edit_notes(d: &Device<'_>, i: usize, n: &mut u32, rng: &Rng) {
+    for _ in 0..rng.below(3) {
+        *n += 1;
+        let names: Vec<String> = d.host.notes().into_keys().collect();
+        // Unique lines, so a merge can be told from a loss.
+        let body: Vec<u8> = (0..1 + rng.below(40))
+            .map(|j| format!("device {i} edit {n} line {j}\n"))
+            .collect::<String>()
+            .into_bytes();
+        match (rng.below(5), names.is_empty()) {
+            (0 | 1, false) => {
+                // One line replaced or inserted: what merges (phase 4).
+                let p = names[rng.below(names.len())].clone();
+                let old = d.host.files.borrow()[&p].0.clone();
+                let mut lines: Vec<String> = String::from_utf8(old)
+                    .unwrap()
+                    .lines()
+                    .map(str::to_owned)
+                    .collect();
+                let k = rng.below(lines.len() + 1);
+                let line = format!("device {i} edit {n} line 0");
+                if k < lines.len() && rng.below(2) == 0 {
+                    lines[k] = line;
+                } else {
+                    lines.insert(k, line);
+                }
+                d.host.put(&p, (lines.join("\n") + "\n").as_bytes());
+            }
+            (2, false) => {
+                let p = names[rng.below(names.len())].clone();
+                let f = d.host.files.borrow_mut().remove(&p).unwrap();
+                d.host
+                    .files
+                    .borrow_mut()
+                    .insert(format!("moved/{n}-{}", p.rsplit('/').next().unwrap()), f);
+            }
+            (3, false) => {
+                let p = &names[rng.below(names.len())];
+                d.host.files.borrow_mut().remove(p);
+            }
+            _ => d.host.put(&format!("notes/n{}.md", rng.below(12)), &body),
+        }
+    }
+}
+
+/// no line is lost: one phase of the test below.
+async fn no_line_is_lost(e: &Env, devices: &[Device<'_>], pushed: &HashSet<Vec<u8>>, seed: u64) {
     // No line lost: every line of every version a device synced is in some
     // stored revision (merged heads do not store the pushed version itself).
     let blobs: Vec<Vec<u8>> =
@@ -507,40 +552,9 @@ async fn run(seed: u64) -> (usize, u64) {
         }
         stored.extend(String::from_utf8(text).unwrap().lines().map(str::to_owned));
     }
-    for content in &pushed {
+    for content in pushed {
         for line in String::from_utf8_lossy(content).lines() {
             assert!(stored.contains(line), "seed {seed} lost the line {line:?}");
         }
     }
-    let merged = e
-        .state
-        .metrics
-        .merge_total
-        .with_label_values(&["merged"])
-        .get();
-    let attempted = e
-        .state
-        .metrics
-        .merge_total
-        .with_label_values(&["conflict"])
-        .get();
-    eprintln!(
-        "seed {seed}: {merged} merged, {attempted} merge conflicts, {conflicts} conflict files"
-    );
-    // Half the devices read through the batch routes, half one by one.
-    let batched = e
-        .state
-        .metrics
-        .batch_items_total
-        .with_label_values(&["chunks", "found"])
-        .get();
-    assert!(batched > 0, "no chunk came through chunks/batch");
-    let uploaded = e
-        .state
-        .metrics
-        .batch_items_total
-        .with_label_values(&["upload", "stored"])
-        .get();
-    assert!(uploaded > 0, "no chunk came through chunks/upload");
-    (conflicts, merged)
 }

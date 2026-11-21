@@ -244,36 +244,16 @@ async fn check_chunks(config_path: PathBuf, n: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run(config_path: PathBuf) -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
-    let config = ServerConfig::load(&config_path)?;
-    let api = tokio::net::TcpListener::bind(config.listen.api)
-        .await
-        .context("binding the API port")?;
-    let metrics_listener = tokio::net::TcpListener::bind(config.listen.metrics)
-        .await
-        .context("binding the metrics port")?;
-    let (state, vault, url) = connect(&config).await?;
-    let config_dir = std::env::var_os(CONFIG_DIR_ENV)
-        .map(PathBuf::from)
-        .with_context(|| format!("{CONFIG_DIR_ENV} is not set"))?;
-    let persisted = state.verifier.keys.load_persisted().await?;
-    tracing::info!(keys = persisted, "persisted signing keys loaded");
-    if !config.notifications.enabled
-        && let Err(e) = kura_server::notifier::warn_rules_while_off(&state.db).await
-    {
-        // Only a warning is lost; the server works the same.
-        tracing::warn!(error = %e, "stored notification rules not counted");
-    }
-    let state = std::sync::Arc::new(state);
-    let shutdown = CancellationToken::new();
-    tokio::spawn(stop_on_signal(shutdown.clone()));
-    let mut background = kura_server::background(&state, config_dir, &shutdown);
+/// The background tasks: the library's, the maintenance window and, with Vault, the credential refresh.
+fn spawn_background(
+    state: &kura_server::app::SharedState,
+    config_dir: PathBuf,
+    config: &ServerConfig,
+    vault: Option<std::sync::Arc<kura_server::vault::Vault>>,
+    url: String,
+    shutdown: &CancellationToken,
+) -> Vec<kura_server::Background> {
+    let mut background = kura_server::background(state, config_dir, shutdown);
     background.push(Box::pin(kura_server::maintenance::run(
         state.clone(),
         config.maintenance.window,
@@ -290,6 +270,56 @@ async fn run(config_path: PathBuf) -> anyhow::Result<()> {
             shutdown.clone(),
         )));
     }
+    background
+}
+
+/// Loads the persisted signing keys; with notifications off, warns about stored rules.
+async fn startup_checks(
+    state: &kura_server::app::AppState,
+    config: &ServerConfig,
+) -> anyhow::Result<()> {
+    let persisted = state.verifier.keys.load_persisted().await?;
+    tracing::info!(keys = persisted, "persisted signing keys loaded");
+    if !config.notifications.enabled {
+        warn_rules_while_off(&state.db).await;
+    }
+    Ok(())
+}
+
+async fn warn_rules_while_off(pool: &sqlx::PgPool) {
+    if let Err(e) = kura_server::notifier::warn_rules_while_off(pool).await {
+        // Only a warning is lost; the server works the same.
+        tracing::warn!(error = %e, "stored notification rules not counted");
+    }
+}
+
+fn init_tracing() {
+    tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
+}
+
+async fn run(config_path: PathBuf) -> anyhow::Result<()> {
+    init_tracing();
+    let config = ServerConfig::load(&config_path)?;
+    let api = tokio::net::TcpListener::bind(config.listen.api)
+        .await
+        .context("binding the API port")?;
+    let metrics_listener = tokio::net::TcpListener::bind(config.listen.metrics)
+        .await
+        .context("binding the metrics port")?;
+    let (state, vault, url) = connect(&config).await?;
+    let config_dir = std::env::var_os(CONFIG_DIR_ENV)
+        .map(PathBuf::from)
+        .with_context(|| format!("{CONFIG_DIR_ENV} is not set"))?;
+    startup_checks(&state, &config).await?;
+    let state = std::sync::Arc::new(state);
+    let shutdown = CancellationToken::new();
+    tokio::spawn(stop_on_signal(shutdown.clone()));
+    let background = spawn_background(&state, config_dir, &config, vault, url, &shutdown);
     tracing::info!(api = %config.listen.api, metrics = %config.listen.metrics, "kura-server started");
     kura_server::serve(api, metrics_listener, state, background, shutdown).await?;
     tracing::info!("kura-server stopped");

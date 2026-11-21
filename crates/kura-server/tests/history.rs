@@ -12,26 +12,14 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::app::{Env, env, problem, vault_id};
-use kura_core::{ChunkHash, blob_hash};
+use common::app::{Basic as S, problem};
 use kura_server::maintenance::{Settings, pass};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-struct S {
-    e: Env,
-    tok: String,
-    d: String,
-    v: String,
-}
-
 async fn setup(test: &str) -> Option<S> {
-    let e = env(test).await?;
-    let tok = e.key.token("u1", "s1", &["maxime-members"]);
-    let d = e.register(&tok, "desk").await;
-    let v = vault_id(&e, "knowledge").await;
-    Some(S { e, tok, d, v })
+    S::new(test, "desk").await
 }
 
 fn eid() -> String {
@@ -41,16 +29,7 @@ fn eid() -> String {
 impl S {
     /// A blob row for `text` (no chunks: nothing reads it here).
     async fn blob(&self, text: &str) -> (String, u64) {
-        let size = text.len() as u64;
-        let b = blob_hash(size, &[ChunkHash::of(text.as_bytes())]);
-        sqlx::query("INSERT INTO blob (vault_id, tenant_id, hash, size) SELECT id, tenant_id, $2, $3 FROM vault WHERE id = $1::uuid ON CONFLICT DO NOTHING")
-            .bind(&self.v)
-            .bind(b.as_bytes().as_slice())
-            .bind(i64::try_from(size).unwrap())
-            .execute(&self.e.t.owner)
-            .await
-            .unwrap();
-        (b.to_string(), size)
+        self.e.blob_row(&self.v, text).await
     }
 
     async fn commit(&self, ops: Value, epoch: Option<&str>) -> (StatusCode, Value) {

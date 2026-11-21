@@ -485,6 +485,14 @@ fn older_server(e: &RemoteError) -> bool {
     matches!(e, RemoteError::Problem { status: 405, .. })
 }
 
+/// `None` for an older server's `405`, so the caller reads one by one.
+fn newer<T>(r: Result<T, RemoteError>) -> Result<Option<T>, RemoteError> {
+    match r {
+        Err(e) if older_server(&e) => Ok(None),
+        r => r.map(Some),
+    }
+}
+
 impl Remote for VaultRemote<'_> {
     async fn missing(&self, hashes: &[ChunkHash]) -> Result<Vec<ChunkHash>, RemoteError> {
         #[derive(Deserialize)]
@@ -555,16 +563,12 @@ impl Remote for VaultRemote<'_> {
         let r = self
             .req(reqwest::Method::POST, "/blobs/batch")
             .json(&json!({ "blobs": hashes }));
-        match self.api.json::<Batch>(r).await {
-            Ok(b) => Ok(Some(
-                b.manifests
-                    .into_iter()
-                    .map(|m| (m.hash, m.size, m.chunks))
-                    .collect(),
-            )),
-            Err(e) if older_server(&e) => Ok(None),
-            Err(e) => Err(e),
-        }
+        Ok(newer(self.api.json::<Batch>(r).await)?.map(|b| {
+            b.manifests
+                .into_iter()
+                .map(|m| (m.hash, m.size, m.chunks))
+                .collect()
+        }))
     }
 
     async fn get_chunk_records(
@@ -574,10 +578,9 @@ impl Remote for VaultRemote<'_> {
         let r = self
             .req(reqwest::Method::POST, "/chunks/batch")
             .json(&json!({ "chunks": hashes }));
-        match self.api.exchange(r).await {
-            Ok(r) => body(r, MAX_RECORDS).await.map(Some),
-            Err(e) if older_server(&e) => Ok(None),
-            Err(e) => Err(e),
+        match newer(self.api.exchange(r).await)? {
+            Some(r) => body(r, MAX_RECORDS).await.map(Some),
+            None => Ok(None),
         }
     }
 
@@ -586,11 +589,7 @@ impl Remote for VaultRemote<'_> {
             .req(reqwest::Method::POST, "/chunks/upload")
             .header("content-type", "application/octet-stream")
             .body(records.to_vec());
-        match self.api.exchange(r).await {
-            Ok(_) => Ok(true),
-            Err(e) if older_server(&e) => Ok(false),
-            Err(e) => Err(e),
-        }
+        Ok(newer(self.api.exchange(r).await)?.is_some())
     }
 
     async fn put_blobs(
@@ -604,11 +603,7 @@ impl Remote for VaultRemote<'_> {
         let r = self
             .req(reqwest::Method::POST, "/blobs/upload")
             .json(&json!({ "manifests": manifests }));
-        match self.api.exchange(r).await {
-            Ok(_) => Ok(true),
-            Err(e) if older_server(&e) => Ok(false),
-            Err(e) => Err(e),
-        }
+        Ok(newer(self.api.exchange(r).await)?.is_some())
     }
 
     async fn commit(&self, req: &CommitRequest) -> Result<CommitResponse, RemoteError> {

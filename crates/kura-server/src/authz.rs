@@ -190,6 +190,40 @@ pub async fn vault_accesses_in(
     vault_accesses(pool, snapshot, p, tenant, None, limit).await
 }
 
+/// A binding's role and the folders it is restricted to.
+type Binding = (Option<VaultRole>, Option<Vec<String>>);
+
+/// The bindings of `vault` that name the caller (by `sub` or by a claim value): role and folders.
+fn matching_bindings(
+    bindings: &[sqlx::postgres::PgRow],
+    vault: Uuid,
+    values: &[&str],
+    sub: &str,
+) -> Result<Vec<Binding>, ApiError> {
+    let mut matching = Vec::new();
+    for b in bindings {
+        let (v, kind, subject, r): (Uuid, String, String, String) = (
+            b.try_get("vault_id")?,
+            b.try_get("subject_kind")?,
+            b.try_get("subject")?,
+            b.try_get("role")?,
+        );
+        let matches = v == vault
+            && match kind.as_str() {
+                "claim" => values.contains(&subject.as_str()),
+                "user" => subject == sub,
+                _ => false,
+            };
+        if matches {
+            matching.push((
+                parse_role(&r),
+                b.try_get::<Option<Vec<String>>, _>("paths")?,
+            ));
+        }
+    }
+    Ok(matching)
+}
+
 async fn vault_accesses(
     pool: &sqlx::PgPool,
     snapshot: &Snapshot,
@@ -247,27 +281,7 @@ async fn vault_accesses(
     let mut out = Vec::new();
     for row in &rows {
         let vault: Uuid = row.try_get("id")?;
-        let mut matching = Vec::new();
-        for b in &bindings {
-            let (v, kind, subject, r): (Uuid, String, String, String) = (
-                b.try_get("vault_id")?,
-                b.try_get("subject_kind")?,
-                b.try_get("subject")?,
-                b.try_get("role")?,
-            );
-            let matches = v == vault
-                && match kind.as_str() {
-                    "claim" => values.contains(&subject.as_str()),
-                    "user" => subject == p.sub,
-                    _ => false,
-                };
-            if matches {
-                matching.push((
-                    parse_role(&r),
-                    b.try_get::<Option<Vec<String>>, _>("paths")?,
-                ));
-            }
-        }
+        let matching = matching_bindings(&bindings, vault, &values, &p.sub)?;
         let Some((role, paths)) = settle(tenant_role.and_then(tenant_vault_role), matching) else {
             continue;
         };
@@ -562,8 +576,8 @@ pub async fn key_access(
 mod tests {
     use super::*;
 
-    fn folders(f: &[&str]) -> Option<Vec<String>> {
-        Some(f.iter().map(|s| (*s).to_owned()).collect())
+    fn folders(f: &[&str]) -> Vec<String> {
+        f.iter().map(|s| (*s).to_owned()).collect()
     }
 
     const V: Option<VaultRole> = Some(VaultRole::Viewer);
@@ -576,7 +590,7 @@ mod tests {
     #[test]
     fn a_tenant_role_grant_overrides_folders() {
         assert_eq!(
-            settle(V, vec![(V, folders(&["Sessions/"]))]),
+            settle(V, vec![(V, Some(folders(&["Sessions/"])))]),
             Some((VaultRole::Viewer, None))
         );
     }
@@ -585,8 +599,8 @@ mod tests {
     fn a_binding_without_folders_overrides_folders() {
         // A claim binding restricted, a user binding unrestricted, either order.
         for m in [
-            vec![(V, folders(&["Sessions/"])), (V, None)],
-            vec![(V, None), (V, folders(&["Sessions/"]))],
+            vec![(V, Some(folders(&["Sessions/"]))), (V, None)],
+            vec![(V, None), (V, Some(folders(&["Sessions/"])))],
         ] {
             assert_eq!(settle(None, m), Some((VaultRole::Viewer, None)));
         }
@@ -597,15 +611,15 @@ mod tests {
         let got = settle(
             None,
             vec![
-                (V, folders(&["Sessions/", "Resumes/"])),
-                (V, folders(&["sessions/", "Cartes/"])),
+                (V, Some(folders(&["Sessions/", "Resumes/"]))),
+                (V, Some(folders(&["sessions/", "Cartes/"]))),
             ],
         );
         assert_eq!(
             got,
             Some((
                 VaultRole::Viewer,
-                folders(&["Sessions/", "Resumes/", "Cartes/"])
+                Some(folders(&["Sessions/", "Resumes/", "Cartes/"]))
             ))
         );
     }
@@ -616,7 +630,7 @@ mod tests {
             settle(
                 None,
                 vec![
-                    (V, folders(&["Sessions/"])),
+                    (V, Some(folders(&["Sessions/"]))),
                     (Some(VaultRole::Editor), None)
                 ]
             ),
@@ -629,7 +643,7 @@ mod tests {
         assert_eq!(
             settle(
                 None,
-                vec![(Some(VaultRole::Editor), folders(&["Sessions/"]))]
+                vec![(Some(VaultRole::Editor), Some(folders(&["Sessions/"])))]
             ),
             None
         );

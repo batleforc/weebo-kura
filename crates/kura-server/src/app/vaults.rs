@@ -367,6 +367,19 @@ pub async fn create_vault(
     Ok((StatusCode::CREATED, Json(Vault::from(&access))))
 }
 
+/// Manager of the vault, or admin of its tenant.
+fn require_manager(access: &VaultAccess) -> Result<(), ApiError> {
+    let can_manage = access.role == VaultRole::Manager
+        || access.tenant_role.is_some_and(|r| r >= TenantRole::Admin);
+    if !can_manage {
+        return Err(ApiError::with_detail(
+            ProblemType::InsufficientRole,
+            "manager required",
+        ));
+    }
+    Ok(())
+}
+
 async fn manageable(
     state: &SharedState,
     caller: &DeviceCaller,
@@ -470,14 +483,7 @@ pub async fn list_bindings(
     Path(v): Path<Uuid>,
 ) -> Result<Json<Vec<BindingView>>, ApiError> {
     let (snap, access) = manageable(&state, &caller, v).await?;
-    let can_manage = access.role == VaultRole::Manager
-        || access.tenant_role.is_some_and(|r| r >= TenantRole::Admin);
-    if !can_manage {
-        return Err(ApiError::with_detail(
-            ProblemType::InsufficientRole,
-            "manager required",
-        ));
-    }
+    require_manager(&access)?;
     let mut tx = db::begin_tenant(&state.db, access.tenant, None).await?;
     let rows: Vec<BindingRow> = sqlx::query_as(
         "SELECT subject_kind, subject, role, managed_by, paths FROM role_binding
@@ -639,14 +645,7 @@ pub async fn delete_binding(
 ) -> Result<StatusCode, ApiError> {
     let (_, access) = manageable(&state, &caller, v).await?;
     let subject = subject(&b)?;
-    let can_manage = access.role == VaultRole::Manager
-        || access.tenant_role.is_some_and(|r| r >= TenantRole::Admin);
-    if !can_manage {
-        return Err(ApiError::with_detail(
-            ProblemType::InsufficientRole,
-            "manager required",
-        ));
-    }
+    require_manager(&access)?;
     let mut tx = db::begin_tenant(&state.db, access.tenant, None).await?;
     let row: Option<(String, String)> =
         sqlx::query_as("SELECT role, managed_by FROM role_binding WHERE vault_id = $1 AND subject_kind = $2 AND subject = $3")

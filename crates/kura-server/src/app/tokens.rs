@@ -237,25 +237,24 @@ pub async fn create_token(
     }
     let claim = authz::tenant_grant_claim(&snap, a.tenant, p);
     let mut tx = db::begin_tenant(&state.db, a.tenant, Some(&p.sub)).await?;
-    let binding: Option<Uuid> = match &claim {
-        Some(_) => None,
-        None => {
-            let values: Vec<&str> = a
-                .claim
-                .as_deref()
-                .map(|c| p.claim_values(c))
-                .unwrap_or_default();
-            sqlx::query_scalar(
-                "SELECT id FROM role_binding WHERE vault_id = $1 AND role = 'manager'
-                   AND ((subject_kind = 'user' AND subject = $2) OR (subject_kind = 'claim' AND subject = ANY($3)))
-                 LIMIT 1",
-            )
-            .bind(v)
-            .bind(&p.sub)
-            .bind(&values)
-            .fetch_optional(&mut *tx)
-            .await?
-        }
+    let binding: Option<Uuid> = if claim.is_some() {
+        None
+    } else {
+        let values: Vec<&str> = a
+            .claim
+            .as_deref()
+            .map(|c| p.claim_values(c))
+            .unwrap_or_default();
+        sqlx::query_scalar(
+            "SELECT id FROM role_binding WHERE vault_id = $1 AND role = 'manager'
+               AND ((subject_kind = 'user' AND subject = $2) OR (subject_kind = 'claim' AND subject = ANY($3)))
+             LIMIT 1",
+        )
+        .bind(v)
+        .bind(&p.sub)
+        .bind(&values)
+        .fetch_optional(&mut *tx)
+        .await?
     };
     if claim.is_none() && binding.is_none() {
         return Err(ApiError::with_detail(

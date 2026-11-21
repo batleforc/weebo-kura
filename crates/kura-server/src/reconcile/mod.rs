@@ -135,35 +135,10 @@ fn policy(p: kura_api::DeletionPolicy) -> &'static str {
     }
 }
 
-/// One reconciliation. `local_change`: this replica's files changed since its
-/// previous tick (or it just started).
-pub async fn reconcile(
-    pool: &PgPool,
-    files: &ConfigFiles,
-    local_change: bool,
-) -> Result<Outcome, ReconcileError> {
-    // The cheap check first: an unchanged generation, or a newer writer,
-    // ends the tick before any parsing (eco review).
-    let mut tx = pool.begin().await?;
-    let allowed: bool = sqlx::query_scalar("SELECT kura_config_begin($1, $2, $3)")
-        .bind(files.generation.as_slice())
-        .bind(VERSION)
-        .bind(local_change)
-        .fetch_one(&mut *tx)
-        .await?;
-    if !allowed {
-        tx.rollback().await?;
-        return Ok(Outcome::NotWritten);
-    }
-    let previous = load_previous(pool).await?;
-    let config = match check(files, &previous) {
-        Ok(c) => c,
-        Err(errors) => {
-            tx.rollback().await?;
-            return Ok(Outcome::Rejected(errors));
-        }
-    };
-
+async fn upsert_tenants(
+    tx: &mut sqlx::PgConnection,
+    config: &kura_api::Config,
+) -> Result<(), ReconcileError> {
     for (slug, t) in &config.tenants {
         let spec = &t.doc.spec;
         sqlx::query("SELECT kura_tenant_upsert($1, $2, $3, $4, $5, $6, $7, $8, $9)")
@@ -184,6 +159,13 @@ pub async fn reconcile(
             .execute(&mut *tx)
             .await?;
     }
+    Ok(())
+}
+
+async fn upsert_vaults(
+    tx: &mut sqlx::PgConnection,
+    config: &kura_api::Config,
+) -> Result<(), ReconcileError> {
     for (key, v) in &config.vaults {
         let spec = &v.doc.spec;
         let id: Option<uuid::Uuid> =
@@ -217,6 +199,40 @@ pub async fn reconcile(
             .execute(&mut *tx)
             .await?;
     }
+    Ok(())
+}
+
+/// One reconciliation. `local_change`: this replica's files changed since its
+/// previous tick (or it just started).
+pub async fn reconcile(
+    pool: &PgPool,
+    files: &ConfigFiles,
+    local_change: bool,
+) -> Result<Outcome, ReconcileError> {
+    // The cheap check first: an unchanged generation, or a newer writer,
+    // ends the tick before any parsing (eco review).
+    let mut tx = pool.begin().await?;
+    let allowed: bool = sqlx::query_scalar("SELECT kura_config_begin($1, $2, $3)")
+        .bind(files.generation.as_slice())
+        .bind(VERSION)
+        .bind(local_change)
+        .fetch_one(&mut *tx)
+        .await?;
+    if !allowed {
+        tx.rollback().await?;
+        return Ok(Outcome::NotWritten);
+    }
+    let previous = load_previous(pool).await?;
+    let config = match check(files, &previous) {
+        Ok(c) => c,
+        Err(errors) => {
+            tx.rollback().await?;
+            return Ok(Outcome::Rejected(errors));
+        }
+    };
+
+    upsert_tenants(&mut tx, &config).await?;
+    upsert_vaults(&mut tx, &config).await?;
 
     let tenants: Vec<&str> = config.tenants.keys().map(DnsLabel::as_str).collect();
     let vaults: Vec<serde_json::Value> = config
@@ -254,6 +270,11 @@ pub async fn reconcile(
         .bind(json(&status))
         .execute(&mut *tx)
         .await?;
+    // Delivered only if the write commits; replicas reload without waiting for their poll.
+    sqlx::query("SELECT pg_notify($1, '')")
+        .bind(crate::notify::CONFIG_CHANNEL)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(Outcome::Applied { removed })
 }
@@ -261,8 +282,9 @@ pub async fn reconcile(
 /// The reconciler task: re-reads the directory every [`POLL`], reconciles on
 /// a local change or every [`RESYNC`], until `shutdown`.
 ///
-/// shortcut: polling instead of an inotify watch (`notify` 9 is a release
-/// candidate); a change lands within 10 s. Upgrade if that delay matters.
+/// shortcut: polling on purpose instead of an inotify watch, which would add a
+/// dependency to gain a few seconds; a change lands within 10 s. Switch to a
+/// watch (the `notify` crate) if that delay matters.
 pub async fn run(
     pool: PgPool,
     dir: std::path::PathBuf,
@@ -321,19 +343,14 @@ async fn tick(
     match reconcile(pool, files, local_change).await {
         Ok(Outcome::Applied { removed }) => {
             state.set_rejection(None);
-            tracing::info!(removed = removed.len(), "configuration reconciled");
-            for r in &removed {
-                tracing::warn!(target: "audit", kind = %r.kind, name = %r.name, delete_after = ?r.delete_after, "configuration object removed");
-            }
+            log_applied(&removed);
         }
         Ok(Outcome::NotWritten) => state.set_rejection(None),
         Ok(Outcome::Rejected(errors)) => {
             // Counted once per rejected generation, not once per resync.
             if rejected.insert(files.generation) {
                 state.metrics.config_rejected_total.inc();
-                for e in &errors {
-                    tracing::warn!(error = %e, "configuration rejected, the last valid one stays");
-                }
+                log_rejected(&errors);
             }
             state.set_rejection(Some(errors));
         }
@@ -344,4 +361,17 @@ async fn tick(
         }
     }
     true
+}
+
+fn log_applied(removed: &[Removed]) {
+    tracing::info!(removed = removed.len(), "configuration reconciled");
+    for r in removed {
+        tracing::warn!(target: "audit", kind = %r.kind, name = %r.name, delete_after = ?r.delete_after, "configuration object removed");
+    }
+}
+
+fn log_rejected(errors: &[ConfigError]) {
+    for e in errors {
+        tracing::warn!(error = %e, "configuration rejected, the last valid one stays");
+    }
 }

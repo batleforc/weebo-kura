@@ -7,24 +7,13 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::app::{Env, env, problem, vault_id};
+use common::app::{Basic as S, Env, problem};
 use kura_core::{ChunkHash, blob_hash};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-struct S {
-    e: Env,
-    tok: String,
-    d: String,
-    v: String,
-}
-
 async fn setup(test: &str) -> Option<S> {
-    let e = env(test).await?;
-    let tok = e.key.token("u1", "s1", &["maxime-members"]);
-    let d = e.register(&tok, "desk:01").await;
-    let v = vault_id(&e, "knowledge").await;
-    Some(S { e, tok, d, v })
+    S::new(test, "desk:01").await
 }
 
 /// A second vault of the tenant, with user bindings only.

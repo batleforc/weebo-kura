@@ -12,42 +12,11 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::app::{Env, env_with, problem, storage, vault_id};
-use kura_core::{ChunkHash, blob_hash};
+use common::app::{Env, Who, env_stored, file, problem, vault_id, who};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-struct Who {
-    token: String,
-    device: String,
-}
-
-async fn who(e: &Env, sub: &str, groups: &[&str]) -> Who {
-    let token = e.key.token(sub, &format!("s-{sub}"), groups);
-    let device = e.register(&token, sub).await;
-    Who { token, device }
-}
-
 impl Who {
-    async fn call(
-        &self,
-        e: &Env,
-        method: &str,
-        uri: &str,
-        body: Option<Value>,
-    ) -> (StatusCode, Value) {
-        e.call(method, uri, &self.token, Some(&self.device), body)
-            .await
-    }
-    async fn commit(&self, e: &Env, v: &str, ops: Value) -> (StatusCode, Value) {
-        self.call(
-            e,
-            "POST",
-            &format!("/v1/vaults/{v}/commits"),
-            Some(json!({ "idempotencyKey": Uuid::new_v4().to_string(), "operations": ops })),
-        )
-        .await
-    }
     async fn folder(&self, e: &Env, v: &str, path: &str) -> (StatusCode, Value) {
         let entry = Uuid::now_v7().to_string();
         self.commit(
@@ -87,45 +56,11 @@ impl Who {
     }
 }
 
-/// A one-chunk file, uploaded and committed by `w`.
-async fn file(e: &Env, w: &Who, v: &str, path: &str, data: &[u8]) {
-    let c = ChunkHash::of(data);
-    let r = axum::http::Request::builder()
-        .method("PUT")
-        .uri(format!("/v1/vaults/{v}/chunks/{c}"))
-        .header("authorization", format!("Bearer {}", w.token))
-        .header("x-kura-device", &w.device)
-        .body(axum::body::Body::from(data.to_vec()))
-        .unwrap();
-    let st = tower::ServiceExt::oneshot(kura_server::app::app(e.state.clone()), r)
-        .await
-        .unwrap()
-        .status();
-    assert_eq!(st, StatusCode::NO_CONTENT);
-    let size = data.len() as u64;
-    let b = blob_hash(size, &[c]).to_string();
-    let (st, _) = w
-        .call(
-            e,
-            "PUT",
-            &format!("/v1/vaults/{v}/blobs/{b}"),
-            Some(json!({ "size": size, "chunks": [c.to_string()] })),
-        )
-        .await;
-    assert_eq!(st, StatusCode::NO_CONTENT);
-    let op = json!({ "op": "put", "entry": Uuid::now_v7().to_string(), "path": path, "blob": b, "size": size });
-    let (st, body) = w.commit(e, v, json!([op])).await;
-    assert_eq!(st, StatusCode::OK, "{body}");
-}
-
 /// §4.2: created, unified with the same folder made elsewhere, refused where
 /// a file holds the name, deleted; never sent to a client that did not ask.
 #[tokio::test]
 async fn a_folder_is_an_entry_older_clients_never_see() {
-    let Some(st) = storage(module_path!()).await else {
-        return;
-    };
-    let Some(e) = env_with(module_path!(), Some(st)).await else {
+    let Some(e) = env_stored(module_path!()).await else {
         return;
     };
     let v = vault_id(&e, "knowledge").await;
@@ -177,10 +112,7 @@ async fn a_folder_is_an_entry_older_clients_never_see() {
 /// nothing outside; a token writes a folder only where it writes notes.
 #[tokio::test]
 async fn folders_follow_the_scope_of_notes() {
-    let Some(st) = storage(module_path!()).await else {
-        return;
-    };
-    let Some(e) = env_with(module_path!(), Some(st)).await else {
+    let Some(e) = env_stored(module_path!()).await else {
         return;
     };
     let docs = common::app::CONFIG
@@ -196,18 +128,7 @@ async fn folders_follow_the_scope_of_notes() {
             "metadata: { name: knowledge, namespace: maxime }\nspec:\n  tenantRef: { name: maxime }\n",
             "metadata: { name: knowledge, namespace: maxime }\nspec:\n  tenantRef: { name: maxime }\n  configSync: { categories: [snippets] }\n",
         );
-    let dir = std::env::temp_dir().join(format!("kura-http-{}", e.t.name));
-    std::fs::write(dir.join("config.yaml"), docs).unwrap();
-    let files = kura_server::reconcile::files::read_dir(&dir).unwrap();
-    kura_server::reconcile::reconcile(&e.t.app, &files, true)
-        .await
-        .unwrap();
-    e.state.set_snapshot(
-        kura_server::reconcile::snapshot::load_if_changed(&e.t.app, None)
-            .await
-            .unwrap()
-            .unwrap(),
-    );
+    e.apply_config(&docs).await;
     let v = vault_id(&e, "knowledge").await;
     let gm = who(&e, "gm", &["maxime-admins"]).await;
     for p in ["Sessions", "Sessions/Prep", "MJ", "MJ/Secret"] {

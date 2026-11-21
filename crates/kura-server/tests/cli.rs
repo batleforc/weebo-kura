@@ -14,6 +14,33 @@ use common::app::{env_with, storage};
 use kura_cli::commands::{self, Ctx, DeviceAction};
 use kura_server::app::app;
 
+/// Writes `docs` as the configuration under `cfgdir`, reconciles it and
+/// loads the resulting snapshot into the app.
+async fn apply_docs(e: &common::app::Env, cfgdir: &Path, docs: &str) {
+    std::fs::write(cfgdir.join("config.yaml"), docs).unwrap();
+    let files = kura_server::reconcile::files::read_dir(cfgdir).unwrap();
+    kura_server::reconcile::reconcile(&e.t.app, &files, true)
+        .await
+        .unwrap();
+    e.state.set_snapshot(
+        kura_server::reconcile::snapshot::load_if_changed(&e.t.app, None)
+            .await
+            .unwrap()
+            .unwrap(),
+    );
+}
+
+/// Serves the app on a free local port; returns its URL.
+fn serve(e: &common::app::Env) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let server = format!("http://{}", listener.local_addr().unwrap());
+    let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+    let router = app(e.state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    server
+}
+
 fn dir(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("kura-cli-{name}-{}", std::process::id()));
     drop(std::fs::remove_dir_all(&d));
@@ -730,21 +757,8 @@ async fn the_cli_syncs_one_users_configuration_only() {
         "  tenantRef: { name: maxime }\n  configSync: { categories: [plugins, snippets] }\n  bindings:",
     );
     let cfgdir = dir("config-docs");
-    std::fs::write(cfgdir.join("config.yaml"), docs).unwrap();
-    let files = kura_server::reconcile::files::read_dir(&cfgdir).unwrap();
-    kura_server::reconcile::reconcile(&e.t.app, &files, true)
-        .await
-        .unwrap();
-    e.state.set_snapshot(
-        kura_server::reconcile::snapshot::load_if_changed(&e.t.app, None)
-            .await
-            .unwrap()
-            .unwrap(),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server = format!("http://{}", listener.local_addr().unwrap());
-    let router = app(e.state.clone()).into_make_service_with_connect_info::<SocketAddr>();
-    tokio::spawn(async move { axum::serve(listener, router).await });
+    apply_docs(&e, &cfgdir, &docs).await;
+    let server = serve(&e);
     let issuer = "https://auth.example.org/application/o/kura/".to_owned();
     let ctx = |home: &str, sub: &str, sid: &str| Ctx {
         home: dir(home),
@@ -805,17 +819,7 @@ async fn the_cli_syncs_one_users_configuration_only() {
         "  tenantRef: { name: maxime }\n  bindings:",
         "  tenantRef: { name: maxime }\n  configSync: { categories: [plugins] }\n  bindings:",
     );
-    std::fs::write(cfgdir.join("config.yaml"), only_plugins).unwrap();
-    let files = kura_server::reconcile::files::read_dir(&cfgdir).unwrap();
-    kura_server::reconcile::reconcile(&e.t.app, &files, true)
-        .await
-        .unwrap();
-    e.state.set_snapshot(
-        kura_server::reconcile::snapshot::load_if_changed(&e.t.app, None)
-            .await
-            .unwrap()
-            .unwrap(),
-    );
+    apply_docs(&e, &cfgdir, &only_plugins).await;
     assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
     assert_eq!(code(commands::sync_cmd(&a2, None, false, false).await), 0);
     assert!(
@@ -844,21 +848,8 @@ async fn a_scoped_token_syncs_its_folders_and_refuses_the_rest() {
         1,
     );
     let cfgdir = dir("token-docs");
-    std::fs::write(cfgdir.join("config.yaml"), docs).unwrap();
-    let docs = kura_server::reconcile::files::read_dir(&cfgdir).unwrap();
-    kura_server::reconcile::reconcile(&e.t.app, &docs, true)
-        .await
-        .unwrap();
-    e.state.set_snapshot(
-        kura_server::reconcile::snapshot::load_if_changed(&e.t.app, None)
-            .await
-            .unwrap()
-            .unwrap(),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server = format!("http://{}", listener.local_addr().unwrap());
-    let router = app(e.state.clone()).into_make_service_with_connect_info::<SocketAddr>();
-    tokio::spawn(async move { axum::serve(listener, router).await });
+    apply_docs(&e, &cfgdir, &docs).await;
+    let server = serve(&e);
 
     // The game master: an admin on a device, with the campaign's notes.
     let admin = e.key.token("boss", "gm", &["maxime-admins"]);
@@ -889,27 +880,7 @@ async fn a_scoped_token_syncs_its_folders_and_refuses_the_rest() {
         0
     );
 
-    let device = kura_cli::config::Config::load(&gm.home)
-        .unwrap()
-        .unwrap()
-        .device
-        .unwrap();
-    let v = common::app::vault_id(&e, "knowledge").await;
-    let (status, issued) = e
-        .call(
-            "POST",
-            &format!("/v1/vaults/{v}/tokens"),
-            &admin,
-            Some(&device.to_string()),
-            Some(serde_json::json!({
-                "name": "discord-recap",
-                "scopes": [{ "path": "Sessions/", "mode": "read" }, { "path": "Resumes/", "mode": "write" }],
-                "expiresInDays": 30,
-                "cidrs": ["127.0.0.0/8"],
-            })),
-        )
-        .await;
-    assert_eq!(status, axum::http::StatusCode::CREATED, "{issued}");
+    let issued = issue_the_recap_token(&e, &gm, &admin).await;
 
     // The bot: a token and the server's address, nothing else.
     let bot = Ctx {
@@ -959,6 +930,43 @@ async fn a_scoped_token_syncs_its_folders_and_refuses_the_rest() {
             .unwrap();
     assert_eq!(by, format!("key:{}", issued["id"].as_str().unwrap()));
 
+    a_write_token_refuses_what_leaves_its_folder(&e, &bot, &gm, &bot_dir, &gm_dir).await;
+}
+
+/// issue the recap token: one phase of the test below.
+async fn issue_the_recap_token(e: &common::app::Env, gm: &Ctx, admin: &str) -> serde_json::Value {
+    let device = kura_cli::config::Config::load(&gm.home)
+        .unwrap()
+        .unwrap()
+        .device
+        .unwrap();
+    let v = common::app::vault_id(e, "knowledge").await;
+    let (status, issued) = e
+        .call(
+            "POST",
+            &format!("/v1/vaults/{v}/tokens"),
+            admin,
+            Some(&device.to_string()),
+            Some(serde_json::json!({
+                "name": "discord-recap",
+                "scopes": [{ "path": "Sessions/", "mode": "read" }, { "path": "Resumes/", "mode": "write" }],
+                "expiresInDays": 30,
+                "cidrs": ["127.0.0.0/8"],
+            })),
+        )
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED, "{issued}");
+    issued
+}
+
+/// a write token refuses what leaves its folder: one phase of the test below.
+async fn a_write_token_refuses_what_leaves_its_folder(
+    e: &common::app::Env,
+    bot: &Ctx,
+    gm: &Ctx,
+    bot_dir: &Path,
+    gm_dir: &Path,
+) {
     // Observation 5: moved out of the write folder, the client refuses
     // before sending; the server counted no refusal and nothing moved.
     let head = || async {
@@ -970,7 +978,7 @@ async fn a_scoped_token_syncs_its_folders_and_refuses_the_rest() {
     let before = head().await;
     std::fs::create_dir_all(bot_dir.join("MJ")).unwrap();
     std::fs::rename(bot_dir.join("Resumes/1.md"), bot_dir.join("MJ/1.md")).unwrap();
-    let refused = commands::sync_cmd(&bot, None, false, false).await;
+    let refused = commands::sync_cmd(bot, None, false, false).await;
     assert_eq!(code(refused), 3);
     assert_eq!(head().await, before);
     assert_eq!(
@@ -984,13 +992,13 @@ async fn a_scoped_token_syncs_its_folders_and_refuses_the_rest() {
     // A file it only reads, edited: refused the same way.
     std::fs::rename(bot_dir.join("MJ/1.md"), bot_dir.join("Resumes/1.md")).unwrap();
     std::fs::write(bot_dir.join("Sessions/1.md"), "rewritten by the bot\n").unwrap();
-    assert_eq!(code(commands::sync_cmd(&bot, None, false, false).await), 3);
+    assert_eq!(code(commands::sync_cmd(bot, None, false, false).await), 3);
     assert_eq!(head().await, before);
     // A refused push still pulls (code review of 2026-11-17, #1): the game
     // master's new session reaches the bot whose own edit stays local.
     std::fs::write(gm_dir.join("Sessions/2.md"), "session two\n").unwrap();
-    assert_eq!(code(commands::sync_cmd(&gm, None, false, false).await), 0);
-    assert_eq!(code(commands::sync_cmd(&bot, None, false, false).await), 3);
+    assert_eq!(code(commands::sync_cmd(gm, None, false, false).await), 0);
+    assert_eq!(code(commands::sync_cmd(bot, None, false, false).await), 3);
     assert_eq!(
         std::fs::read_to_string(bot_dir.join("Sessions/2.md")).unwrap(),
         "session two\n"

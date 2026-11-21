@@ -38,6 +38,7 @@ vi.mock("@/reader/events", () => ({
 
 import * as sdk from "@/api/generated/sdk.gen";
 import { useSession } from "@/auth/session";
+import { setTheme } from "@/prefs";
 import { fileBytes } from "@/reader/content";
 import HistoryPanel from "@/reader/HistoryPanel.vue";
 import { MAX_RENDER } from "@/reader/render";
@@ -57,6 +58,18 @@ const entry = (path: string, id: string, blob: string | null = `b-${id}`) => ({
 });
 
 /** A fake API for content: manifests and chunk records, by hash. */
+/** One `chunks/batch` record: hash, status (1: missing), length, bytes. */
+function record(hash: string, data: Uint8Array | undefined): number[] {
+  const out = [
+    ...(hash.match(/../g) ?? []).map((x) => Number.parseInt(x, 16)),
+    data ? 0 : 1,
+    ...[24, 16, 8, 0].map((s) => ((data?.length ?? 0) >>> s) & 255),
+  ];
+  // Not spread: a 1 MiB argument list overflows the stack.
+  for (const b of data ?? []) out.push(b);
+  return out;
+}
+
 function contentServer(files: Record<string, string>) {
   const hex = (n: number) => n.toString(16).padStart(2, "0").repeat(32);
   const chunks = new Map<string, Uint8Array>();
@@ -84,17 +97,7 @@ function contentServer(files: Record<string, string>) {
       }
       if (url.endsWith("/chunks/batch")) {
         const asked = JSON.parse(String(init?.body)).chunks as string[];
-        const parts: number[] = [];
-        for (const h of asked) {
-          const data = chunks.get(h);
-          parts.push(
-            ...(h.match(/../g) ?? []).map((x) => Number.parseInt(x, 16)),
-            data ? 0 : 1,
-            ...[24, 16, 8, 0].map((s) => ((data?.length ?? 0) >>> s) & 255),
-          );
-          // Not spread: a 1 MiB argument list overflows the stack.
-          for (const b of data ?? []) parts.push(b);
-        }
+        const parts = asked.flatMap((h) => record(h, chunks.get(h)));
         return new Response(new Uint8Array(parts));
       }
       return new Response("", { status: 500 });
@@ -164,6 +167,39 @@ describe("browse and read", () => {
     expect(doc).toContain("#entry:s11");
     expect(doc).toContain("not shared with you");
     expect(calls.every((c) => c.cache === "no-store")).toBe(true);
+  });
+
+  it("draws a note's diagrams again in the new theme", async () => {
+    const initialize = vi.fn();
+    const render = vi.fn(async () => ({
+      svg: '<svg viewBox="0 0 10 10"></svg>',
+    }));
+    vi.doMock("mermaid", () => ({ default: { initialize, render } }));
+    vi.mocked(sdk.getEntries).mockResolvedValue({
+      data: {
+        items: [entry("Sessions/s12.md", "s12")],
+        epoch: "e",
+        headSeq: 1,
+      },
+    } as never);
+    contentServer({ "b-s12": "```mermaid\ngraph TD; A-->B\n```" });
+    setTheme("dark");
+    const { wrapper } = await mountAt(
+      BrowsePage,
+      "/vaults/v1/notes/s12",
+      "/vaults/:v/notes/:entry",
+    );
+    await vi.waitFor(() => expect(render).toHaveBeenCalledTimes(1));
+    await flushPromises();
+    setTheme("light");
+    await vi.waitFor(() => expect(render).toHaveBeenCalledTimes(2));
+    expect(initialize).toHaveBeenLastCalledWith(
+      expect.objectContaining({ theme: "default" }),
+    );
+    expect(
+      wrapper.find("[data-test=note-frame]").attributes("srcdoc"),
+    ).toContain('class="diagram"');
+    vi.doUnmock("mermaid");
   });
 
   it("says a hidden note does not exist, the same as a missing one", async () => {

@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::app::{CONFIG, Env, env_with, problem, storage, vault_id};
+use common::app::{CONFIG, Env, Stored, problem};
 use futures_util::TryStreamExt as _;
 use kura_core::{ChunkHash, blob_hash};
 use kura_server::app::app;
@@ -25,12 +25,8 @@ use serde_json::json;
 use tower::ServiceExt;
 
 async fn setup(test: &str) -> Option<(Env, Arc<Storage>, String, String, String)> {
-    let s = storage(test).await?;
-    let e = env_with(test, Some(s.clone())).await?;
-    let tok = e.key.token("u1", "s1", &["maxime-members"]);
-    let d = e.register(&tok, "laptop").await;
-    let v = vault_id(&e, "knowledge").await;
-    Some((e, s, tok, d, v))
+    let s = Stored::new(test, ("u1", "s1", &["maxime-members"]), "laptop").await?;
+    Some((s.e, s.st, s.tok, s.d, s.v))
 }
 
 async fn put(
@@ -350,8 +346,7 @@ async fn concurrent_uploads_respect_the_quota() {
     let Some((e, _s, tok, d, v)) = setup(module_path!()).await else {
         return;
     };
-    let bodies: Vec<Vec<u8>> = (0u8..6).map(|i| vec![i; 300 << 10]).collect();
-    let calls = bodies.into_iter().map(|b| {
+    let calls = (0u8..6).map(|i| vec![i; 300 << 10]).map(|b| {
         let h = ChunkHash::of(&b).to_string();
         let (e, tok, d, v) = (&e, &tok, &d, &v);
         async move { put(e, tok, d, v, &h, b).await.0 }
@@ -436,19 +431,7 @@ async fn batches_answer_in_order_within_their_budget() {
         "quota: { storage: 16Mi, maxFileSize: 4Mi }",
     );
     assert_ne!(docs, CONFIG);
-    let dir = std::env::temp_dir().join(format!("kura-batch-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("config.yaml"), docs).unwrap();
-    let files = kura_server::reconcile::files::read_dir(&dir).unwrap();
-    kura_server::reconcile::reconcile(&e.t.app, &files, true)
-        .await
-        .unwrap();
-    e.state.set_snapshot(
-        kura_server::reconcile::snapshot::load_if_changed(&e.t.app, None)
-            .await
-            .unwrap()
-            .unwrap(),
-    );
+    e.apply_config(&docs).await;
     let (a, b) = (b"alpha".to_vec(), b"bravo".to_vec());
     let (big, bigger) = (vec![1u8; 3 << 20], vec![2u8; 2 << 20]);
     let blob_a = stored_file(&e, &tok, &d, &v, &a).await;
@@ -645,56 +628,7 @@ async fn upload_batch_rejects_a_wrong_hash() {
         .await;
     assert_eq!(m["missing"], json!([]));
 
-    // Manifests: one names a chunk never stored, so neither is kept.
-    let size = |d: &[u8]| d.len() as u64;
-    let ghost = ChunkHash::of(b"never uploaded");
-    let fine = json!({ "hash": blob_hash(size(&a), &[ha]), "size": size(&a), "chunks": [ha] });
-    let broken = json!({ "hash": blob_hash(14, &[ghost]), "size": 14, "chunks": [ghost] });
-    let blobs = || async {
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM blob WHERE vault_id = $1::uuid")
-            .bind(&v)
-            .fetch_one(&e.t.owner)
-            .await
-            .unwrap()
-    };
-    let (st, _) = e
-        .call(
-            "POST",
-            &uri("blobs/upload"),
-            &tok,
-            Some(&d),
-            Some(json!({ "manifests": [fine, broken] })),
-        )
-        .await;
-    assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(blobs().await, 0, "all or nothing");
-    let lying = json!({ "hash": blob_hash(99, &[ha]), "size": 1, "chunks": [ha] });
-    let (st, _) = e
-        .call(
-            "POST",
-            &uri("blobs/upload"),
-            &tok,
-            Some(&d),
-            Some(json!({ "manifests": [lying] })),
-        )
-        .await;
-    assert_eq!(
-        st,
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "a manifest not at its address"
-    );
-    let both = json!({ "hash": blob_hash(size(&b), &[hb]), "size": size(&b), "chunks": [hb] });
-    let (st, _) = e
-        .call(
-            "POST",
-            &uri("blobs/upload"),
-            &tok,
-            Some(&d),
-            Some(json!({ "manifests": [fine, both] })),
-        )
-        .await;
-    assert_eq!(st, StatusCode::NO_CONTENT);
-    assert_eq!(blobs().await, 2);
+    manifests_are_stored_all_or_none(&e, &tok, &d, &v, &a, &b).await;
 
     // A stranger to the vault sees no upload route either.
     let other = e.key.token("o1", "so", &["other-members"]);
@@ -708,4 +642,67 @@ async fn upload_batch_rejects_a_wrong_hash() {
     )
     .await;
     assert_eq!(st, StatusCode::NOT_FOUND);
+}
+
+/// manifests are stored all or none: one phase of the test below.
+async fn manifests_are_stored_all_or_none(
+    e: &Env,
+    tok: &str,
+    d: &str,
+    v: &str,
+    a: &[u8],
+    b: &[u8],
+) {
+    let (ha, hb) = (ChunkHash::of(a), ChunkHash::of(b));
+    let uri = |route: &str| format!("/v1/vaults/{v}/{route}");
+    // Manifests: one names a chunk never stored, so neither is kept.
+    let size = |d: &[u8]| d.len() as u64;
+    let ghost = ChunkHash::of(b"never uploaded");
+    let fine = json!({ "hash": blob_hash(size(a), &[ha]), "size": size(a), "chunks": [ha] });
+    let broken = json!({ "hash": blob_hash(14, &[ghost]), "size": 14, "chunks": [ghost] });
+    let blobs = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM blob WHERE vault_id = $1::uuid")
+            .bind(v)
+            .fetch_one(&e.t.owner)
+            .await
+            .unwrap()
+    };
+    let (st, _) = e
+        .call(
+            "POST",
+            &uri("blobs/upload"),
+            tok,
+            Some(d),
+            Some(json!({ "manifests": [fine, broken] })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(blobs().await, 0, "all or nothing");
+    let lying = json!({ "hash": blob_hash(99, &[ha]), "size": 1, "chunks": [ha] });
+    let (st, _) = e
+        .call(
+            "POST",
+            &uri("blobs/upload"),
+            tok,
+            Some(d),
+            Some(json!({ "manifests": [lying] })),
+        )
+        .await;
+    assert_eq!(
+        st,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a manifest not at its address"
+    );
+    let both = json!({ "hash": blob_hash(size(b), &[hb]), "size": size(b), "chunks": [hb] });
+    let (st, _) = e
+        .call(
+            "POST",
+            &uri("blobs/upload"),
+            tok,
+            Some(d),
+            Some(json!({ "manifests": [fine, both] })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::NO_CONTENT);
+    assert_eq!(blobs().await, 2);
 }

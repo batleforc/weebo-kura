@@ -433,8 +433,7 @@ async fn manager_cannot_bind_foreign_group() {
     let Some(e) = env(module_path!()).await else {
         return;
     };
-    let admin = e.key.token("a1", "sa", &["maxime-admins"]);
-    let da = e.register(&admin, "admin").await;
+    let (admin, da) = e.login(("a1", "sa"), &["maxime-admins"], "admin").await;
     let manager = e.key.token("m1", "sm", &["maxime-members"]);
     let dm = e.register(&manager, "manager").await;
     let v = vault_id(&e, "knowledge").await;
@@ -561,10 +560,8 @@ async fn tenant_admins_manage_api_vaults_only() {
     let Some(e) = env(module_path!()).await else {
         return;
     };
-    let admin = e.key.token("a1", "sa", &["maxime-admins"]);
-    let da = e.register(&admin, "admin").await;
-    let member = e.key.token("u1", "s1", &["maxime-members"]);
-    let dm = e.register(&member, "laptop").await;
+    let (admin, da) = e.login(("a1", "sa"), &["maxime-admins"], "admin").await;
+    let (member, dm) = e.login(("u1", "s1"), &["maxime-members"], "laptop").await;
     let (s, b) = e
         .call(
             "POST",
@@ -799,12 +796,10 @@ async fn device_links_follow_current_memberships() {
     let Some(e) = env(module_path!()).await else {
         return;
     };
-    let admin = e.key.token("a1", "sa", &["maxime-admins"]);
-    let da = e.register(&admin, "admin").await;
-    let member = e
-        .key
-        .token("u1", "s1", &["maxime-members", "other-members"]);
-    let dm = e.register(&member, "laptop").await;
+    let (admin, da) = e.login(("a1", "sa"), &["maxime-admins"], "admin").await;
+    let (_, dm) = e
+        .login(("u1", "s1"), &["maxime-members", "other-members"], "laptop")
+        .await;
     // u1 leaves maxime; their next request (a minute later) refreshes the links.
     sqlx::query("UPDATE device SET last_seen = now() - interval '2 minutes'")
         .execute(&e.t.owner)
@@ -928,8 +923,7 @@ async fn the_listing_limit_counts_only_vaults_the_caller_opens() {
     let Some(e) = env(module_path!()).await else {
         return;
     };
-    let admin = e.key.token("a1", "sa", &["maxime-admins"]);
-    let da = e.register(&admin, "admin").await;
+    let (admin, da) = e.login(("a1", "sa"), &["maxime-admins"], "admin").await;
     // "archive" sorts before "knowledge", the member's only vault.
     let (s, b) = e
         .call(

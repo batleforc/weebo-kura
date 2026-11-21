@@ -496,6 +496,27 @@ pub async fn create_rule(
     ))
 }
 
+/// Validates the fields an update sets: the trimmed name and the checked target URL with its host.
+async fn check_update(
+    state: &SharedState,
+    scope: &Scope,
+    vault: Option<Uuid>,
+    body: &UpdateRule,
+) -> Result<(Option<String>, Option<(kura_core::webhook::Target, String)>), ApiError> {
+    let name = body.name.as_deref().map(check_name).transpose()?;
+    if let Some(events) = &body.events {
+        check_events(scope, events, vault)?;
+    }
+    if let Some(a) = &body.authorization {
+        check_authorization(a)?;
+    }
+    let url = match &body.url {
+        Some(u) => Some(check_url(state, u).await?),
+        None => None,
+    };
+    Ok((name, url))
+}
+
 /// Change a rule; a re-enabled rule forgets its failures.
 #[utoipa::path(
     put,
@@ -519,17 +540,7 @@ pub async fn update_rule(
 ) -> Result<Json<SavedRule>, ApiError> {
     let scope = authorize(&state, &caller, &t).await?;
     let current = one(&state, &scope, n).await?;
-    let name = body.name.as_deref().map(check_name).transpose()?;
-    if let Some(events) = &body.events {
-        check_events(&scope, events, current.vault)?;
-    }
-    if let Some(a) = &body.authorization {
-        check_authorization(a)?;
-    }
-    let url = match &body.url {
-        Some(u) => Some(check_url(&state, u).await?),
-        None => None,
-    };
+    let (name, url) = check_update(&state, &scope, current.vault, &body).await?;
     let needs_key = url.is_some()
         || body.rotate_secret
         || body.authorization.as_deref().is_some_and(|a| !a.is_empty());

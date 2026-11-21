@@ -4,12 +4,16 @@
 //! in the database. Opt-in: KURA_TEST_DATABASE_URL, KURA_TEST_VAULT_ADDR,
 //! KURA_TEST_VAULT_TOKEN, KURA_TEST_S3_ENDPOINT.
 
-#![expect(clippy::unwrap_used, reason = "test helpers fail the test on purpose")]
+#![expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test helpers fail the test on purpose"
+)]
 
 mod common;
 
 use axum::http::StatusCode;
-use common::app::{Env, env_with, problem, storage, vault_id};
+use common::app::{Env, Who, env_stored, file, problem, vault_id, who};
 use kura_core::{ChunkHash, blob_hash};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -25,84 +29,6 @@ fn config(players: &str) -> String {
             "    - { role: editor, claimValue: maxime-members }",
             &format!("    - {{ role: editor, claimValue: maxime-members }}\n    - {players}"),
         )
-}
-
-async fn apply(e: &Env, docs: &str) -> kura_server::reconcile::Outcome {
-    let dir = std::env::temp_dir().join(format!("kura-http-{}", e.t.name));
-    std::fs::write(dir.join("config.yaml"), docs).unwrap();
-    let files = kura_server::reconcile::files::read_dir(&dir).unwrap();
-    let outcome = kura_server::reconcile::reconcile(&e.t.app, &files, true)
-        .await
-        .unwrap();
-    e.state.set_snapshot(
-        kura_server::reconcile::snapshot::load_if_changed(&e.t.app, None)
-            .await
-            .unwrap()
-            .unwrap(),
-    );
-    outcome
-}
-
-struct Who {
-    token: String,
-    device: String,
-}
-
-async fn who(e: &Env, sub: &str, groups: &[&str]) -> Who {
-    let token = e.key.token(sub, &format!("s-{sub}"), groups);
-    let device = e.register(&token, sub).await;
-    Who { token, device }
-}
-
-impl Who {
-    async fn get(&self, e: &Env, uri: &str) -> (StatusCode, Value) {
-        e.call("GET", uri, &self.token, Some(&self.device), None)
-            .await
-    }
-    async fn post(&self, e: &Env, uri: &str, body: Value) -> (StatusCode, Value) {
-        e.call("POST", uri, &self.token, Some(&self.device), Some(body))
-            .await
-    }
-}
-
-/// A one-chunk file, uploaded and committed by `w`; returns its entry id.
-async fn file(e: &Env, w: &Who, v: &str, path: &str, data: &[u8]) -> String {
-    let c = ChunkHash::of(data);
-    let r = axum::http::Request::builder()
-        .method("PUT")
-        .uri(format!("/v1/vaults/{v}/chunks/{c}"))
-        .header("authorization", format!("Bearer {}", w.token))
-        .header("x-kura-device", &w.device)
-        .body(axum::body::Body::from(data.to_vec()))
-        .unwrap();
-    let st = tower::ServiceExt::oneshot(kura_server::app::app(e.state.clone()), r)
-        .await
-        .unwrap()
-        .status();
-    assert_eq!(st, StatusCode::NO_CONTENT);
-    let size = data.len() as u64;
-    let b = blob_hash(size, &[c]).to_string();
-    let (st, _) = e
-        .call(
-            "PUT",
-            &format!("/v1/vaults/{v}/blobs/{b}"),
-            &w.token,
-            Some(&w.device),
-            Some(json!({ "size": size, "chunks": [c.to_string()] })),
-        )
-        .await;
-    assert_eq!(st, StatusCode::NO_CONTENT);
-    let entry = Uuid::now_v7().to_string();
-    let op = json!({ "op": "put", "entry": entry, "path": path, "blob": b, "size": size });
-    let (st, body) = w
-        .post(
-            e,
-            &format!("/v1/vaults/{v}/commits"),
-            json!({ "idempotencyKey": Uuid::new_v4().to_string(), "operations": [op] }),
-        )
-        .await;
-    assert_eq!(st, StatusCode::OK, "{body}");
-    entry
 }
 
 fn paths(p: &Value) -> Vec<&str> {
@@ -121,16 +47,12 @@ fn paths(p: &Value) -> Vec<&str> {
 /// and the widest grant wins.
 #[tokio::test]
 async fn a_restricted_viewer_reads_its_folders_only() {
-    let Some(st) = storage(module_path!()).await else {
+    let Some(e) = env_stored(module_path!()).await else {
         return;
     };
-    let Some(e) = env_with(module_path!(), Some(st)).await else {
-        return;
-    };
-    apply(
-        &e,
-        &config("{ role: viewer, claimValue: maxime-players, paths: [Sessions/, resumes/] }"),
-    )
+    e.apply_config(&config(
+        "{ role: viewer, claimValue: maxime-players, paths: [Sessions/, resumes/] }",
+    ))
     .await;
     let v = vault_id(&e, "knowledge").await;
     let gm = who(&e, "gm", &["maxime-admins"]).await;
@@ -208,27 +130,7 @@ async fn a_restricted_viewer_reads_its_folders_only() {
         (StatusCode::FORBIDDEN, "/v1/problems/insufficient_role")
     );
 
-    // Observation 5: moved out of the folders, the note is gone with its history.
-    let moved = file(&e, &gm, &v, "Sessions/s13.md", b"thirteen").await;
-    let (_, h) = gm
-        .get(&e, &format!("/v1/vaults/{v}/entries/{moved}/revisions"))
-        .await;
-    let base = h["items"][0]["revision"].as_str().unwrap().to_owned();
-    let b13 = blob_hash(8, &[ChunkHash::of(b"thirteen")]).to_string();
-    let op = json!({ "op": "put", "entry": moved, "path": "MJ/s13.md", "base": base, "blob": b13, "size": 8 });
-    let (st, _) = gm
-        .post(
-            &e,
-            &format!("/v1/vaults/{v}/commits"),
-            json!({ "idempotencyKey": "mv", "operations": [op] }),
-        )
-        .await;
-    assert_eq!(st, StatusCode::OK);
-    let (st, _) = bob
-        .get(&e, &format!("/v1/vaults/{v}/entries/{moved}/revisions"))
-        .await;
-    assert_eq!(st, StatusCode::NOT_FOUND);
-
+    a_move_out_of_the_folders_hides_the_history(&e, &gm, &bob, &v).await;
     // The groups a binding may name, to whoever may bind; not to a viewer.
     let (_, gm_vaults) = gm.get(&e, "/v1/vaults").await;
     let mine = gm_vaults
@@ -248,6 +150,37 @@ async fn a_restricted_viewer_reads_its_folders_only() {
     );
     assert!(knowledge.get("groups").is_none());
 
+    empty_folders_are_named(&e, &gm, &v).await;
+
+    the_widest_grant_wins(&e, &v).await;
+}
+
+/// a move out of the folders hides the history: one phase of the test below.
+async fn a_move_out_of_the_folders_hides_the_history(e: &Env, gm: &Who, bob: &Who, v: &str) {
+    // Observation 5: moved out of the folders, the note is gone with its history.
+    let moved = file(e, gm, v, "Sessions/s13.md", b"thirteen").await;
+    let (_, h) = gm
+        .get(e, &format!("/v1/vaults/{v}/entries/{moved}/revisions"))
+        .await;
+    let base = h["items"][0]["revision"].as_str().unwrap().to_owned();
+    let b13 = blob_hash(8, &[ChunkHash::of(b"thirteen")]).to_string();
+    let op = json!({ "op": "put", "entry": moved, "path": "MJ/s13.md", "base": base, "blob": b13, "size": 8 });
+    let (st, _) = gm
+        .post(
+            e,
+            &format!("/v1/vaults/{v}/commits"),
+            json!({ "idempotencyKey": "mv", "operations": [op] }),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    let (st, _) = bob
+        .get(e, &format!("/v1/vaults/{v}/entries/{moved}/revisions"))
+        .await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+}
+
+/// empty folders are named: one phase of the test below.
+async fn empty_folders_are_named(e: &Env, gm: &Who, v: &str) {
     // §4.3 "0 notes": the bindings page names a bound folder under which no
     // note exists, folded as the read routes compare ("resumes/" has one).
     let (st, _) = e
@@ -260,7 +193,7 @@ async fn a_restricted_viewer_reads_its_folders_only() {
         )
         .await;
     assert_eq!(st, StatusCode::OK);
-    let (_, list) = gm.get(&e, &format!("/v1/vaults/{v}/bindings")).await;
+    let (_, list) = gm.get(e, &format!("/v1/vaults/{v}/bindings")).await;
     let of = |s: &str| {
         list.as_array()
             .unwrap()
@@ -271,10 +204,13 @@ async fn a_restricted_viewer_reads_its_folders_only() {
     };
     assert_eq!(of("user:bob")["emptyFolders"], json!(["Cartes/"]));
     assert!(of("claim:maxime-players").get("emptyFolders").is_none());
+}
 
+/// the widest grant wins: one phase of the test below.
+async fn the_widest_grant_wins(e: &Env, v: &str) {
     // The widest grant wins: a player who is also a member edits everything.
-    let both = who(&e, "alice", &["maxime-players", "maxime-members"]).await;
-    let (_, vaults) = both.get(&e, "/v1/vaults").await;
+    let both = who(e, "alice", &["maxime-players", "maxime-members"]).await;
+    let (_, vaults) = both.get(e, "/v1/vaults").await;
     let knowledge = vaults
         .as_array()
         .unwrap()
@@ -285,7 +221,7 @@ async fn a_restricted_viewer_reads_its_folders_only() {
         (knowledge["role"].as_str(), knowledge.get("paths")),
         (Some("editor"), None)
     );
-    let (_, en) = both.get(&e, &format!("/v1/vaults/{v}/entries")).await;
+    let (_, en) = both.get(e, &format!("/v1/vaults/{v}/entries")).await;
     assert!(paths(&en).contains(&"MJ/secret.md"));
 }
 
@@ -297,10 +233,9 @@ async fn folders_are_a_viewers_only() {
     let Some(e) = common::app::env(module_path!()).await else {
         return;
     };
-    apply(
-        &e,
-        &config("{ role: viewer, claimValue: maxime-players, paths: [Sessions/] }"),
-    )
+    e.apply_config(&config(
+        "{ role: viewer, claimValue: maxime-players, paths: [Sessions/] }",
+    ))
     .await;
     let v = vault_id(&e, "knowledge").await;
     let row = || async {
@@ -313,10 +248,9 @@ async fn folders_are_a_viewers_only() {
     };
     let (id, p) = row().await;
     assert_eq!(p, Some(vec!["Sessions/".to_owned()]));
-    apply(
-        &e,
-        &config("{ role: viewer, claimValue: maxime-players, paths: [Sessions/, Resumes/] }"),
-    )
+    e.apply_config(&config(
+        "{ role: viewer, claimValue: maxime-players, paths: [Sessions/, Resumes/] }",
+    ))
     .await;
     assert_eq!(
         row().await,
@@ -341,11 +275,11 @@ async fn folders_are_a_viewers_only() {
     }
     // A file asking a writer for folders is refused whole; the last
     // configuration stays.
-    let outcome = apply(
-        &e,
-        &config("{ role: editor, claimValue: maxime-players, paths: [Sessions/] }"),
-    )
-    .await;
+    let outcome = e
+        .apply_config(&config(
+            "{ role: editor, claimValue: maxime-players, paths: [Sessions/] }",
+        ))
+        .await;
     assert!(
         !matches!(outcome, kura_server::reconcile::Outcome::Applied { .. }),
         "{outcome:?}"
@@ -357,10 +291,31 @@ async fn folders_are_a_viewers_only() {
 
     // The API, for an admin.
     let admin = who(&e, "boss", &["maxime-admins", "kura-platform-admins"]).await;
+    the_binding_api_for_an_admin(&e, &v, &admin).await;
+
+    // §4.3's warning: folders on a claim the tenant maps to admin.
+    e.apply_config(&config(
+        "{ role: viewer, claimValue: maxime-admins, paths: [Sessions/] }",
+    ))
+    .await;
+    let (_, status) = admin.get(&e, "/v1/admin/status").await;
+    let vault = status["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["name"] == "knowledge")
+        .unwrap();
+    assert_eq!(
+        vault["conditions"][1]["type"], "RestrictedBindingWidened",
+        "{vault}"
+    );
+    assert!(e.state.snapshot().unwrap().status.warnings() >= 1);
+}
+
+/// the binding api for an admin: one phase of the test below.
+async fn the_binding_api_for_an_admin(e: &Env, v: &str, admin: &Who) {
     let put = |b: Value| {
         let (t, d) = (admin.token.clone(), admin.device.clone());
-        let e = &e;
-        let v = v.clone();
         async move {
             e.call(
                 "PUT",
@@ -392,7 +347,7 @@ async fn folders_are_a_viewers_only() {
     assert_eq!((st, &b["paths"]), (StatusCode::OK, &json!(["Notes/"])));
     // §4.3: the tenant maps maxime-owners to owner, so the folders widen.
     assert_eq!(b["widened"], true, "{b}");
-    let (_, list) = admin.get(&e, &format!("/v1/vaults/{v}/bindings")).await;
+    let (_, list) = admin.get(e, &format!("/v1/vaults/{v}/bindings")).await;
     let owners = list
         .as_array()
         .unwrap()
@@ -406,7 +361,7 @@ async fn folders_are_a_viewers_only() {
         (StatusCode::OK, None),
         "raising the role clears the folders"
     );
-    let (_, list) = admin.get(&e, &format!("/v1/vaults/{v}/bindings")).await;
+    let (_, list) = admin.get(e, &format!("/v1/vaults/{v}/bindings")).await;
     let players = list
         .as_array()
         .unwrap()
@@ -415,25 +370,6 @@ async fn folders_are_a_viewers_only() {
         .unwrap();
     assert_eq!(players["paths"], json!(["Sessions/", "Resumes/"]));
     assert_eq!(players["widened"], false, "{players}");
-
-    // §4.3's warning: folders on a claim the tenant maps to admin.
-    apply(
-        &e,
-        &config("{ role: viewer, claimValue: maxime-admins, paths: [Sessions/] }"),
-    )
-    .await;
-    let (_, status) = admin.get(&e, "/v1/admin/status").await;
-    let vault = status["objects"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|o| o["name"] == "knowledge")
-        .unwrap();
-    assert_eq!(
-        vault["conditions"][1]["type"], "RestrictedBindingWidened",
-        "{vault}"
-    );
-    assert!(e.state.snapshot().unwrap().status.warnings() >= 1);
 }
 
 /// RFC 0005 §14, the gate: a restricted viewer walks every vault route of
@@ -441,16 +377,12 @@ async fn folders_are_a_viewers_only() {
 /// added later that reads content without `ReadAccess` fails here.
 #[tokio::test]
 async fn no_route_shows_a_restricted_viewer_a_hidden_note() {
-    let Some(st) = storage(module_path!()).await else {
+    let Some(e) = env_stored(module_path!()).await else {
         return;
     };
-    let Some(e) = env_with(module_path!(), Some(st)).await else {
-        return;
-    };
-    apply(
-        &e,
-        &config("{ role: viewer, claimValue: maxime-players, paths: [Sessions/] }"),
-    )
+    e.apply_config(&config(
+        "{ role: viewer, claimValue: maxime-players, paths: [Sessions/] }",
+    ))
     .await;
     let v = vault_id(&e, "knowledge").await;
     let gm = who(&e, "gm", &["maxime-admins"]).await;

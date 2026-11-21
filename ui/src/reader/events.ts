@@ -11,6 +11,8 @@ import { createTicket } from "@/api/generated/sdk.gen";
 /** Device revoked, access revoked: a new ticket cannot help. */
 const FINAL = new Set([4002, 4005]);
 const MAX_DELAY = 60_000;
+/** The server pings every 30 s (a JSON `ping` notice): silence for 2.5 of them is a dead socket. */
+const SILENCE = 75_000;
 
 export interface Watch {
   close(): void;
@@ -19,6 +21,7 @@ export interface Watch {
 export function watchVault(vault: string, onNotice: () => void): Watch {
   let ws: WebSocket | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
   let delay = 1000;
   let dropped = false;
   let closed = false;
@@ -51,13 +54,26 @@ export function watchVault(vault: string, onNotice: () => void): Watch {
     url.searchParams.set("ticket", ticket);
     const socket = new WebSocket(url);
     ws = socket;
+    // Any message (the ping included) proves the socket alive; silence drops it.
+    const alive = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        if (ws !== socket) return;
+        ws = null;
+        socket.onclose = null;
+        socket.close();
+        retry();
+      }, SILENCE);
+    };
     socket.onopen = () => {
+      alive();
       if (dropped) onNotice();
       dropped = false;
     };
     socket.onmessage = (e: MessageEvent) => {
       // Reset on a message, not on open: a socket closed at once keeps backing off.
       delay = 1000;
+      alive();
       if (typeof e.data !== "string") return;
       try {
         const n: unknown = JSON.parse(e.data);
@@ -72,9 +88,9 @@ export function watchVault(vault: string, onNotice: () => void): Watch {
         // Not a notice.
       }
     };
-    // shortcut: a silently dead socket (no close) is noticed only when the browser closes it; add a ping watchdog if readers report stale trees.
     socket.onclose = (e: CloseEvent) => {
       if (ws !== socket) return;
+      clearTimeout(watchdog);
       ws = null;
       if (!FINAL.has(e.code)) retry();
     };
@@ -85,6 +101,7 @@ export function watchVault(vault: string, onNotice: () => void): Watch {
     close() {
       closed = true;
       clearTimeout(timer);
+      clearTimeout(watchdog);
       ws?.close();
       ws = null;
     },

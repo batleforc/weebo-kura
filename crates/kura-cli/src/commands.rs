@@ -157,6 +157,28 @@ fn host_name() -> String {
         .unwrap_or_else(|| "kura-cli".into())
 }
 
+/// The OIDC device flow: print the code, wait for approval, keep the refresh token.
+async fn device_login(
+    ctx: &Ctx,
+    http: &reqwest::Client,
+    issuer: &str,
+    client_id: &str,
+) -> Result<String, Fail> {
+    let d = oidc::discover(http, issuer).await?;
+    let code = oidc::start(http, &d, client_id).await?;
+    println!(
+        "Open {} and enter the code:\n\n    {}\n",
+        code.verification_uri, code.user_code
+    );
+    if let Some(c) = &code.verification_uri_complete {
+        println!("(or open {c})");
+    }
+    println!("Waiting for approval...");
+    let t = oidc::wait(http, &d, client_id, &code).await?;
+    config::set_refresh_token(&ctx.home, t.refresh_token.as_deref()).map_err(Fail::local)?;
+    Ok(t.access_token)
+}
+
 pub async fn login(
     ctx: &Ctx,
 
@@ -171,22 +193,7 @@ pub async fn login(
     let http = api::http()?;
     let token = match ctx.access_token.clone() {
         Some(t) => t,
-        None => {
-            let d = oidc::discover(&http, &issuer).await?;
-            let code = oidc::start(&http, &d, &client_id).await?;
-            println!(
-                "Open {} and enter the code:\n\n    {}\n",
-                code.verification_uri, code.user_code
-            );
-            if let Some(c) = &code.verification_uri_complete {
-                println!("(or open {c})");
-            }
-            println!("Waiting for approval...");
-            let t = oidc::wait(&http, &d, &client_id, &code).await?;
-            config::set_refresh_token(&ctx.home, t.refresh_token.as_deref())
-                .map_err(Fail::local)?;
-            t.access_token
-        }
+        None => device_login(ctx, &http, &issuer, &client_id).await?,
     };
     let user = oidc::username(&token).unwrap_or_else(|| "you".into());
     let api = Api {
@@ -447,59 +454,40 @@ pub async fn sync_cmd(
     Ok(worst)
 }
 
-async fn sync_one(
-    ctx: &Ctx,
-    api: &Api,
-    cfg: &mut Config,
-    name: &str,
-    dry_run: bool,
-    yes: bool,
-) -> Result<u8, Fail> {
-    let a = cfg
-        .vaults
-        .get(name)
-        .cloned()
-        .ok_or_else(|| Fail(3, format!("{name} is not attached")))?;
-    let v = api
-        .vaults()
-        .await?
-        .into_iter()
-        .find(|x| x.id == a.id)
-        .ok_or_else(|| Fail(3, format!("{name}: no longer visible to you")))?;
-    let device = scoped(ctx)
-        .or(cfg.device)
-        .ok_or_else(|| Fail(2, "no device: run `kura login`".into()))?;
-    let host = FsHost::new(a.path.clone());
-    let mut state = LocalState::adopt(host.load_state(), device, a.id);
-    // A token's write folders, folded: a change elsewhere is refused here,
-    // before anything is uploaded (RFC 0004 §6.6).
-    let write_folders: Option<Vec<String>> = v.scopes.as_ref().map(|rules| {
+/// A token's write folders, folded: a change elsewhere is refused here,
+/// before anything is uploaded (RFC 0004 §6.6).
+fn write_gate(
+    scopes: Option<&[api::ScopeRule]>,
+) -> (Option<Vec<String>>, Option<kura_core::sync::Writable>) {
+    let folders: Option<Vec<String>> = scopes.map(|rules| {
         rules
             .iter()
             .filter(|r| r.mode == "write")
             .map(|r| r.path.clone())
             .collect()
     });
-    let writable = write_folders.clone().map(|folders| {
+    let writable = folders.as_ref().map(|folders| {
         let keys: Vec<String> = folders.iter().map(|f| fold(f)).collect();
         Box::new(move |path: &str| {
             let key = fold(path);
             keys.iter().any(|k| key.starts_with(k))
         }) as kura_core::sync::Writable
     });
-    let mut opts = Options {
-        params: params(v.chunking)?,
-        max_file_size: MAX_FILE,
-        dry_run,
-        allow_deletions: yes,
-        prefer_remote: false,
-        writable,
-        // The notes' folders sync as entries (RFC 0007).
-        folders: true,
-    };
-    let r = loop {
-        match sync(&host, &api.vault(a.id), &mut state, &opts).await {
-            Ok(r) => break r,
+    (folders, writable)
+}
+
+/// One sync, asking before a mass deletion (§6.3).
+async fn run_sync(
+    api: &Api,
+    host: &FsHost,
+    vault: Uuid,
+    state: &mut LocalState,
+    opts: &mut Options,
+    name: &str,
+) -> Result<kura_core::sync::Report, Fail> {
+    loop {
+        match sync(host, &api.vault(vault), state, opts).await {
+            Ok(r) => return Ok(r),
             // A full resync stops before trashing many files (§6.3).
             Err(kura_core::sync::SyncError::TooManyDeletions { deletions, files }) => {
                 let share = deletions
@@ -525,15 +513,18 @@ async fn sync_one(
             Err(kura_core::sync::SyncError::Remote(r)) => return Err(Fail::from(r)),
             Err(other) => return Err(Fail::local(other)),
         }
-    };
-    // RFC 0006 phase 3: the console shows what this run left undone. A
-    // device only (a token has no row), never on a dry run, best effort.
-    if !dry_run
-        && scoped(ctx).is_none()
-        && let Err(e) = api.report(a.id, &r.counts()).await
-    {
-        eprintln!("note: {name}: the console was not told this run's state ({e}).");
     }
+}
+
+/// What a run did, in the words of the mocks; the exit code it earns.
+fn report_outcome(
+    ctx: &Ctx,
+    name: &str,
+    r: &kura_core::sync::Report,
+    v: &api::VaultView,
+    dry_run: bool,
+    write_folders: Option<Vec<String>>,
+) -> u8 {
     // The words of the §4.5 mocks.
     match r.resynced.as_deref() {
         Some("history_rewound") => {
@@ -610,6 +601,54 @@ async fn sync_one(
     for c in &r.conflicts {
         println!("conflict: {c}");
     }
+    code
+}
+
+async fn sync_one(
+    ctx: &Ctx,
+    api: &Api,
+    cfg: &mut Config,
+    name: &str,
+    dry_run: bool,
+    yes: bool,
+) -> Result<u8, Fail> {
+    let a = cfg
+        .vaults
+        .get(name)
+        .cloned()
+        .ok_or_else(|| Fail(3, format!("{name} is not attached")))?;
+    let v = api
+        .vaults()
+        .await?
+        .into_iter()
+        .find(|x| x.id == a.id)
+        .ok_or_else(|| Fail(3, format!("{name}: no longer visible to you")))?;
+    let device = scoped(ctx)
+        .or(cfg.device)
+        .ok_or_else(|| Fail(2, "no device: run `kura login`".into()))?;
+    let host = FsHost::new(a.path.clone());
+    let mut state = LocalState::adopt(host.load_state(), device, a.id);
+    let (write_folders, writable) = write_gate(v.scopes.as_deref());
+    let mut opts = Options {
+        params: params(v.chunking)?,
+        max_file_size: MAX_FILE,
+        dry_run,
+        allow_deletions: yes,
+        prefer_remote: false,
+        writable,
+        // The notes' folders sync as entries (RFC 0007).
+        folders: true,
+    };
+    let r = run_sync(api, &host, a.id, &mut state, &mut opts, name).await?;
+    // RFC 0006 phase 3: the console shows what this run left undone. A
+    // device only (a token has no row), never on a dry run, best effort.
+    if !dry_run
+        && scoped(ctx).is_none()
+        && let Err(e) = api.report(a.id, &r.counts()).await
+    {
+        eprintln!("note: {name}: the console was not told this run's state ({e}).");
+    }
+    let mut code = report_outcome(ctx, name, &r, &v, dry_run, write_folders);
     if !dry_run {
         if !r.deferred.is_empty() {
             println!(
@@ -1171,6 +1210,106 @@ async fn vault_named(api: &Api, name: &str) -> Result<Uuid, Fail> {
         .ok_or_else(|| Fail(3, format!("{name}: no such vault, or not visible to you")))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the flags of `kura token create`, as parsed"
+)]
+async fn token_create(
+    api: &Api,
+    vault: &str,
+    name: Option<&str>,
+    read: Vec<String>,
+    write: Vec<String>,
+    prefix: Option<String>,
+    expires: &str,
+    cidr: &[String],
+) -> Result<u8, Fail> {
+    let days: u32 = expires
+        .trim_end_matches('d')
+        .parse()
+        .map_err(|_| Fail(3, format!("--expires {expires}: days, e.g. 30d")))?;
+    let scopes = token_scopes(read, write, prefix)?;
+    let v = vault_named(api, vault).await?;
+    let t = match api.create_token(v, name, &scopes, days, cidr).await {
+        Err(e) if e.kind() == "token_write_disabled" => {
+            return Err(Fail(
+                3,
+                "this tenant does not allow tokens to write (scopedTokens.write).".into(),
+            ));
+        }
+        other => other?,
+    };
+    let secret = t.token.unwrap_or_default();
+    let shown: String = secret.chars().take(13).collect();
+    println!(
+        "Token {}  {shown}..._****  expires {}  from {}",
+        t.name,
+        t.expires_at.get(..10).unwrap_or_default(),
+        cidr.join(", ")
+    );
+    for r in &t.scopes {
+        println!("  {:<5}  {vault}/{}", r.mode, r.path);
+    }
+    // A broader rule of the same token covers this one: both hold. A
+    // write rule covers a read one; a read rule never covers a write.
+    for r in &scopes {
+        if scopes.iter().any(|o| {
+            o.path != r.path
+                && fold(&r.path).starts_with(&fold(&o.path))
+                && (o.mode == r.mode || o.mode == "write")
+        }) {
+            println!("note: {} is also covered by a broader rule.", r.path);
+        }
+    }
+    println!("\n    {secret}\n");
+    println!("This secret is shown once. Store it now.");
+    Ok(0)
+}
+
+async fn token_list(api: &Api, vault: &str) -> Result<u8, Fail> {
+    let v = vault_named(api, vault).await?;
+    let tokens = api.tokens(v).await?;
+    if tokens.is_empty() {
+        println!("No token for {vault}.");
+        return Ok(0);
+    }
+    println!(
+        "{:<16} {:<36} {:<36} {:<11} {:<11} {:<8} FROM",
+        "NAME", "ID", "SCOPES", "EXPIRES", "LAST USED", "STATE"
+    );
+    for t in tokens {
+        let state = if t.revoked { "revoked" } else { "active" };
+        // `r:` and `w:`: a write token is told apart by a letter,
+        // not by a colour (§11).
+        let scopes: Vec<String> = t
+            .scopes
+            .iter()
+            .map(|r| {
+                let mode = if r.mode == "write" { "w" } else { "r" };
+                if r.path.is_empty() {
+                    format!("{mode}:(whole vault)")
+                } else {
+                    format!("{mode}:{}", r.path)
+                }
+            })
+            .collect();
+        println!(
+            "{:<16} {:<36} {:<36} {:<11} {:<11} {:<8} {}",
+            t.name,
+            t.id,
+            scopes.join(" "),
+            t.expires_at.get(..10).unwrap_or_default(),
+            t.last_used_at
+                .as_deref()
+                .and_then(|l| l.get(..10))
+                .unwrap_or("never"),
+            state,
+            t.cidrs.join(", ")
+        );
+    }
+    Ok(0)
+}
+
 pub async fn token(ctx: &Ctx, action: TokenAction) -> Result<u8, Fail> {
     let mut cfg = config(ctx)?;
     // Checked before any call: the closed defaults of §6.2.
@@ -1193,93 +1332,19 @@ pub async fn token(ctx: &Ctx, action: TokenAction) -> Result<u8, Fail> {
             expires,
             cidr,
         } => {
-            let days: u32 = expires
-                .trim_end_matches('d')
-                .parse()
-                .map_err(|_| Fail(3, format!("--expires {expires}: days, e.g. 30d")))?;
-            let scopes = token_scopes(read, write, prefix)?;
-            let v = vault_named(&api, &vault).await?;
-            let t = match api
-                .create_token(v, name.as_deref(), &scopes, days, &cidr)
-                .await
-            {
-                Err(e) if e.kind() == "token_write_disabled" => {
-                    return Err(Fail(
-                        3,
-                        "this tenant does not allow tokens to write (scopedTokens.write).".into(),
-                    ));
-                }
-                other => other?,
-            };
-            let secret = t.token.unwrap_or_default();
-            let shown: String = secret.chars().take(13).collect();
-            println!(
-                "Token {}  {shown}..._****  expires {}  from {}",
-                t.name,
-                t.expires_at.get(..10).unwrap_or_default(),
-                cidr.join(", ")
-            );
-            for r in &t.scopes {
-                println!("  {:<5}  {vault}/{}", r.mode, r.path);
-            }
-            // A broader rule of the same token covers this one: both hold. A
-            // write rule covers a read one; a read rule never covers a write.
-            for r in &scopes {
-                if scopes.iter().any(|o| {
-                    o.path != r.path
-                        && fold(&r.path).starts_with(&fold(&o.path))
-                        && (o.mode == r.mode || o.mode == "write")
-                }) {
-                    println!("note: {} is also covered by a broader rule.", r.path);
-                }
-            }
-            println!("\n    {secret}\n");
-            println!("This secret is shown once. Store it now.");
-            Ok(0)
+            token_create(
+                &api,
+                &vault,
+                name.as_deref(),
+                read,
+                write,
+                prefix,
+                &expires,
+                &cidr,
+            )
+            .await
         }
-        TokenAction::List { vault } => {
-            let v = vault_named(&api, &vault).await?;
-            let tokens = api.tokens(v).await?;
-            if tokens.is_empty() {
-                println!("No token for {vault}.");
-                return Ok(0);
-            }
-            println!(
-                "{:<16} {:<36} {:<36} {:<11} {:<11} {:<8} FROM",
-                "NAME", "ID", "SCOPES", "EXPIRES", "LAST USED", "STATE"
-            );
-            for t in tokens {
-                let state = if t.revoked { "revoked" } else { "active" };
-                // `r:` and `w:`: a write token is told apart by a letter,
-                // not by a colour (§11).
-                let scopes: Vec<String> = t
-                    .scopes
-                    .iter()
-                    .map(|r| {
-                        let mode = if r.mode == "write" { "w" } else { "r" };
-                        if r.path.is_empty() {
-                            format!("{mode}:(whole vault)")
-                        } else {
-                            format!("{mode}:{}", r.path)
-                        }
-                    })
-                    .collect();
-                println!(
-                    "{:<16} {:<36} {:<36} {:<11} {:<11} {:<8} {}",
-                    t.name,
-                    t.id,
-                    scopes.join(" "),
-                    t.expires_at.get(..10).unwrap_or_default(),
-                    t.last_used_at
-                        .as_deref()
-                        .and_then(|l| l.get(..10))
-                        .unwrap_or("never"),
-                    state,
-                    t.cidrs.join(", ")
-                );
-            }
-            Ok(0)
-        }
+        TokenAction::List { vault } => token_list(&api, &vault).await,
         TokenAction::Revoke { vault, id } => {
             let v = vault_named(&api, &vault).await?;
             api.revoke_token(v, id).await?;

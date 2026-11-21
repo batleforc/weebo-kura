@@ -141,23 +141,22 @@ impl Vault {
     /// (Re)authenticates; called at start and before each credential refresh,
     /// so an expired login token never outlives a tick.
     pub async fn login(&self) -> Result<(), VaultError> {
-        let token = match &self.token {
-            Some(t) => t.clone(),
-            None => {
-                let jwt = tokio::fs::read_to_string(Path::new(SERVICE_ACCOUNT_TOKEN))
-                    .await
-                    .map_err(VaultError::ServiceAccount)?;
-                let client = self.client.read().await;
-                let auth = vaultrs::auth::kubernetes::login(
-                    &*client,
-                    &self.config.kubernetes_auth.mount,
-                    &self.config.kubernetes_auth.role,
-                    jwt.trim(),
-                )
+        let token = if let Some(t) = &self.token {
+            t.clone()
+        } else {
+            let jwt = tokio::fs::read_to_string(Path::new(SERVICE_ACCOUNT_TOKEN))
                 .await
-                .map_err(client_err)?;
-                auth.client_token
-            }
+                .map_err(VaultError::ServiceAccount)?;
+            let client = self.client.read().await;
+            vaultrs::auth::kubernetes::login(
+                &*client,
+                &self.config.kubernetes_auth.mount,
+                &self.config.kubernetes_auth.role,
+                jwt.trim(),
+            )
+            .await
+            .map_err(client_err)?
+            .client_token
         };
         self.client.write().await.set_token(&token);
         Ok(())
@@ -255,50 +254,66 @@ pub async fn refresh_credentials(
             () = shutdown.cancelled() => return,
             () = tokio::time::sleep(every) => {}
         }
-        let fresh = match vault.login().await {
-            Ok(()) => vault.database().await,
-            Err(e) => Err(e),
-        };
-        match fresh {
-            Ok(secret) if secret.url != current => {
-                match secret.url.parse::<sqlx::postgres::PgConnectOptions>() {
-                    Ok(options) => {
-                        pool.set_connect_options(options);
-                        current = secret.url;
-                        tracing::info!("database credentials rotated; new connections use them");
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "rotated database URL does not parse, the previous one stays")
-                    }
-                }
-            }
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!(error = %e, "database credentials not refreshed, the current ones stay")
-            }
-        }
+        rotate_database(&vault, &pool, &mut current).await;
         if let Some(storage) = &storage {
-            match vault.bucket().await {
-                Ok(fresh) if bucket.as_ref() != Some(&fresh) => match crate::store::s3(&fresh) {
-                    Ok(objects) => {
-                        // The first read only records what start-up already uses.
-                        if bucket.is_some() {
-                            storage.set_objects(objects);
-                            tracing::info!("bucket credentials rotated");
-                        }
-                        bucket = Some(fresh);
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "rotated bucket secret unusable, the previous one stays")
-                    }
-                },
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(error = %e, "bucket credentials not refreshed, the current ones stay")
-                }
-            }
+            rotate_bucket(&vault, storage, &mut bucket).await;
         }
     }
+}
+
+/// Re-reads the database secret; a new URL reaches the pool's new connections.
+async fn rotate_database(vault: &Vault, pool: &sqlx::PgPool, current: &mut String) {
+    let fresh = async {
+        vault.login().await?;
+        vault.database().await
+    };
+    let secret = match fresh.await {
+        Ok(secret) => secret,
+        Err(e) => {
+            tracing::warn!(error = %e, "database credentials not refreshed, the current ones stay");
+            return;
+        }
+    };
+    if secret.url == *current {
+        return;
+    }
+    match secret.url.parse::<sqlx::postgres::PgConnectOptions>() {
+        Ok(options) => {
+            pool.set_connect_options(options);
+            *current = secret.url;
+            tracing::info!("database credentials rotated; new connections use them");
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "rotated database URL does not parse, the previous one stays");
+        }
+    }
+}
+
+/// Re-reads the bucket secret; a change builds a new bucket client.
+async fn rotate_bucket(
+    vault: &Vault,
+    storage: &crate::store::Storage,
+    bucket: &mut Option<BucketSecret>,
+) {
+    let Ok(fresh) = vault.bucket().await.inspect_err(|e| {
+        tracing::warn!(error = %e, "bucket credentials not refreshed, the current ones stay");
+    }) else {
+        return;
+    };
+    if bucket.as_ref() == Some(&fresh) {
+        return;
+    }
+    let Ok(objects) = crate::store::s3(&fresh).inspect_err(|e| {
+        tracing::warn!(error = %e, "rotated bucket secret unusable, the previous one stays");
+    }) else {
+        return;
+    };
+    // The first read only records what start-up already uses.
+    if bucket.is_some() {
+        storage.set_objects(objects);
+        tracing::info!("bucket credentials rotated");
+    }
+    *bucket = Some(fresh);
 }
 
 #[cfg(test)]

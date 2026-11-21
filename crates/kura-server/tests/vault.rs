@@ -10,16 +10,14 @@ use vaultrs::client::{VaultClient, VaultClientSettingsBuilder};
 fn env() -> Option<(String, String)> {
     let addr = std::env::var("KURA_TEST_VAULT_ADDR").ok();
     let token = std::env::var("KURA_TEST_VAULT_TOKEN").ok();
-    match (addr, token) {
-        (Some(a), Some(t)) => Some((a, t)),
-        _ => {
-            eprintln!(
-                "SKIPPED: {} — KURA_TEST_VAULT_ADDR or KURA_TEST_VAULT_TOKEN unset",
-                module_path!()
-            );
-            None
-        }
-    }
+    let (Some(a), Some(t)) = (addr, token) else {
+        eprintln!(
+            "SKIPPED: {} — KURA_TEST_VAULT_ADDR or KURA_TEST_VAULT_TOKEN unset",
+            module_path!()
+        );
+        return None;
+    };
+    Some((a, t))
 }
 
 fn config(addr: &str, mount: &str) -> VaultConfig {

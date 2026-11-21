@@ -34,6 +34,13 @@ async fn setup(test: &str) -> Option<S> {
 }
 
 impl S {
+    async fn desk_and_phone(&self) -> (String, String) {
+        (
+            self.e.register(&self.tok, "desk").await,
+            self.e.register(&self.tok, "phone").await,
+        )
+    }
+
     async fn raw(&self, method: &str, uri: &str, d: &str, body: Vec<u8>) -> (StatusCode, Vec<u8>) {
         let req = Request::builder()
             .method(method)
@@ -147,10 +154,7 @@ async fn edits_of_different_lines_merge() {
     let Some(s) = setup(module_path!()).await else {
         return;
     };
-    let (desk, phone) = (
-        s.e.register(&s.tok, "desk").await,
-        s.e.register(&s.tok, "phone").await,
-    );
+    let (desk, phone) = s.desk_and_phone().await;
     let a = Uuid::now_v7().to_string();
     let base = rev(&s.put(&desk, &a, "plan.md", "one\ntwo\nthree\n", None).await);
     assert_eq!(
@@ -197,10 +201,7 @@ async fn overlapping_and_non_text_edits_conflict() {
     let Some(s) = setup(module_path!()).await else {
         return;
     };
-    let (desk, phone) = (
-        s.e.register(&s.tok, "desk").await,
-        s.e.register(&s.tok, "phone").await,
-    );
+    let (desk, phone) = s.desk_and_phone().await;
     for (path, base_text, desk_text, phone_text) in [
         ("same.md", "line\n", "desk line\n", "phone line\n"),
         (
@@ -228,10 +229,7 @@ async fn a_rename_on_one_side_and_edits_on_both_merge() {
     let Some(s) = setup(module_path!()).await else {
         return;
     };
-    let (desk, phone) = (
-        s.e.register(&s.tok, "desk").await,
-        s.e.register(&s.tok, "phone").await,
-    );
+    let (desk, phone) = s.desk_and_phone().await;
     let a = Uuid::now_v7().to_string();
     let base = rev(&s.put(&desk, &a, "a.md", "one\ntwo\nthree\n", None).await);
     s.put(

@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::names::TenantSlug;
+use crate::names::{DnsLabel, TenantSlug};
 use crate::parse::{ConfigError, Resource, Source};
 use crate::spec::{Chunking, KuraTenant, KuraVault, VaultKey};
 
@@ -269,7 +269,7 @@ fn check_removals(config: &Config, previous: &PreviousState, errors: &mut Vec<Co
         .tenants
         .iter()
         .filter(|t| !config.tenants.contains_key(*t))
-        .map(|t| t.as_str())
+        .map(DnsLabel::as_str)
         .collect();
     if removed.len() > 1 {
         errors.push(ConfigError::new(

@@ -642,15 +642,7 @@ pub async fn warn_rules_while_off(pool: &sqlx::PgPool) -> Result<i64, sqlx::Erro
 /// notifications off, only the hourly purge, so §9's 7 days still hold.
 pub async fn run(state: SharedState, shutdown: CancellationToken) {
     let Some(n) = state.notifier.clone() else {
-        loop {
-            if let Err(e) = purge(&state.db).await {
-                tracing::warn!(error = %e, "the notification purge not run");
-            }
-            tokio::select! {
-                () = shutdown.cancelled() => return,
-                () = tokio::time::sleep(Duration::from_secs(3_600)) => {}
-            }
-        }
+        return purge_only(&state, &shutdown).await;
     };
     let mut refreshed = tokio::time::Instant::now()
         .checked_sub(SUBSCRIPTIONS_EVERY)
@@ -661,26 +653,7 @@ pub async fn run(state: SharedState, shutdown: CancellationToken) {
         .unwrap_or(refreshed);
     loop {
         if refreshed.elapsed() >= SUBSCRIPTIONS_EVERY {
-            if let Err(e) = n.refresh(&state.db).await {
-                tracing::warn!(error = %e, "notification subscriptions not refreshed");
-            }
-            if let Ok(row) = sqlx::query(
-                "SELECT pending, oldest_seconds, disabled FROM kura_notification_stats()",
-            )
-            .fetch_one(&state.db)
-            .await
-            {
-                let m = &state.metrics;
-                m.notification_pending
-                    .set(row.try_get("pending").unwrap_or_default());
-                m.notification_oldest_pending_seconds
-                    .set(row.try_get("oldest_seconds").unwrap_or_default());
-                m.notification_rules_disabled
-                    .set(row.try_get("disabled").unwrap_or_default());
-            }
-            if let Err(e) = quota_check(&state, &n).await {
-                tracing::warn!(error = %e, "quota.high not checked");
-            }
+            refresh_cycle(&state, &n).await;
             refreshed = tokio::time::Instant::now();
         }
         if last_hourly.elapsed() >= Duration::from_secs(3_600) {
@@ -689,36 +662,78 @@ pub async fn run(state: SharedState, shutdown: CancellationToken) {
             }
             last_hourly = tokio::time::Instant::now();
         }
-        let free = i32::try_from(pending.available_permits())
-            .unwrap_or(0)
-            .min(IN_FLIGHT);
-        if free > 0 {
-            let claimed: Vec<(Uuid, Uuid, String)> =
-                sqlx::query_as("SELECT id, tenant_id, slug FROM kura_notification_claim($1)")
-                    .bind(free)
-                    .fetch_all(&state.db)
-                    .await
-                    .unwrap_or_else(|e| {
-                        tracing::warn!(error = %e, "deliveries not claimed");
-                        Vec::new()
-                    });
-            for (id, tenant, slug) in claimed {
-                let Ok(permit) = pending.clone().acquire_owned().await else {
-                    break;
-                };
-                let state = state.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = deliver(&state, id, tenant, &slug).await {
-                        tracing::warn!(error = %e, "delivery not settled; taken over after 2 minutes");
-                    }
-                    drop(permit);
-                });
-            }
-        }
+        spawn_deliveries(&state, &pending).await;
         tokio::select! {
             () = shutdown.cancelled() => return,
             () = tokio::time::sleep(POLL) => {}
         }
+    }
+}
+
+/// Notifications off: only the hourly purge, until `shutdown`.
+async fn purge_only(state: &SharedState, shutdown: &CancellationToken) {
+    loop {
+        if let Err(e) = purge(&state.db).await {
+            tracing::warn!(error = %e, "the notification purge not run");
+        }
+        tokio::select! {
+            () = shutdown.cancelled() => return,
+            () = tokio::time::sleep(Duration::from_secs(3_600)) => {}
+        }
+    }
+}
+
+/// The 30 s cycle: subscription cache, delivery gauges, `quota.high`.
+async fn refresh_cycle(state: &SharedState, n: &Notifier) {
+    if let Err(e) = n.refresh(&state.db).await {
+        tracing::warn!(error = %e, "notification subscriptions not refreshed");
+    }
+    if let Ok(row) =
+        sqlx::query("SELECT pending, oldest_seconds, disabled FROM kura_notification_stats()")
+            .fetch_one(&state.db)
+            .await
+    {
+        let m = &state.metrics;
+        m.notification_pending
+            .set(row.try_get("pending").unwrap_or_default());
+        m.notification_oldest_pending_seconds
+            .set(row.try_get("oldest_seconds").unwrap_or_default());
+        m.notification_rules_disabled
+            .set(row.try_get("disabled").unwrap_or_default());
+    }
+    if let Err(e) = quota_check(state, n).await {
+        tracing::warn!(error = %e, "quota.high not checked");
+    }
+}
+
+/// Claims as many due deliveries as there are free slots and settles each in its own task.
+async fn spawn_deliveries(state: &SharedState, pending: &std::sync::Arc<tokio::sync::Semaphore>) {
+    let free = i32::try_from(pending.available_permits())
+        .unwrap_or(0)
+        .min(IN_FLIGHT);
+    if free <= 0 {
+        return;
+    }
+    let claimed: Vec<(Uuid, Uuid, String)> =
+        sqlx::query_as("SELECT id, tenant_id, slug FROM kura_notification_claim($1)")
+            .bind(free)
+            .fetch_all(&state.db)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "deliveries not claimed");
+                Vec::new()
+            });
+    for (id, tenant, slug) in claimed {
+        let Ok(permit) = pending.clone().acquire_owned().await else {
+            break;
+        };
+        let state = state.clone();
+        tokio::spawn(async move {
+            if let Err(e) = deliver(&state, id, tenant, &slug).await {
+                tracing::warn!(error = %e, "delivery not settled; taken over after 2 minutes");
+            }
+            drop(permit);
+        });
     }
 }
 

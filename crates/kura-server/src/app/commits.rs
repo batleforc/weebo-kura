@@ -366,15 +366,7 @@ pub async fn post_commit(
 ) -> Result<Json<CommitResponse>, ApiError> {
     // T3: the role is checked on the vault before the body is even parsed.
     let a = caller.access(&state, v).await?;
-    let req: CommitRequest = serde_json::from_slice(&body).map_err(|e| {
-        let msg = e.to_string();
-        let kind = if msg.starts_with(kura_core::path::INVALID_PATH) {
-            ProblemType::InvalidPath
-        } else {
-            ProblemType::InvalidRequest
-        };
-        ApiError::with_detail(kind, msg)
-    })?;
+    let req = parse_request(&body)?;
     validate(&req)?;
     let space = super::space::resolve(
         req.space.as_deref(),
@@ -386,49 +378,11 @@ pub async fn post_commit(
         },
         super::space::Use::Write,
     )?;
-    for (i, op) in req.operations.iter().enumerate() {
-        // Configuration categories are files only (RFC 0007 §4.3).
-        if matches!(op, Operation::Folder { .. }) && space.is_config() {
-            return Err(ApiError::with_detail(
-                ProblemType::InvalidPath,
-                format!("operations[{i}]: no folder in the configuration space"),
-            ));
-        }
-        if let Operation::Put { path, .. } = op
-            && !space.allows(path.as_str())
-        {
-            return Err(ApiError::with_detail(
-                ProblemType::InvalidPath,
-                format!("operations[{i}]: {path} is not in a synced configuration category"),
-            ));
-        }
-    }
+    check_space_operations(&req, &space)?;
     // A token: the paths it names and the content it names, before any merge
     // work. The heads are checked again under the vault lock (RFC 0004 §6.5).
     if let Some(k) = caller.key() {
-        let mut blobs = Vec::new();
-        for (i, op) in req.operations.iter().enumerate() {
-            if let Operation::Put { path, blob, .. } = op {
-                if !k.scope.writes(path.as_str()) {
-                    return Err(outside(&state, i));
-                }
-                blobs.push(*blob);
-            }
-            // A folder is written where its contents may be (RFC 0007 T2).
-            if let Operation::Folder { path, .. } = op
-                && !k.scope.writes(&format!("{path}/"))
-            {
-                return Err(outside(&state, i));
-            }
-        }
-        let known = k.knows(&state, &a, &blobs, false).await?;
-        if !blobs.iter().all(|b| known.contains(b)) {
-            return Err(KeyCaller::refuse(
-                &state,
-                ProblemType::HashMismatch,
-                NOT_UPLOADED,
-            ));
-        }
+        check_token_scope(&state, k, &a, &req).await?;
     }
     // The idempotency hash covers the parsed request, not its whitespace.
     let canonical = serde_json::to_vec(&req).map_err(|e| ApiError::Unavailable(e.to_string()))?;
@@ -481,6 +435,76 @@ pub async fn post_commit(
     }
 }
 
+fn parse_request(body: &[u8]) -> Result<CommitRequest, ApiError> {
+    serde_json::from_slice(body).map_err(|e| {
+        let msg = e.to_string();
+        let kind = if msg.starts_with(kura_core::path::INVALID_PATH) {
+            ProblemType::InvalidPath
+        } else {
+            ProblemType::InvalidRequest
+        };
+        ApiError::with_detail(kind, msg)
+    })
+}
+
+/// What the space allows: no folder in the configuration space, only synced categories.
+fn check_space_operations(
+    req: &CommitRequest,
+    space: &super::space::Space,
+) -> Result<(), ApiError> {
+    for (i, op) in req.operations.iter().enumerate() {
+        // Configuration categories are files only (RFC 0007 §4.3).
+        if matches!(op, Operation::Folder { .. }) && space.is_config() {
+            return Err(ApiError::with_detail(
+                ProblemType::InvalidPath,
+                format!("operations[{i}]: no folder in the configuration space"),
+            ));
+        }
+        if let Operation::Put { path, .. } = op
+            && !space.allows(path.as_str())
+        {
+            return Err(ApiError::with_detail(
+                ProblemType::InvalidPath,
+                format!("operations[{i}]: {path} is not in a synced configuration category"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A token's commit: every path inside its scope and every blob already uploaded.
+async fn check_token_scope(
+    state: &SharedState,
+    k: &KeyCaller,
+    a: &VaultAccess,
+    req: &CommitRequest,
+) -> Result<(), ApiError> {
+    let mut blobs = Vec::new();
+    for (i, op) in req.operations.iter().enumerate() {
+        if let Operation::Put { path, blob, .. } = op {
+            if !k.scope.writes(path.as_str()) {
+                return Err(outside(state, i));
+            }
+            blobs.push(*blob);
+        }
+        // A folder is written where its contents may be (RFC 0007 T2).
+        if let Operation::Folder { path, .. } = op
+            && !k.scope.writes(&format!("{path}/"))
+        {
+            return Err(outside(state, i));
+        }
+    }
+    let known = k.knows(state, a, &blobs, false).await?;
+    if !blobs.iter().all(|b| known.contains(b)) {
+        return Err(KeyCaller::refuse(
+            state,
+            ProblemType::HashMismatch,
+            NOT_UPLOADED,
+        ));
+    }
+    Ok(())
+}
+
 /// What every step of one commit shares.
 struct Cx<'a> {
     state: &'a SharedState,
@@ -519,13 +543,22 @@ async fn stored_result(
         .fetch_optional(&mut *tx)
         .await?;
     tx.commit().await?;
-    let Some(row) = stored else { return Ok(None) };
+    stored
+        .map(|row| stored_response(&row, request_hash))
+        .transpose()
+}
+
+/// The result a stored commit record holds; another body under its key is refused.
+fn stored_response(
+    row: &sqlx::postgres::PgRow,
+    request_hash: ChunkHash,
+) -> Result<CommitResponse, ApiError> {
     let hash: Vec<u8> = row.try_get("request_hash")?;
     if hash.as_slice() != request_hash.as_bytes() {
         return Err(ApiError::of(ProblemType::IdempotencyConflict));
     }
     let result: sqlx::types::Json<CommitResponse> = row.try_get("result")?;
-    Ok(Some(result.0))
+    Ok(result.0)
 }
 
 /// Under the vault lock: the rules of §6.5, prepared merges used only if
@@ -553,13 +586,9 @@ async fn decide(
         .fetch_optional(&mut *tx)
         .await?;
     if let Some(row) = stored {
-        let hash: Vec<u8> = row.try_get("request_hash")?;
-        if hash.as_slice() != request_hash.as_bytes() {
-            return Err(ApiError::of(ProblemType::IdempotencyConflict));
-        }
-        let result: sqlx::types::Json<CommitResponse> = row.try_get("result")?;
+        let result = stored_response(&row, request_hash)?;
         tx.commit().await?;
-        return Ok(Decided::Done(result.0));
+        return Ok(Decided::Done(result));
     }
     // The device's state predates history this server lost (§6.3).
     if req.epoch.is_some_and(|e| {
@@ -571,98 +600,24 @@ async fn decide(
     }
 
     // What suffixes a conflict file: the device's name, or the token's.
-    let device_name: String = match cx.key {
-        Some(k) => k.name.clone(),
-        None => {
-            sqlx::query_scalar("SELECT name FROM device WHERE id = $1")
-                .bind(cx.device)
-                .fetch_one(&mut *tx)
-                .await?
-        }
-    };
+    let device_name = writer_name(&mut tx, cx).await?;
     let today = time::OffsetDateTime::now_utc().date();
     let ids: Vec<Uuid> = req
         .operations
         .iter()
         .map(|o| *o.entry().as_uuid())
         .collect();
-    // An id that lives in another namespace, or another user's
-    // configuration, is never written over (phase 8 review).
-    let homes = sqlx::query_as::<_, (Uuid, String, Option<String>)>(
-        "SELECT id, namespace, owner_sub FROM kura_entry_home($1, $2)",
-    )
-    .bind(v)
-    .bind(&ids)
-    .fetch_all(&mut *tx)
-    .await?;
-    if let Some((id, _, _)) = homes
-        .iter()
-        .find(|(_, ns, owner)| *ns != cx.space.namespace || *owner != cx.space.owner)
-    {
-        let i = ids.iter().position(|x| x == id).unwrap_or_default();
-        return Err(refused(i, "this entry id belongs to another space"));
-    }
-    let heads = sqlx::query(concat!(
-        head_select!(),
-        " WHERE e.vault_id = $1 AND e.id = ANY($2) AND e.namespace = $3"
-    ))
-    .bind(v)
-    .bind(&ids)
-    .bind(&cx.space.namespace)
-    .fetch_all(&mut *tx)
-    .await?
-    .iter()
-    .map(|r| head_from_row(r).map(|h| (h.id, h)))
-    .collect::<Result<HashMap<_, _>, _>>()?;
+    check_homes(&mut tx, cx, &ids).await?;
+    let heads = load_heads(&mut tx, cx, &ids).await?;
     let bases = load_bases(&mut tx, v, req).await?;
     // A token writes an entry only where it lies now, under this lock: an id
     // outside its write folders is not moved in, overwritten or deleted, and
     // the base it merges from is one it can read (RFC 0004 §6.5, T1).
     if let Some(k) = cx.key {
-        for (i, op) in req.operations.iter().enumerate() {
-            let head_ok = heads
-                .get(op.entry().as_uuid())
-                .is_none_or(|h| k.scope.writes(&h.scoped_path()));
-            let base = match op {
-                Operation::Put { base, .. } | Operation::Folder { base, .. } => *base,
-                Operation::Delete { base, .. } => Some(*base),
-            };
-            let base_ok = base
-                .and_then(|b| bases.get(&b))
-                .is_none_or(|b| k.scope.sees(&b.path));
-            if !head_ok || !base_ok {
-                return Err(outside(state, i));
-            }
-        }
+        check_token_heads(state, k, req, &heads, &bases)?;
     }
     check_blobs(&mut tx, v, req).await?;
-    let keys: Vec<String> = req
-        .operations
-        .iter()
-        .filter_map(|o| match o {
-            Operation::Put { path, .. } | Operation::Folder { path, .. } => Some(path_key(path)),
-            Operation::Delete { .. } => None,
-        })
-        .collect();
-    let occupancy: HashMap<String, Option<Uuid>> = sqlx::query(
-        "SELECT path_key, id FROM entry WHERE vault_id = $1 AND namespace = $3 AND NOT deleted AND path_key = ANY($2)",
-    )
-    .bind(v)
-    .bind(&keys)
-    .bind(&cx.space.namespace)
-    .fetch_all(&mut *tx)
-    .await?
-    .iter()
-    .map(|r| Ok((r.try_get::<String, _>("path_key")?, Some(r.try_get::<Uuid, _>("id")?))))
-    .collect::<Result<_, sqlx::Error>>()?;
-    let missing_keys: HashSet<&String> = keys
-        .iter()
-        .filter(|k| !occupancy.contains_key(*k))
-        .collect();
-    let mut occupancy = occupancy;
-    for k in missing_keys {
-        occupancy.insert(k.clone(), None);
-    }
+    let occupancy = load_occupancy(&mut tx, cx).await?;
 
     let mut c = Commit {
         vault: v,
@@ -705,60 +660,9 @@ async fn decide(
     if !writes.is_empty() {
         // Delivered on commit only, to every replica's sockets (§6.3).
         crate::notify::notify_change(&mut tx, v, new_head).await?;
-        // RFC 0003: `vault.changed` at most once a vault a minute, with the
-        // number of commits; no path, ever (decision 7).
-        if !cx.space.is_config() {
-            let minute = time::OffsetDateTime::now_utc()
-                .unix_timestamp()
-                .div_euclid(60);
-            crate::notifier::record(
-                state,
-                &mut tx,
-                crate::notifier::Fact {
-                    dedupe: Some(format!("vault.changed:{v}:{minute}")),
-                    ..crate::notifier::Fact::vault(
-                        a,
-                        "vault.changed",
-                        format!("Vault {} changed", a.name),
-                        format!("Tenant {}: notes were changed in the vault.", a.tenant_slug),
-                        serde_json::json!({ "headSeq": new_head }),
-                    )
-                },
-            )
-            .await?;
-        }
-        let conflicts = response
-            .results
-            .iter()
-            .filter(|r| r.conflict.is_some())
-            .count();
-        if conflicts > 0 {
-            crate::notifier::record(
-                state,
-                &mut tx,
-                crate::notifier::Fact::vault(
-                    a,
-                    "vault.conflict",
-                    format!("A conflict in {}", a.name),
-                    format!("Tenant {}: {conflicts} conflict files were created; both versions are kept.", a.tenant_slug),
-                    serde_json::json!({ "conflicts": conflicts }),
-                ),
-            )
-            .await?;
-        }
+        record_commit_facts(cx, &mut tx, new_head, &response).await?;
     }
-    sqlx::query(
-        "INSERT INTO commit_record (vault_id, tenant_id, device_id, idempotency_key, request_hash, result)
-         VALUES ($1, $2, $3, $4, $5, $6)",
-    )
-    .bind(v)
-    .bind(a.tenant)
-    .bind(cx.device)
-    .bind(&req.idempotency_key)
-    .bind(request_hash.as_bytes().as_slice())
-    .bind(sqlx::types::Json(&response))
-    .execute(&mut *tx)
-    .await?;
+    insert_commit_record(&mut tx, cx, &response).await?;
     tx.commit().await?;
     if !writes.is_empty() {
         state.metrics.commits_total.inc();
@@ -771,6 +675,191 @@ async fn decide(
         }
     }
     Ok(Decided::Done(response))
+}
+
+async fn writer_name(tx: &mut Tx, cx: &Cx<'_>) -> Result<String, ApiError> {
+    Ok(match cx.key {
+        Some(k) => k.name.clone(),
+        None => {
+            sqlx::query_scalar("SELECT name FROM device WHERE id = $1")
+                .bind(cx.device)
+                .fetch_one(&mut **tx)
+                .await?
+        }
+    })
+}
+
+/// The idempotency record: a retry finds this result.
+async fn insert_commit_record(
+    tx: &mut Tx,
+    cx: &Cx<'_>,
+    response: &CommitResponse,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "INSERT INTO commit_record (vault_id, tenant_id, device_id, idempotency_key, request_hash, result)
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(cx.v)
+    .bind(cx.a.tenant)
+    .bind(cx.device)
+    .bind(&cx.req.idempotency_key)
+    .bind(cx.request_hash.as_bytes().as_slice())
+    .bind(sqlx::types::Json(response))
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// An id that lives in another namespace, or another user's
+/// configuration, is never written over (phase 8 review).
+async fn check_homes(tx: &mut Tx, cx: &Cx<'_>, ids: &[Uuid]) -> Result<(), ApiError> {
+    let homes = sqlx::query_as::<_, (Uuid, String, Option<String>)>(
+        "SELECT id, namespace, owner_sub FROM kura_entry_home($1, $2)",
+    )
+    .bind(cx.v)
+    .bind(ids)
+    .fetch_all(&mut **tx)
+    .await?;
+    if let Some((id, _, _)) = homes
+        .iter()
+        .find(|(_, ns, owner)| *ns != cx.space.namespace || *owner != cx.space.owner)
+    {
+        let i = ids.iter().position(|x| x == id).unwrap_or_default();
+        return Err(refused(i, "this entry id belongs to another space"));
+    }
+    Ok(())
+}
+
+/// The current head of each entry the commit names, in its space.
+async fn load_heads(
+    tx: &mut Tx,
+    cx: &Cx<'_>,
+    ids: &[Uuid],
+) -> Result<HashMap<Uuid, Head>, ApiError> {
+    sqlx::query(concat!(
+        head_select!(),
+        " WHERE e.vault_id = $1 AND e.id = ANY($2) AND e.namespace = $3"
+    ))
+    .bind(cx.v)
+    .bind(ids)
+    .bind(&cx.space.namespace)
+    .fetch_all(&mut **tx)
+    .await?
+    .iter()
+    .map(|r| head_from_row(r).map(|h| (h.id, h)))
+    .collect()
+}
+
+/// A token's operations against the heads and bases as they are under the lock.
+fn check_token_heads(
+    state: &SharedState,
+    k: &KeyCaller,
+    req: &CommitRequest,
+    heads: &HashMap<Uuid, Head>,
+    bases: &HashMap<Uuid, BaseRev>,
+) -> Result<(), ApiError> {
+    for (i, op) in req.operations.iter().enumerate() {
+        let head_ok = heads
+            .get(op.entry().as_uuid())
+            .is_none_or(|h| k.scope.writes(&h.scoped_path()));
+        let base = match op {
+            Operation::Put { base, .. } | Operation::Folder { base, .. } => *base,
+            Operation::Delete { base, .. } => Some(*base),
+        };
+        let base_ok = base
+            .and_then(|b| bases.get(&b))
+            .is_none_or(|b| k.scope.sees(&b.path));
+        if !head_ok || !base_ok {
+            return Err(outside(state, i));
+        }
+    }
+    Ok(())
+}
+
+/// path_key → the live entry holding it, for each path the commit writes (`None`: free).
+async fn load_occupancy(
+    tx: &mut Tx,
+    cx: &Cx<'_>,
+) -> Result<HashMap<String, Option<Uuid>>, ApiError> {
+    let keys: Vec<String> = cx
+        .req
+        .operations
+        .iter()
+        .filter_map(|o| match o {
+            Operation::Put { path, .. } | Operation::Folder { path, .. } => Some(path_key(path)),
+            Operation::Delete { .. } => None,
+        })
+        .collect();
+    let mut occupancy: HashMap<String, Option<Uuid>> = sqlx::query(
+        "SELECT path_key, id FROM entry WHERE vault_id = $1 AND namespace = $3 AND NOT deleted AND path_key = ANY($2)",
+    )
+    .bind(cx.v)
+    .bind(&keys)
+    .bind(&cx.space.namespace)
+    .fetch_all(&mut **tx)
+    .await?
+    .iter()
+    .map(|r| Ok((r.try_get::<String, _>("path_key")?, Some(r.try_get::<Uuid, _>("id")?))))
+    .collect::<Result<_, sqlx::Error>>()?;
+    for k in keys {
+        occupancy.entry(k).or_insert(None);
+    }
+    Ok(occupancy)
+}
+
+/// `vault.changed` (at most once a vault a minute) and `vault.conflict` for a commit that wrote.
+async fn record_commit_facts(
+    cx: &Cx<'_>,
+    tx: &mut Tx,
+    new_head: i64,
+    response: &CommitResponse,
+) -> Result<(), ApiError> {
+    let (state, a, v) = (cx.state, cx.a, cx.v);
+    // RFC 0003: `vault.changed` at most once a vault a minute, with the
+    // number of commits; no path, ever (decision 7).
+    if !cx.space.is_config() {
+        let minute = time::OffsetDateTime::now_utc()
+            .unix_timestamp()
+            .div_euclid(60);
+        crate::notifier::record(
+            state,
+            tx,
+            crate::notifier::Fact {
+                dedupe: Some(format!("vault.changed:{v}:{minute}")),
+                ..crate::notifier::Fact::vault(
+                    a,
+                    "vault.changed",
+                    format!("Vault {} changed", a.name),
+                    format!("Tenant {}: notes were changed in the vault.", a.tenant_slug),
+                    serde_json::json!({ "headSeq": new_head }),
+                )
+            },
+        )
+        .await?;
+    }
+    let conflicts = response
+        .results
+        .iter()
+        .filter(|r| r.conflict.is_some())
+        .count();
+    if conflicts > 0 {
+        crate::notifier::record(
+            state,
+            tx,
+            crate::notifier::Fact::vault(
+                a,
+                "vault.conflict",
+                format!("A conflict in {}", a.name),
+                format!(
+                    "Tenant {}: {conflicts} conflict files were created; both versions are kept.",
+                    a.tenant_slug
+                ),
+                serde_json::json!({ "conflicts": conflicts }),
+            ),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// With search on for the tenant, each written entry gets an index job in
@@ -936,79 +1025,16 @@ async fn apply(
         Operation::Put { base, .. } | Operation::Folder { base, .. } => *base,
         Operation::Delete { base, .. } => Some(*base),
     };
-    let base_rev = match base {
-        None => None,
-        Some(b) => match (bases.get(&b), &existing) {
-            (Some(r), Some(_)) if r.entry == id => Some(r),
-            // Pruned by retention: handled as overlapping edits (§6.5).
-            (None, Some(_)) => None,
-            // Its entry was purged while this device was away: it resyncs
-            // first, instead of being refused on every push (§6.3).
-            (None, None) if c.horizon_seq > 0 => {
-                return Err(ApiError::of(ProblemType::CursorExpired));
-            }
-            _ => {
-                return Err(refused(
-                    i,
-                    "base is not a revision of this entry in this vault",
-                ));
-            }
-        },
-    };
-    let accepted = |head: Head| {
-        Ok(OpResult {
-            outcome: Outcome::Accepted,
-            head: head.state()?,
-            conflict: None,
-        })
+    let base_rev = base_revision(c, i, id, base, bases, existing.is_some())?;
+    let inc = Incoming {
+        i,
+        id,
+        base,
+        base_rev,
     };
     match op {
-        Operation::Delete { .. } => {
-            let Some(h) = existing else {
-                return Err(refused(i, "no such entry"));
-            };
-            if h.deleted {
-                return accepted(h);
-            }
-            if base == Some(h.revision) {
-                let head = c.write(id, h.path.clone(), true, None, 0, base);
-                return accepted(head);
-            }
-            // Edited since the device last saw it: the delete is dropped.
-            Ok(OpResult {
-                outcome: Outcome::Conflicted,
-                head: h.state()?,
-                conflict: None,
-            })
-        }
-        Operation::Folder { path, .. } => {
-            if existing
-                .as_ref()
-                .is_some_and(|h| !h.deleted && !h.is_folder())
-            {
-                return Err(refused(i, "this entry is a file"));
-            }
-            if let Some(h) = existing.as_ref().filter(|h| !h.deleted && h.path == *path) {
-                // Already there: a late retry is a no-op.
-                return accepted(h.clone());
-            }
-            match c.occupant(&path_key(path)).await? {
-                Some(o) if o != id => {
-                    let other = c.head(o).await?;
-                    if other.is_folder() {
-                        // The same folder made elsewhere: one entry for both.
-                        return accepted(other);
-                    }
-                    // A file holds the name: the folder stays local (§4.2).
-                    Ok(OpResult {
-                        outcome: Outcome::Conflicted,
-                        head: other.state()?,
-                        conflict: None,
-                    })
-                }
-                _ => accepted(c.write(id, path.clone(), false, None, 0, base)),
-            }
-        }
+        Operation::Delete { .. } => apply_delete(c, &inc, existing),
+        Operation::Folder { path, .. } => apply_folder(c, &inc, path, existing).await,
         Operation::Put {
             path, blob, size, ..
         } => {
@@ -1016,86 +1042,208 @@ async fn apply(
             let Some(h) = existing else {
                 return put_new(c, i, id, path, *blob, size).await;
             };
-            if h.is_folder() {
-                return Err(refused(i, "this entry is a folder"));
-            }
-            if h.deleted {
-                // An edit against a deleted entry wins and restores it.
-                let p = c.free_path(i, path, id).await?;
-                return accepted(c.write(id, p, false, Some(*blob), size, base));
-            }
-            if h.blob == Some(*blob) {
-                if h.path == *path {
-                    // Already the head, whatever the base: a late retry is a no-op.
-                    return accepted(h);
-                }
-                // A rename; of two renames, the later commit wins.
-                let p = c.free_path(i, path, id).await?;
-                return accepted(c.write(id, p, false, Some(*blob), size, base));
-            }
-            // Nothing changed since its base, which is not the head: a device
-            // resending after a rewind (§6.3). The head stays.
-            if base_rev.is_some_and(|r| r.blob == Some(*blob) && r.path == path.as_str()) {
-                return accepted(h);
-            }
-            let content_unchanged_since_base = base_rev.is_some_and(|r| r.blob == h.blob);
-            if base == Some(h.revision) || content_unchanged_since_base {
-                // Fast-forward, or a rename on the server and an edit here: both apply.
-                let target = match base_rev {
-                    Some(r) if base != Some(h.revision) && r.path == path.as_str() => {
-                        h.path.clone()
-                    }
-                    _ => path.clone(),
-                };
-                let p = c.free_path(i, &target, id).await?;
-                return accepted(c.write(id, p, false, Some(*blob), size, base));
-            }
-            // Both sides changed the content: a merge prepared against this
-            // very head becomes the head (§6.5, phase 4).
-            if let Some(m) = c.merges.get(&i) {
-                if m.head == h.revision {
-                    let target = match base_rev {
-                        Some(r) if r.path != path.as_str() => path.clone(),
-                        _ => h.path.clone(),
-                    };
-                    if Some(m.blob) == h.blob && target == h.path {
-                        return Ok(OpResult {
-                            outcome: Outcome::Merged,
-                            head: h.state()?,
-                            conflict: None,
-                        });
-                    }
-                    let p = c.free_path(i, &target, id).await?;
-                    let head = c.write(id, p, false, Some(m.blob), m.size, Some(h.revision));
-                    return Ok(OpResult {
-                        outcome: Outcome::Merged,
-                        head: head.state()?,
-                        conflict: None,
-                    });
-                }
-                if c.allow_retry {
-                    c.head_moved = true;
-                }
-            }
-            // Otherwise the head stays and the push becomes a conflict file,
-            // the same one if this content was pushed before (review 4 H2).
-            if let Some(existing) = c.existing_conflict(path, *blob).await? {
-                return Ok(OpResult {
-                    outcome: Outcome::Conflicted,
-                    head: h.state()?,
-                    conflict: Some(existing.state()?),
-                });
-            }
-            let conflict_id = Uuid::now_v7();
-            let p = c.conflict_path(i, path, conflict_id).await?;
-            let conflict = c.write(conflict_id, p, false, Some(*blob), size, None);
-            Ok(OpResult {
-                outcome: Outcome::Conflicted,
-                head: h.state()?,
-                conflict: Some(conflict.state()?),
-            })
+            apply_put(c, &inc, path, *blob, size, h).await
         }
     }
+}
+
+/// One operation of a commit, with the base it names.
+struct Incoming<'a> {
+    i: usize,
+    id: Uuid,
+    base: Option<Uuid>,
+    base_rev: Option<&'a BaseRev>,
+}
+
+fn accepted(head: Head) -> Result<OpResult, ApiError> {
+    Ok(OpResult {
+        outcome: Outcome::Accepted,
+        head: head.state()?,
+        conflict: None,
+    })
+}
+
+/// The base revision an operation names, checked (T17); `None` when pruned.
+fn base_revision<'b>(
+    c: &Commit<'_>,
+    i: usize,
+    id: Uuid,
+    base: Option<Uuid>,
+    bases: &'b HashMap<Uuid, BaseRev>,
+    exists: bool,
+) -> Result<Option<&'b BaseRev>, ApiError> {
+    let Some(b) = base else { return Ok(None) };
+    match (bases.get(&b), exists) {
+        (Some(r), true) if r.entry == id => Ok(Some(r)),
+        // Pruned by retention: handled as overlapping edits (§6.5).
+        (None, true) => Ok(None),
+        // Its entry was purged while this device was away: it resyncs
+        // first, instead of being refused on every push (§6.3).
+        (None, false) if c.horizon_seq > 0 => Err(ApiError::of(ProblemType::CursorExpired)),
+        _ => Err(refused(
+            i,
+            "base is not a revision of this entry in this vault",
+        )),
+    }
+}
+
+fn apply_delete(
+    c: &mut Commit<'_>,
+    inc: &Incoming<'_>,
+    existing: Option<Head>,
+) -> Result<OpResult, ApiError> {
+    let Some(h) = existing else {
+        return Err(refused(inc.i, "no such entry"));
+    };
+    if h.deleted {
+        return accepted(h);
+    }
+    if inc.base == Some(h.revision) {
+        let head = c.write(inc.id, h.path, true, None, 0, inc.base);
+        return accepted(head);
+    }
+    // Edited since the device last saw it: the delete is dropped.
+    Ok(OpResult {
+        outcome: Outcome::Conflicted,
+        head: h.state()?,
+        conflict: None,
+    })
+}
+
+async fn apply_folder(
+    c: &mut Commit<'_>,
+    inc: &Incoming<'_>,
+    path: &VaultPath,
+    existing: Option<Head>,
+) -> Result<OpResult, ApiError> {
+    if existing
+        .as_ref()
+        .is_some_and(|h| !h.deleted && !h.is_folder())
+    {
+        return Err(refused(inc.i, "this entry is a file"));
+    }
+    if let Some(h) = existing.as_ref().filter(|h| !h.deleted && h.path == *path) {
+        // Already there: a late retry is a no-op.
+        return accepted(h.clone());
+    }
+    match c.occupant(&path_key(path)).await? {
+        Some(o) if o != inc.id => {
+            let other = c.head(o).await?;
+            if other.is_folder() {
+                // The same folder made elsewhere: one entry for both.
+                return accepted(other);
+            }
+            // A file holds the name: the folder stays local (§4.2).
+            Ok(OpResult {
+                outcome: Outcome::Conflicted,
+                head: other.state()?,
+                conflict: None,
+            })
+        }
+        _ => accepted(c.write(inc.id, path.clone(), false, None, 0, inc.base)),
+    }
+}
+
+/// A `put` on an entry that exists: by the rows of §6.5.
+async fn apply_put(
+    c: &mut Commit<'_>,
+    inc: &Incoming<'_>,
+    path: &VaultPath,
+    blob: ChunkHash,
+    size: i64,
+    h: Head,
+) -> Result<OpResult, ApiError> {
+    let (i, id, base, base_rev) = (inc.i, inc.id, inc.base, inc.base_rev);
+    if h.is_folder() {
+        return Err(refused(i, "this entry is a folder"));
+    }
+    if h.deleted {
+        // An edit against a deleted entry wins and restores it.
+        let p = c.free_path(i, path, id).await?;
+        return accepted(c.write(id, p, false, Some(blob), size, base));
+    }
+    if h.blob == Some(blob) {
+        if h.path == *path {
+            // Already the head, whatever the base: a late retry is a no-op.
+            return accepted(h);
+        }
+        // A rename; of two renames, the later commit wins.
+        let p = c.free_path(i, path, id).await?;
+        return accepted(c.write(id, p, false, Some(blob), size, base));
+    }
+    // Nothing changed since its base, which is not the head: a device
+    // resending after a rewind (§6.3). The head stays.
+    if base_rev.is_some_and(|r| r.blob == Some(blob) && r.path == path.as_str()) {
+        return accepted(h);
+    }
+    let content_unchanged_since_base = base_rev.is_some_and(|r| r.blob == h.blob);
+    if base == Some(h.revision) || content_unchanged_since_base {
+        // Fast-forward, or a rename on the server and an edit here: both apply.
+        let target = match base_rev {
+            Some(r) if base != Some(h.revision) && r.path == path.as_str() => h.path.clone(),
+            _ => path.clone(),
+        };
+        let p = c.free_path(i, &target, id).await?;
+        return accepted(c.write(id, p, false, Some(blob), size, base));
+    }
+    if let Some(merged) = apply_merge(c, inc, path, &h).await? {
+        return Ok(merged);
+    }
+    // Otherwise the head stays and the push becomes a conflict file,
+    // the same one if this content was pushed before (review 4 H2).
+    if let Some(existing) = c.existing_conflict(path, blob).await? {
+        return Ok(OpResult {
+            outcome: Outcome::Conflicted,
+            head: h.state()?,
+            conflict: Some(existing.state()?),
+        });
+    }
+    let conflict_id = Uuid::now_v7();
+    let p = c.conflict_path(i, path, conflict_id).await?;
+    let conflict = c.write(conflict_id, p, false, Some(blob), size, None);
+    Ok(OpResult {
+        outcome: Outcome::Conflicted,
+        head: h.state()?,
+        conflict: Some(conflict.state()?),
+    })
+}
+
+/// Both sides changed the content: a merge prepared against this very head
+/// becomes the head (§6.5, phase 4). `None`: no usable merge.
+async fn apply_merge(
+    c: &mut Commit<'_>,
+    inc: &Incoming<'_>,
+    path: &VaultPath,
+    h: &Head,
+) -> Result<Option<OpResult>, ApiError> {
+    let Some(m) = c.merges.get(&inc.i) else {
+        return Ok(None);
+    };
+    if m.head != h.revision {
+        if c.allow_retry {
+            c.head_moved = true;
+        }
+        return Ok(None);
+    }
+    let (m_blob, m_size) = (m.blob, m.size);
+    let target = match inc.base_rev {
+        Some(r) if r.path != path.as_str() => path.clone(),
+        _ => h.path.clone(),
+    };
+    if Some(m_blob) == h.blob && target == h.path {
+        return Ok(Some(OpResult {
+            outcome: Outcome::Merged,
+            head: h.state()?,
+            conflict: None,
+        }));
+    }
+    let p = c.free_path(inc.i, &target, inc.id).await?;
+    let head = c.write(inc.id, p, false, Some(m_blob), m_size, Some(h.revision));
+    Ok(Some(OpResult {
+        outcome: Outcome::Merged,
+        head: head.state()?,
+        conflict: None,
+    }))
 }
 
 /// Configuration (§6.5): Obsidian would load a conflict file as a setting,
@@ -1226,22 +1374,9 @@ async fn prepare(cx: &Cx<'_>, deadline: tokio::time::Instant) -> HashMap<usize, 
     }
 }
 
-async fn prepare_inner(
-    cx: &Cx<'_>,
-    deadline: tokio::time::Instant,
-) -> Result<HashMap<usize, Prepared>, ApiError> {
-    use kura_core::merge::{MAX_MERGE, Merge, merge3, mergeable};
-    let mut out = HashMap::new();
-    let max_file = cx.state.snapshot().and_then(|snap| {
-        snap.config
-            .tenants
-            .get(cx.a.tenant_slug.as_str())
-            .and_then(|t| t.doc.spec.quota.max_file_size)
-            .map(|q| q.bytes())
-    });
-    let candidates: Vec<(usize, Uuid, Uuid, ChunkHash)> = cx
-        .req
-        .operations
+/// The `put`s with a base that may be merged: (index, entry, base revision, pushed blob).
+fn merge_candidates(req: &CommitRequest) -> Vec<(usize, Uuid, Uuid, ChunkHash)> {
+    req.operations
         .iter()
         .enumerate()
         .filter_map(|(i, o)| match o {
@@ -1251,13 +1386,23 @@ async fn prepare_inner(
                 base: Some(b),
                 blob,
                 ..
-            } if mergeable(path) => Some((i, *entry.as_uuid(), *b, *blob)),
+            } if kura_core::merge::mergeable(path) => Some((i, *entry.as_uuid(), *b, *blob)),
             _ => None,
         })
-        .collect();
-    if candidates.is_empty() || cx.state.storage.is_none() {
-        return Ok(out);
-    }
+        .collect()
+}
+
+type MergeInputs = (
+    HashMap<Uuid, Head>,
+    HashMap<Uuid, BaseRev>,
+    HashMap<Vec<u8>, i64>,
+);
+
+/// The heads, bases and blob sizes of the candidates, read in one short transaction.
+async fn load_merge_inputs(
+    cx: &Cx<'_>,
+    candidates: &[(usize, Uuid, Uuid, ChunkHash)],
+) -> Result<MergeInputs, ApiError> {
     let ids: Vec<Uuid> = candidates.iter().map(|c| c.1).collect();
     let mut tx = db::begin_tenant(&cx.state.db, cx.a.tenant, None).await?;
     let heads = sqlx::query(concat!(
@@ -1294,6 +1439,65 @@ async fn prepare_inner(
             .map(|r| Ok((r.try_get("hash")?, r.try_get("size")?)))
             .collect::<Result<_, sqlx::Error>>()?;
     tx.commit().await?;
+    Ok((heads, bases, sizes))
+}
+
+/// Merges `[base, head, pushed]` within `left`; the stored clean result's blob and size, or
+/// `None` when it is a conflict.
+async fn merge_blobs(
+    cx: &Cx<'_>,
+    [base_blob, head_blob, pushed]: [ChunkHash; 3],
+    left: std::time::Duration,
+    permit: tokio::sync::OwnedSemaphorePermit,
+    max_file: Option<u64>,
+) -> Result<Option<(ChunkHash, i64)>, ApiError> {
+    use kura_core::merge::{MAX_MERGE, Merge, merge3};
+    let (b, o, t) = (
+        read_blob(cx.state, cx.a, cx.v, base_blob).await?,
+        read_blob(cx.state, cx.a, cx.v, head_blob).await?,
+        read_blob(cx.state, cx.a, cx.v, pushed).await?,
+    );
+    let merged = tokio::time::timeout(
+        left,
+        tokio::task::spawn_blocking(move || {
+            let merged = merge3(&b, &o, &t);
+            drop(permit);
+            merged
+        }),
+    )
+    .await;
+    // Larger than a side may be, or than the tenant allows: a conflict file (review 4 L2).
+    let Ok(Ok(Merge::Clean(data))) = merged else {
+        return Ok(None);
+    };
+    if data.len() > MAX_MERGE || max_file.is_some_and(|m| data.len() as u64 > m) {
+        return Ok(None);
+    }
+    let size = i64::try_from(data.len()).unwrap_or(i64::MAX);
+    Ok(store_content(cx.state, cx.a, cx.v, data)
+        .await
+        .ok()
+        .map(|blob| (blob, size)))
+}
+
+async fn prepare_inner(
+    cx: &Cx<'_>,
+    deadline: tokio::time::Instant,
+) -> Result<HashMap<usize, Prepared>, ApiError> {
+    use kura_core::merge::MAX_MERGE;
+    let mut out = HashMap::new();
+    let max_file = cx.state.snapshot().and_then(|snap| {
+        snap.config
+            .tenants
+            .get(cx.a.tenant_slug.as_str())
+            .and_then(|t| t.doc.spec.quota.max_file_size)
+            .map(kura_api::Quantity::bytes)
+    });
+    let candidates = merge_candidates(cx.req);
+    if candidates.is_empty() || cx.state.storage.is_none() {
+        return Ok(out);
+    }
+    let (heads, bases, sizes) = load_merge_inputs(cx, &candidates).await?;
     let small = |h: &ChunkHash| {
         sizes
             .get(h.as_bytes().as_slice())
@@ -1325,43 +1529,20 @@ async fn prepare_inner(
         else {
             break;
         };
-        let (b, o, t) = (
-            read_blob(cx.state, cx.a, cx.v, base_blob).await?,
-            read_blob(cx.state, cx.a, cx.v, head_blob).await?,
-            read_blob(cx.state, cx.a, cx.v, pushed).await?,
-        );
-        let merged = tokio::time::timeout(
-            left,
-            tokio::task::spawn_blocking(move || {
-                let merged = merge3(&b, &o, &t);
-                drop(permit);
-                merged
-            }),
-        )
-        .await;
-        let outcome = match merged {
-            // Larger than a side may be, or than the tenant allows: a conflict file (review 4 L2).
-            Ok(Ok(Merge::Clean(data)))
-                if data.len() <= kura_core::merge::MAX_MERGE
-                    && max_file.is_none_or(|m| data.len() as u64 <= m) =>
-            {
-                let size = i64::try_from(data.len()).unwrap_or(i64::MAX);
-                match store_content(cx.state, cx.a, cx.v, data).await {
-                    Ok(blob) => {
-                        out.insert(
-                            i,
-                            Prepared {
-                                head: h.revision,
-                                blob,
-                                size,
-                            },
-                        );
-                        "merged"
-                    }
-                    Err(_) => "conflict",
-                }
-            }
-            _ => "conflict",
+        let merged =
+            merge_blobs(cx, [base_blob, head_blob, pushed], left, permit, max_file).await?;
+        let outcome = if let Some((blob, size)) = merged {
+            out.insert(
+                i,
+                Prepared {
+                    head: h.revision,
+                    blob,
+                    size,
+                },
+            );
+            "merged"
+        } else {
+            "conflict"
         };
         cx.state
             .metrics

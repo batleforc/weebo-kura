@@ -134,20 +134,8 @@ pub async fn register_device(
         .limits
         .check(&caller.principal.sub, "POST", "/v1/devices")
         .map_err(ApiError::RateLimited)?;
-    let name = body.name.trim();
-    if name.is_empty() || name.len() > 64 {
-        return Err(ApiError::with_detail(
-            ProblemType::InvalidRequest,
-            "name: 1 to 64 bytes",
-        ));
-    }
-    let snapshot = state
-        .snapshot()
-        .ok_or(ApiError::of(ProblemType::Unavailable))?;
-    let ids = crate::authz::device_tenants(&state.db, &snapshot, &caller.principal).await?;
-    if ids.is_empty() {
-        return Err(ApiError::of(ProblemType::InsufficientRole));
-    }
+    let name = valid_name(&body.name)?;
+    let ids = registration_tenants(&state, &caller).await?;
     let sub = &caller.principal.sub;
     super::device::require_session(&caller.principal)?;
     let sid = caller.principal.sid.as_deref();
@@ -158,16 +146,7 @@ pub async fn register_device(
         .bind(sub)
         .execute(&mut *tx)
         .await?;
-    let sid_revoked: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM device WHERE revoked_at IS NOT NULL
-                AND (session_sid = $1 OR (user_sub = $3 AND session_auth_time = $2)))",
-    )
-    .bind(sid)
-    .bind(auth_time)
-    .bind(sub)
-    .fetch_one(&mut *tx)
-    .await?;
-    if sid_revoked {
+    if session_revoked(&mut tx, sub, sid, auth_time).await? {
         tracing::warn!(target: "audit", event = "device_registration_refused", sub = %sub, "registration from a revoked session");
         return Err(ApiError::of(ProblemType::DeviceRevoked));
     }
@@ -175,25 +154,77 @@ pub async fn register_device(
     // the same session gets the device it already has (RFC 0003 T12).
     if body.profile == Profile::Web
         && let Some(sid) = sid
+        && let Some(found) = session_web_device(&mut tx, sid).await?
     {
-        let same = sqlx::query(
-            "SELECT id, name, profile, created_at, last_seen, revoked_at FROM device
-             WHERE profile = 'web' AND session_sid = $1 AND revoked_at IS NULL AND signed_out_at IS NULL
-             ORDER BY created_at DESC LIMIT 1",
-        )
-        .bind(sid)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if let Some(row) = same {
-            let found = device(&row, None)?;
-            tx.commit().await?;
-            return Ok((StatusCode::OK, Json(found)));
-        }
+        tx.commit().await?;
+        return Ok((StatusCode::OK, Json(found)));
     }
+    check_live_quota(&mut tx).await?;
+    let created = insert_device(&mut tx, &caller.principal, name, body.profile, &ids).await?;
+    tx.commit().await?;
+    tracing::info!(target: "audit", event = "device_registered", sub = %sub, device = %created.id, profile = body.profile.as_str());
+    device_event(&state, &ids, created.id, "device.registered").await;
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+/// Inserts the device and links it to its tenants.
+async fn insert_device(
+    tx: &mut sqlx::PgConnection,
+    principal: &crate::auth::Principal,
+    name: &str,
+    profile: Profile,
+    tenants: &[Uuid],
+) -> Result<Device, ApiError> {
+    let row = sqlx::query(
+        "INSERT INTO device (user_sub, session_sid, session_auth_time, name, profile, owner_name) VALUES ($1, $2, $5, $3, $4, $6)
+         RETURNING id, name, profile, created_at, last_seen, revoked_at",
+    )
+    .bind(&principal.sub)
+    .bind(principal.sid.as_deref())
+    .bind(name)
+    .bind(profile.as_str())
+    .bind(principal.auth_time)
+    .bind(principal.display_name())
+    .fetch_one(&mut *tx)
+    .await?;
+    let created = device(&row, None)?;
+    sqlx::query("SELECT kura_device_link($1, $2)")
+        .bind(created.id)
+        .bind(tenants)
+        .execute(tx)
+        .await?;
+    Ok(created)
+}
+
+/// The tenants a new device joins; a caller in none may not register.
+async fn registration_tenants(state: &SharedState, caller: &Caller) -> Result<Vec<Uuid>, ApiError> {
+    let snapshot = state
+        .snapshot()
+        .ok_or(ApiError::of(ProblemType::Unavailable))?;
+    let ids = crate::authz::device_tenants(&state.db, &snapshot, &caller.principal).await?;
+    if ids.is_empty() {
+        return Err(ApiError::of(ProblemType::InsufficientRole));
+    }
+    Ok(ids)
+}
+
+fn valid_name(raw: &str) -> Result<&str, ApiError> {
+    let name = raw.trim();
+    if name.is_empty() || name.len() > 64 {
+        return Err(ApiError::with_detail(
+            ProblemType::InvalidRequest,
+            "name: 1 to 64 bytes",
+        ));
+    }
+    Ok(name)
+}
+
+/// Refuses a registration once `MAX_DEVICES` are live.
+async fn check_live_quota(tx: &mut sqlx::PgConnection) -> Result<(), ApiError> {
     let live: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM device WHERE revoked_at IS NULL AND signed_out_at IS NULL",
     )
-    .fetch_one(&mut *tx)
+    .fetch_one(tx)
     .await?;
     if live >= MAX_DEVICES {
         return Err(ApiError::with_detail(
@@ -201,28 +232,41 @@ pub async fn register_device(
             "at most 20 live devices; revoke one first",
         ));
     }
-    let row = sqlx::query(
-        "INSERT INTO device (user_sub, session_sid, session_auth_time, name, profile, owner_name) VALUES ($1, $2, $5, $3, $4, $6)
-         RETURNING id, name, profile, created_at, last_seen, revoked_at",
+    Ok(())
+}
+
+/// Whether a device of this user's session was revoked.
+async fn session_revoked(
+    tx: &mut sqlx::PgConnection,
+    sub: &str,
+    sid: Option<&str>,
+    auth_time: Option<i64>,
+) -> Result<bool, ApiError> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM device WHERE revoked_at IS NOT NULL
+                AND (session_sid = $1 OR (user_sub = $3 AND session_auth_time = $2)))",
     )
-    .bind(sub)
     .bind(sid)
-    .bind(name)
-    .bind(body.profile.as_str())
     .bind(auth_time)
-    .bind(caller.principal.display_name())
-    .fetch_one(&mut *tx)
+    .bind(sub)
+    .fetch_one(tx)
+    .await?)
+}
+
+/// The live web device of this Authentik session, if it has one.
+async fn session_web_device(
+    tx: &mut sqlx::PgConnection,
+    sid: &str,
+) -> Result<Option<Device>, ApiError> {
+    let row = sqlx::query(
+        "SELECT id, name, profile, created_at, last_seen, revoked_at FROM device
+         WHERE profile = 'web' AND session_sid = $1 AND revoked_at IS NULL AND signed_out_at IS NULL
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(sid)
+    .fetch_optional(tx)
     .await?;
-    let created = device(&row, None)?;
-    sqlx::query("SELECT kura_device_link($1, $2)")
-        .bind(created.id)
-        .bind(&ids)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    tracing::info!(target: "audit", event = "device_registered", sub = %sub, device = %created.id, profile = body.profile.as_str());
-    device_event(&state, &ids, created.id, "device.registered").await;
-    Ok((StatusCode::CREATED, Json(created)))
+    Ok(row.map(|r| device(&r, None)).transpose()?)
 }
 
 /// List devices: your own, and those of the tenants you administer.
@@ -266,23 +310,36 @@ pub async fn list_devices(
         .iter()
         .filter(|m| m.role >= TenantRole::Admin)
     {
-        let mut tx = db::begin_tenant(&state.db, m.tenant, None).await?;
-        let rows = sqlx::query("SELECT id, user_sub, owner_name, name, profile, created_at, last_seen, revoked_at FROM kura_tenant_devices()")
-            .fetch_all(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        for r in &rows {
-            let owner: String = r.try_get("user_sub")?;
-            let mut d = device(r, (owner != sub).then_some(owner))?;
-            if d.owner.is_some() {
-                d.owner_name = r.try_get("owner_name")?;
-            }
+        for d in tenant_devices(&state, m.tenant, &sub).await? {
             if seen.insert(d.id) {
                 out.push(d);
             }
         }
     }
     Ok(Json(out))
+}
+
+/// Every device of a tenant, as an administrator sees them (`sub` is the caller's own).
+async fn tenant_devices(
+    state: &SharedState,
+    tenant: Uuid,
+    sub: &str,
+) -> Result<Vec<Device>, ApiError> {
+    let mut tx = db::begin_tenant(&state.db, tenant, None).await?;
+    let rows = sqlx::query("SELECT id, user_sub, owner_name, name, profile, created_at, last_seen, revoked_at FROM kura_tenant_devices()")
+        .fetch_all(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in &rows {
+        let owner: String = r.try_get("user_sub")?;
+        let mut d = device(r, (owner != sub).then_some(owner))?;
+        if d.owner.is_some() {
+            d.owner_name = r.try_get("owner_name")?;
+        }
+        out.push(d);
+    }
+    Ok(out)
 }
 
 /// Revoke a device: yours, or one of a tenant you administer.
@@ -312,29 +369,15 @@ pub async fn revoke_device(
     .fetch_optional(&mut *tx)
     .await?;
     tx.commit().await?;
-    let mut revoked = own.is_some();
-    let mut admin_tenant = None;
-    if !revoked {
-        for m in members(&state, &caller.caller)?
-            .iter()
-            .filter(|m| m.role >= TenantRole::Admin)
-        {
-            let mut tx = db::begin_tenant(&state.db, m.tenant, None).await?;
-            let r: Option<Uuid> = sqlx::query_scalar("SELECT kura_tenant_device_revoke($1)")
-                .bind(d)
-                .fetch_one(&mut *tx)
-                .await?;
-            tx.commit().await?;
-            if r.is_some() {
-                revoked = true;
-                admin_tenant = Some(m.tenant);
-                break;
-            }
+    let admin_tenant = if own.is_some() {
+        None
+    } else {
+        let t = revoke_as_admin(&state, &caller.caller, d).await?;
+        if t.is_none() {
+            return Err(ApiError::of(ProblemType::NotFound));
         }
-    }
-    if !revoked {
-        return Err(ApiError::of(ProblemType::NotFound));
-    }
+        t
+    };
     tracing::info!(target: "audit", event = "device_revoked", sub = %sub, device = %d);
     // The tenants the device is in: the caller's own, or the one an admin
     // revoked it from.
@@ -354,6 +397,29 @@ pub async fn revoke_device(
         tracing::warn!(error = %e, "revocation not broadcast; its sockets close at token expiry");
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Revokes `d` in the first tenant the caller administers that holds it; that tenant.
+async fn revoke_as_admin(
+    state: &SharedState,
+    caller: &Caller,
+    d: Uuid,
+) -> Result<Option<Uuid>, ApiError> {
+    for m in members(state, caller)?
+        .iter()
+        .filter(|m| m.role >= TenantRole::Admin)
+    {
+        let mut tx = db::begin_tenant(&state.db, m.tenant, None).await?;
+        let r: Option<Uuid> = sqlx::query_scalar("SELECT kura_tenant_device_revoke($1)")
+            .bind(d)
+            .fetch_one(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        if r.is_some() {
+            return Ok(Some(m.tenant));
+        }
+    }
+    Ok(None)
 }
 
 /// `device.registered` or `device.revoked` in each of the device's tenants
@@ -456,43 +522,48 @@ pub async fn sign_out_device(
 /// Purges devices idle 180 days (web: 30) and commit records older than 7 days, daily, until `shutdown` (§6.1).
 pub async fn purge_loop(pool: sqlx::PgPool, shutdown: tokio_util::sync::CancellationToken) {
     loop {
-        match sqlx::query_scalar::<_, i64>("SELECT kura_device_purge()")
-            .fetch_one(&pool)
-            .await
-        {
-            Ok(n) if n > 0 => tracing::info!(purged = n, "idle devices purged"),
-            Ok(_) => {}
-            Err(e) => tracing::warn!(error = %e, "device purge failed, retried tomorrow"),
-        }
-        match sqlx::query_scalar::<_, i64>("SELECT kura_scoped_token_purge()")
-            .fetch_one(&pool)
-            .await
-        {
-            Ok(n) if n > 0 => tracing::info!(purged = n, "expired scoped tokens purged"),
-            Ok(_) => {}
-            Err(e) => tracing::warn!(error = %e, "scoped token purge failed, retried tomorrow"),
-        }
+        purge_step(
+            &pool,
+            "SELECT kura_device_purge()",
+            "idle devices purged",
+            "device purge failed, retried tomorrow",
+        )
+        .await;
+        purge_step(
+            &pool,
+            "SELECT kura_scoped_token_purge()",
+            "expired scoped tokens purged",
+            "scoped token purge failed, retried tomorrow",
+        )
+        .await;
         // What tokens uploaded is remembered 24 hours (RFC 0004 T6).
-        match sqlx::query_scalar::<_, i64>("SELECT kura_token_upload_purge()")
-            .fetch_one(&pool)
-            .await
-        {
-            Ok(n) if n > 0 => tracing::info!(purged = n, "old token uploads purged"),
-            Ok(_) => {}
-            Err(e) => tracing::warn!(error = %e, "token upload purge failed, retried tomorrow"),
-        }
+        purge_step(
+            &pool,
+            "SELECT kura_token_upload_purge()",
+            "old token uploads purged",
+            "token upload purge failed, retried tomorrow",
+        )
+        .await;
         // Idempotency records live 7 days (§6.1).
-        match sqlx::query_scalar::<_, i64>("SELECT kura_commit_purge()")
-            .fetch_one(&pool)
-            .await
-        {
-            Ok(n) if n > 0 => tracing::info!(purged = n, "old commit records purged"),
-            Ok(_) => {}
-            Err(e) => tracing::warn!(error = %e, "commit record purge failed, retried tomorrow"),
-        }
+        purge_step(
+            &pool,
+            "SELECT kura_commit_purge()",
+            "old commit records purged",
+            "commit record purge failed, retried tomorrow",
+        )
+        .await;
         tokio::select! {
             () = shutdown.cancelled() => return,
             () = tokio::time::sleep(std::time::Duration::from_secs(86_400)) => {}
         }
+    }
+}
+
+/// One purge function: logs how many rows it removed, or why it failed.
+async fn purge_step(pool: &sqlx::PgPool, sql: &'static str, done: &str, failed: &str) {
+    match sqlx::query_scalar::<_, i64>(sql).fetch_one(pool).await {
+        Ok(n) if n > 0 => tracing::info!(purged = n, "{done}"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "{failed}"),
     }
 }

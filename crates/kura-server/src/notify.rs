@@ -15,6 +15,9 @@ use uuid::Uuid;
 /// The PostgreSQL channel; payloads are `<vault>:<seq>`, `revoked:<device>`
 /// or `beat:<replica>`, never a path or content.
 pub const CHANNEL: &str = "kura_vault";
+/// Signals a new `config_state` row (empty payload): the snapshot loader
+/// reloads at once instead of at its next poll.
+pub const CONFIG_CHANNEL: &str = "kura_config";
 /// Heartbeat period; two missed beats reconnect (§6.3).
 pub const HEARTBEAT: Duration = Duration::from_secs(15);
 /// Sockets per device (§4.4).
@@ -46,6 +49,9 @@ pub struct Hub {
     pub closing: CancellationToken,
     /// `kura_ws_connections`, when the hub belongs to a served state.
     open: Option<prometheus::IntGauge>,
+    /// Woken by a config `NOTIFY` or a lost connection: the snapshot loader
+    /// looks at `config_state` now.
+    pub config: tokio::sync::Notify,
 }
 
 impl Default for Hub {
@@ -56,6 +62,7 @@ impl Default for Hub {
             replica: Uuid::new_v4(),
             closing: CancellationToken::new(),
             open: None,
+            config: tokio::sync::Notify::new(),
         }
     }
 }
@@ -191,26 +198,12 @@ pub async fn listen(
     let hub_ref = &hub.hub;
     let mut first = true;
     loop {
-        let connected = async {
-            let mut l = PgListener::connect_with(&pool).await?;
-            l.listen(CHANNEL).await?;
-            Ok::<_, sqlx::Error>(l)
-        };
-        let mut listener = tokio::select! {
-            () = shutdown.cancelled() => break,
-            l = connected => match l {
-                Ok(l) => l,
-                Err(e) => {
-                    tracing::warn!(error = %e, "LISTEN connection failed, retrying in 5 s");
-                    tokio::select! {
-                        () = shutdown.cancelled() => break,
-                        () = tokio::time::sleep(Duration::from_secs(5)) => continue,
-                    }
-                }
-            },
+        let Some(mut listener) = next_listener(&pool, &shutdown).await else {
+            break;
         };
         if !first {
             hub_ref.publish(Event::Pull);
+            hub_ref.config.notify_one();
         }
         first = false;
         let mut beat = tokio::time::interval(HEARTBEAT);
@@ -222,54 +215,122 @@ pub async fn listen(
                     return;
                 }
                 _ = beat.tick() => {
-                    // A beat not back yet is lag too: the gauge rises while
-                    // LISTEN stalls instead of keeping its last good value.
-                    let late = last_beat.elapsed().saturating_sub(HEARTBEAT).as_secs_f64();
-                    if late > hub.metrics.notify_lag_seconds.get() {
-                        hub.metrics.notify_lag_seconds.set(late);
-                    }
-                    if last_beat.elapsed() > HEARTBEAT.saturating_mul(2) {
-                        tracing::warn!("LISTEN heartbeat missed twice, reconnecting");
+                    if !on_beat(&pool, &hub, last_beat).await {
                         break;
-                    }
-                    let sent = sqlx::query_scalar::<_, f64>(
-                        "SELECT pg_notification_queue_usage() FROM (SELECT pg_notify($1, $2), kura_ws_ticket_purge()) beat",
-                    )
-                    .bind(CHANNEL)
-                    .bind(format!("beat:{}:{}", hub_ref.replica, unix_ms()))
-                    .fetch_one(&pool)
-                    .await;
-                    match sent {
-                        Ok(usage) => hub.metrics.notify_queue_usage.set(usage),
-                        Err(e) => tracing::warn!(error = %e, "heartbeat not sent"),
-                    }
-                    // A promotion the pool did not see as a reconnect (§6.3).
-                    match crate::db::epoch_check(&pool).await {
-                        Ok(0) => {}
-                        Ok(n) => {
-                            hub.metrics.vault_epoch_changes_total.inc_by(n);
-                            tracing::warn!(vaults = n, "cluster identity changed: vault epochs regenerated");
-                        }
-                        Err(e) => tracing::warn!(error = %e, "epoch check failed"),
                     }
                 }
-                n = listener.try_recv() => match n {
-                    Ok(Some(n)) => {
-                        if let Some(ms) = hub_ref.handle(n.payload(), &mut last_beat) {
-                            hub.metrics.notify_lag_seconds.set(ms as f64 / 1000.0);
-                        }
-                    }
-                    // Lost and re-established by sqlx: notifications may be lost.
-                    Ok(None) => hub_ref.publish(Event::Pull),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "LISTEN connection lost, reconnecting");
+                n = listener.try_recv() => {
+                    if !on_notification(&hub, n, &mut last_beat) {
                         break;
                     }
-                },
+                }
             }
         }
     }
     hub_ref.closing.cancel();
+}
+
+/// Connects, retrying every 5 s; `None` once `shutdown` fires.
+async fn next_listener(pool: &sqlx::PgPool, shutdown: &CancellationToken) -> Option<PgListener> {
+    loop {
+        let connected = tokio::select! {
+            () = shutdown.cancelled() => return None,
+            l = connect_listener(pool) => l,
+        };
+        match connected {
+            Ok(l) => return Some(l),
+            Err(e) => {
+                tracing::warn!(error = %e, "LISTEN connection failed, retrying in 5 s");
+                tokio::select! {
+                    () = shutdown.cancelled() => return None,
+                    () = tokio::time::sleep(Duration::from_secs(5)) => {}
+                }
+            }
+        }
+    }
+}
+
+/// One received notification; false when the connection is lost (reconnect).
+fn on_notification(
+    hub: &crate::app::AppState,
+    n: Result<Option<sqlx::postgres::PgNotification>, sqlx::Error>,
+    last_beat: &mut tokio::time::Instant,
+) -> bool {
+    match n {
+        Ok(Some(n)) if n.channel() == CONFIG_CHANNEL => hub.hub.config.notify_one(),
+        Ok(Some(n)) => {
+            if let Some(ms) = hub.hub.handle(n.payload(), last_beat) {
+                hub.metrics.notify_lag_seconds.set(ms as f64 / 1000.0);
+            }
+        }
+        // Lost and re-established by sqlx: notifications may be lost.
+        Ok(None) => {
+            hub.hub.publish(Event::Pull);
+            hub.hub.config.notify_one();
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "LISTEN connection lost, reconnecting");
+            return false;
+        }
+    }
+    true
+}
+
+async fn connect_listener(pool: &sqlx::PgPool) -> Result<PgListener, sqlx::Error> {
+    let mut l = PgListener::connect_with(pool).await?;
+    l.listen_all([CHANNEL, CONFIG_CHANNEL]).await?;
+    Ok(l)
+}
+
+/// A heartbeat tick: updates the lag gauge, sends the beat; false once two beats are missed (reconnect).
+async fn on_beat(
+    pool: &sqlx::PgPool,
+    hub: &crate::app::AppState,
+    last_beat: tokio::time::Instant,
+) -> bool {
+    // A beat not back yet is lag too: the gauge rises while
+    // LISTEN stalls instead of keeping its last good value.
+    let late = last_beat.elapsed().saturating_sub(HEARTBEAT).as_secs_f64();
+    if late > hub.metrics.notify_lag_seconds.get() {
+        hub.metrics.notify_lag_seconds.set(late);
+    }
+    if last_beat.elapsed() > HEARTBEAT.saturating_mul(2) {
+        tracing::warn!("LISTEN heartbeat missed twice, reconnecting");
+        return false;
+    }
+    send_beat(pool, hub).await;
+    true
+}
+
+/// One heartbeat: a self-addressed `NOTIFY` that also purges tickets, then the epoch check.
+async fn send_beat(pool: &sqlx::PgPool, hub: &crate::app::AppState) {
+    let sent = sqlx::query_scalar::<_, f64>(
+        "SELECT pg_notification_queue_usage() FROM (SELECT pg_notify($1, $2), kura_ws_ticket_purge()) beat",
+    )
+    .bind(CHANNEL)
+    .bind(format!("beat:{}:{}", hub.hub.replica, unix_ms()))
+    .fetch_one(pool)
+    .await;
+    match sent {
+        Ok(usage) => hub.metrics.notify_queue_usage.set(usage),
+        Err(e) => tracing::warn!(error = %e, "heartbeat not sent"),
+    }
+    // A promotion the pool did not see as a reconnect (§6.3).
+    check_epoch(pool, hub).await;
+}
+
+async fn check_epoch(pool: &sqlx::PgPool, hub: &crate::app::AppState) {
+    match crate::db::epoch_check(pool).await {
+        Ok(0) => {}
+        Ok(n) => {
+            hub.metrics.vault_epoch_changes_total.inc_by(n);
+            tracing::warn!(
+                vaults = n,
+                "cluster identity changed: vault epochs regenerated"
+            );
+        }
+        Err(e) => tracing::warn!(error = %e, "epoch check failed"),
+    }
 }
 
 #[cfg(test)]

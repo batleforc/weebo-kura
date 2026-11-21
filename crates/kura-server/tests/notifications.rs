@@ -108,57 +108,7 @@ async fn receiver_on(bind: &str) -> Receiver {
                 sd.clone(),
             );
             tokio::spawn(async move {
-                let Ok(mut tls) = acceptor.accept(tcp).await else {
-                    return;
-                };
-                let mut buf = Vec::new();
-                let mut chunk = [0u8; 4096];
-                // Head, then as many body bytes as content-length says.
-                loop {
-                    let n = tls.read(&mut chunk).await.unwrap_or(0);
-                    if n == 0 {
-                        return;
-                    }
-                    buf.extend_from_slice(&chunk[..n]);
-                    let text = String::from_utf8_lossy(&buf).into_owned();
-                    if let Some(end) = text.find("\r\n\r\n") {
-                        let head = text[..end].to_owned();
-                        let len: usize = head
-                            .lines()
-                            .find_map(|l| {
-                                l.to_lowercase()
-                                    .strip_prefix("content-length:")
-                                    .map(|v| v.trim().parse().unwrap_or(0))
-                            })
-                            .unwrap_or(0);
-                        if buf.len() >= end + 4 + len {
-                            g.lock().unwrap().push(Got {
-                                head,
-                                body: buf[end + 4..end + 4 + len].to_vec(),
-                            });
-                            let code = *st.lock().unwrap();
-                            let extra = ex.lock().unwrap().clone();
-                            if en.load(Ordering::SeqCst) {
-                                // A 1 GiB body, sent until the client hangs up.
-                                let head = "HTTP/1.1 200 X\r\ncontent-length: 1073741824\r\nconnection: close\r\n\r\n";
-                                drop(tls.write_all(head.as_bytes()).await);
-                                let block = [b'x'; 16 * 1024];
-                                while sd.load(Ordering::SeqCst) < 1 << 30
-                                    && tls.write_all(&block).await.is_ok()
-                                {
-                                    sd.fetch_add(block.len() as u64, Ordering::SeqCst);
-                                }
-                                return;
-                            }
-                            let answer = format!(
-                                "HTTP/1.1 {code} X\r\ncontent-length: 0\r\n{extra}connection: close\r\n\r\n"
-                            );
-                            drop(tls.write_all(answer.as_bytes()).await);
-                            drop(tls.shutdown().await);
-                            return;
-                        }
-                    }
-                }
+                serve_hook(tcp, acceptor, g, st, ex, en, sd).await;
             });
         }
     });
@@ -170,6 +120,69 @@ async fn receiver_on(bind: &str) -> Receiver {
         extra,
         endless,
         streamed,
+    }
+}
+
+/// serve hook: one phase of the test below.
+async fn serve_hook(
+    tcp: tokio::net::TcpStream,
+    acceptor: tokio_rustls::TlsAcceptor,
+    g: Arc<Mutex<Vec<Got>>>,
+    st: Arc<Mutex<u16>>,
+    ex: Arc<Mutex<String>>,
+    en: Arc<AtomicBool>,
+    sd: Arc<AtomicU64>,
+) {
+    let Ok(mut tls) = acceptor.accept(tcp).await else {
+        return;
+    };
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    // Head, then as many body bytes as content-length says.
+    loop {
+        let n = tls.read(&mut chunk).await.unwrap_or(0);
+        if n == 0 {
+            return;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        let text = String::from_utf8_lossy(&buf).into_owned();
+        if let Some(end) = text.find("\r\n\r\n") {
+            let head = text[..end].to_owned();
+            let len: usize = head
+                .lines()
+                .find_map(|l| {
+                    l.to_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|v| v.trim().parse().unwrap_or(0))
+                })
+                .unwrap_or(0);
+            if buf.len() >= end + 4 + len {
+                g.lock().unwrap().push(Got {
+                    head,
+                    body: buf[end + 4..end + 4 + len].to_vec(),
+                });
+                let code = *st.lock().unwrap();
+                let extra = ex.lock().unwrap().clone();
+                if en.load(Ordering::SeqCst) {
+                    // A 1 GiB body, sent until the client hangs up.
+                    let head =
+                        "HTTP/1.1 200 X\r\ncontent-length: 1073741824\r\nconnection: close\r\n\r\n";
+                    drop(tls.write_all(head.as_bytes()).await);
+                    let block = [b'x'; 16 * 1024];
+                    while sd.load(Ordering::SeqCst) < 1 << 30 && tls.write_all(&block).await.is_ok()
+                    {
+                        sd.fetch_add(block.len() as u64, Ordering::SeqCst);
+                    }
+                    return;
+                }
+                let answer = format!(
+                    "HTTP/1.1 {code} X\r\ncontent-length: 0\r\n{extra}connection: close\r\n\r\n"
+                );
+                drop(tls.write_all(answer.as_bytes()).await);
+                drop(tls.shutdown().await);
+                return;
+            }
+        }
     }
 }
 
@@ -499,6 +512,34 @@ async fn events_reach_their_rules_with_ids_only_and_retries_back_off() {
         assert!(!flat.contains(personal), "{personal} in {flat}");
     }
 
+    vault_changed_is_one_event_a_window(&e).await;
+
+    // 500: retried a minute later (§6.P observation 7).
+    *r.status.lock().unwrap() = 500;
+    let (_, test) = admin
+        .call(
+            &e,
+            "POST",
+            &format!("/tenants/maxime/notifications/{rule_id}/test"),
+            None,
+        )
+        .await;
+    assert_eq!(test["result"], "status_5xx");
+    let (attempts, status, wait): (i32, String, f64) = sqlx::query_as(
+        "SELECT d.attempts, d.status, extract(epoch FROM d.next_attempt_at - now())::float8 FROM notification_delivery d
+         JOIN notification_event ev ON ev.id = d.event_id WHERE ev.type = 'ping'",
+    )
+    .fetch_one(&e.t.owner)
+    .await
+    .unwrap();
+    assert_eq!((attempts, status.as_str()), (1, "pending"));
+    assert!((50.0..70.0).contains(&wait), "{wait}");
+
+    twenty_failures_or_a_410_switch_a_rule_off(&e, &r, &admin, &rule_id).await;
+}
+
+/// vault changed is one event a window: one phase of the test below.
+async fn vault_changed_is_one_event_a_window(e: &Env) {
     // vault.changed: one event a window, counting the facts in it (T6).
     let tenant: Uuid = sqlx::query_scalar("SELECT id FROM tenant WHERE slug = 'maxime'")
         .fetch_one(&e.t.owner)
@@ -540,28 +581,15 @@ async fn events_reach_their_rules_with_ids_only_and_retries_back_off() {
     .await
     .unwrap();
     assert_eq!(deliveries, 1, "one delivery for the window");
+}
 
-    // 500: retried a minute later (§6.P observation 7).
-    *r.status.lock().unwrap() = 500;
-    let (_, test) = admin
-        .call(
-            &e,
-            "POST",
-            &format!("/tenants/maxime/notifications/{rule_id}/test"),
-            None,
-        )
-        .await;
-    assert_eq!(test["result"], "status_5xx");
-    let (attempts, status, wait): (i32, String, f64) = sqlx::query_as(
-        "SELECT d.attempts, d.status, extract(epoch FROM d.next_attempt_at - now())::float8 FROM notification_delivery d
-         JOIN notification_event ev ON ev.id = d.event_id WHERE ev.type = 'ping'",
-    )
-    .fetch_one(&e.t.owner)
-    .await
-    .unwrap();
-    assert_eq!((attempts, status.as_str()), (1, "pending"));
-    assert!((50.0..70.0).contains(&wait), "{wait}");
-
+/// twenty failures or a 410 switch a rule off: one phase of the test below.
+async fn twenty_failures_or_a_410_switch_a_rule_off(
+    e: &Env,
+    r: &Receiver,
+    admin: &Admin,
+    rule_id: &str,
+) {
     // The 20th failure in a row switches the rule off; a re-enable forgets them.
     sqlx::query("UPDATE notification_rule SET consecutive_failures = 19")
         .execute(&e.t.owner)
@@ -570,7 +598,7 @@ async fn events_reach_their_rules_with_ids_only_and_retries_back_off() {
     drop(
         admin
             .call(
-                &e,
+                e,
                 "POST",
                 &format!("/tenants/maxime/notifications/{rule_id}/test"),
                 None,
@@ -578,7 +606,7 @@ async fn events_reach_their_rules_with_ids_only_and_retries_back_off() {
             .await,
     );
     let (_, list) = admin
-        .call(&e, "GET", "/tenants/maxime/notifications", None)
+        .call(e, "GET", "/tenants/maxime/notifications", None)
         .await;
     assert_eq!(
         (
@@ -589,7 +617,7 @@ async fn events_reach_their_rules_with_ids_only_and_retries_back_off() {
     );
     let (_, back) = admin
         .call(
-            &e,
+            e,
             "PUT",
             &format!("/tenants/maxime/notifications/{rule_id}"),
             Some(json!({ "enabled": true })),
@@ -604,7 +632,7 @@ async fn events_reach_their_rules_with_ids_only_and_retries_back_off() {
     drop(
         admin
             .call(
-                &e,
+                e,
                 "POST",
                 &format!("/tenants/maxime/notifications/{rule_id}/test"),
                 None,
@@ -612,7 +640,7 @@ async fn events_reach_their_rules_with_ids_only_and_retries_back_off() {
             .await,
     );
     let (_, list) = admin
-        .call(&e, "GET", "/tenants/maxime/notifications", None)
+        .call(e, "GET", "/tenants/maxime/notifications", None)
         .await;
     assert_eq!(list[0]["disabledReason"], "gone");
 }

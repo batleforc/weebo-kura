@@ -8,33 +8,11 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::app::{Env, env, env_with, problem, storage, vault_id};
-use kura_core::{ChunkHash, blob_hash};
+use common::app::{Env, Who, env, env_stored, file, problem, vault_id, who};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-struct Who {
-    token: String,
-    device: String,
-}
-
-async fn who(e: &Env, sub: &str, groups: &[&str]) -> Who {
-    let token = e.key.token(sub, &format!("s-{sub}"), groups);
-    let device = e.register(&token, sub).await;
-    Who { token, device }
-}
-
 impl Who {
-    async fn call(
-        &self,
-        e: &Env,
-        method: &str,
-        uri: &str,
-        body: Option<Value>,
-    ) -> (StatusCode, Value) {
-        e.call(method, uri, &self.token, Some(&self.device), body)
-            .await
-    }
     /// A full pass of the notes, from 0.
     async fn pull(&self, e: &Env, v: &str) {
         let (st, b) = self
@@ -47,44 +25,6 @@ impl Who {
         self.call(e, "GET", &format!("/v1/vaults/{v}/sync"), None)
             .await
     }
-}
-
-/// A one-chunk file, uploaded and committed by `w`.
-async fn file(e: &Env, w: &Who, v: &str, path: &str, data: &[u8]) {
-    let c = ChunkHash::of(data);
-    let r = axum::http::Request::builder()
-        .method("PUT")
-        .uri(format!("/v1/vaults/{v}/chunks/{c}"))
-        .header("authorization", format!("Bearer {}", w.token))
-        .header("x-kura-device", &w.device)
-        .body(axum::body::Body::from(data.to_vec()))
-        .unwrap();
-    let st = tower::ServiceExt::oneshot(kura_server::app::app(e.state.clone()), r)
-        .await
-        .unwrap()
-        .status();
-    assert_eq!(st, StatusCode::NO_CONTENT);
-    let size = data.len() as u64;
-    let b = blob_hash(size, &[c]).to_string();
-    let (st, _) = w
-        .call(
-            e,
-            "PUT",
-            &format!("/v1/vaults/{v}/blobs/{b}"),
-            Some(json!({ "size": size, "chunks": [c.to_string()] })),
-        )
-        .await;
-    assert_eq!(st, StatusCode::NO_CONTENT);
-    let op = json!({ "op": "put", "entry": Uuid::now_v7().to_string(), "path": path, "blob": b, "size": size });
-    let (st, body) = w
-        .call(
-            e,
-            "POST",
-            &format!("/v1/vaults/{v}/commits"),
-            Some(json!({ "idempotencyKey": Uuid::new_v4().to_string(), "operations": [op] })),
-        )
-        .await;
-    assert_eq!(st, StatusCode::OK, "{body}");
 }
 
 fn row<'a>(list: &'a Value, device: &str) -> &'a Value {
@@ -100,10 +40,7 @@ fn row<'a>(list: &'a Value, device: &str) -> &'a Value {
 /// devices only, a tenant admin sees everyone's with the owner.
 #[tokio::test]
 async fn a_pass_records_where_the_device_stands() {
-    let Some(st) = storage(module_path!()).await else {
-        return;
-    };
-    let Some(e) = env_with(module_path!(), Some(st)).await else {
+    let Some(e) = env_stored(module_path!()).await else {
         return;
     };
     let v = vault_id(&e, "knowledge").await;
@@ -205,10 +142,7 @@ async fn a_scoped_token_is_refused() {
 /// removing a person's binding removes their devices from the list.
 #[tokio::test]
 async fn behind_counts_only_the_device_scope() {
-    let Some(st) = storage(module_path!()).await else {
-        return;
-    };
-    let Some(e) = env_with(module_path!(), Some(st)).await else {
+    let Some(e) = env_stored(module_path!()).await else {
         return;
     };
     // RFC 0005's players: a viewer of Sessions/ only.
@@ -221,18 +155,7 @@ async fn behind_counts_only_the_device_scope() {
             "    - { role: editor, claimValue: maxime-members }",
             "    - { role: editor, claimValue: maxime-members }\n    - { role: viewer, claimValue: maxime-players, paths: [Sessions/] }",
         );
-    let dir = std::env::temp_dir().join(format!("kura-http-{}", e.t.name));
-    std::fs::write(dir.join("config.yaml"), docs).unwrap();
-    let files = kura_server::reconcile::files::read_dir(&dir).unwrap();
-    kura_server::reconcile::reconcile(&e.t.app, &files, true)
-        .await
-        .unwrap();
-    e.state.set_snapshot(
-        kura_server::reconcile::snapshot::load_if_changed(&e.t.app, None)
-            .await
-            .unwrap()
-            .unwrap(),
-    );
+    e.apply_config(&docs).await;
     let v = vault_id(&e, "knowledge").await;
     let gm = who(&e, "gm", &["maxime-admins"]).await;
     let pia = who(&e, "pia", &["maxime-players"]).await;
@@ -334,10 +257,7 @@ async fn a_device_reports_its_last_run_as_counts() {
 /// token; a member is never told it.
 #[tokio::test]
 async fn an_owner_is_named_by_their_name_claim() {
-    let Some(st) = storage(module_path!()).await else {
-        return;
-    };
-    let Some(e) = env_with(module_path!(), Some(st)).await else {
+    let Some(e) = env_stored(module_path!()).await else {
         return;
     };
     let v = vault_id(&e, "knowledge").await;

@@ -728,13 +728,19 @@ fn blob_of(data: &[u8], params: ChunkParams) -> (ChunkHash, Vec<ChunkHash>) {
     (blob_hash(data.len() as u64, &hashes), hashes)
 }
 
-async fn push<H: Host, R: Remote>(
+/// The syncable local files by path, and the oversized ones (present, never
+/// deleted); what cannot sync is reported.
+async fn scan_local<H: Host>(
     host: &H,
-    remote: &R,
-    state: &mut LocalState,
     opts: &Options,
     report: &mut Report,
-) -> Result<(), SyncError> {
+) -> Result<
+    (
+        HashMap<VaultPath, FileMeta>,
+        std::collections::HashSet<VaultPath>,
+    ),
+    SyncError,
+> {
     let files = host.list().await?;
     let mut local: HashMap<VaultPath, FileMeta> = HashMap::new();
     // Too large to sync, but present: never a deletion (review 2026-11-15 #1).
@@ -756,13 +762,50 @@ async fn push<H: Host, R: Remote>(
             Err(e) => report.unsyncable.push((f.path, e.to_string())),
         }
     }
-    // Entries whose file is gone: deletions, unless a new file has their content (a rename).
-    let mut gone: Vec<EntryId> = state
-        .entries
+    Ok((local, oversized))
+}
+
+/// The paths a push would touch outside the writable folders. A put is
+/// checked where it lands and where the entry lies (a rename writes both
+/// ends); a deletion, where the entry lies.
+fn refused_paths(
+    state: &LocalState,
+    ops: &[(Operation, Option<Pushed>)],
+    writable: &Writable,
+) -> Vec<String> {
+    let mut paths: Vec<String> = ops
         .iter()
-        .filter(|(_, k)| !local.contains_key(&k.path) && !oversized.contains(&k.path))
-        .map(|(e, _)| *e)
+        .flat_map(|(op, _)| {
+            let (entry, to) = match op {
+                Operation::Put { entry, path, .. } | Operation::Folder { entry, path, .. } => {
+                    (entry, Some(path))
+                }
+                Operation::Delete { entry, .. } => (entry, None),
+            };
+            state
+                .entries
+                .get(entry)
+                .map(|k| &k.path)
+                .into_iter()
+                .chain(to)
+        })
+        .map(|p| p.as_str().to_owned())
+        .filter(|p| !writable(p))
         .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// The operations a push commits: deletions first, then the puts of the files
+/// changed here (a new file with a gone entry's content is a rename).
+async fn plan_ops<H: Host>(
+    host: &H,
+    state: &mut LocalState,
+    opts: &Options,
+    local: &HashMap<VaultPath, FileMeta>,
+    mut gone: Vec<EntryId>,
+) -> Result<Vec<(Operation, Option<Pushed>)>, SyncError> {
     let mut ops: Vec<(Operation, Option<Pushed>)> = Vec::new();
     let by_path: HashMap<VaultPath, EntryId> = state
         .entries
@@ -836,7 +879,25 @@ async fn push<H: Host, R: Remote>(
         })
         .collect();
     deletes.extend(ops);
-    let ops = deletes;
+    Ok(deletes)
+}
+
+async fn push<H: Host, R: Remote>(
+    host: &H,
+    remote: &R,
+    state: &mut LocalState,
+    opts: &Options,
+    report: &mut Report,
+) -> Result<(), SyncError> {
+    let (local, oversized) = scan_local(host, opts, report).await?;
+    // Entries whose file is gone: deletions, unless a new file has their content (a rename).
+    let gone: Vec<EntryId> = state
+        .entries
+        .iter()
+        .filter(|(_, k)| !local.contains_key(&k.path) && !oversized.contains(&k.path))
+        .map(|(e, _)| *e)
+        .collect();
+    let ops = plan_ops(host, state, opts, &local, gone).await?;
     // Counted before any upload, so a refusal can say how many files it kept.
     report.pushed = ops.len();
     report.pushed_bytes = ops
@@ -844,28 +905,7 @@ async fn push<H: Host, R: Remote>(
         .filter_map(|(_, p)| p.as_ref().map(|p| p.size))
         .fold(0u64, u64::saturating_add);
     if let Some(writable) = &opts.writable {
-        // A put is checked where it lands and where the entry lies (a rename
-        // writes both ends); a deletion, where the entry lies.
-        let mut paths: Vec<String> =
-            ops.iter()
-                .flat_map(|(op, _)| {
-                    let (entry, to) = match op {
-                        Operation::Put { entry, path, .. }
-                        | Operation::Folder { entry, path, .. } => (entry, Some(path)),
-                        Operation::Delete { entry, .. } => (entry, None),
-                    };
-                    state
-                        .entries
-                        .get(entry)
-                        .map(|k| &k.path)
-                        .into_iter()
-                        .chain(to)
-                })
-                .map(|p| p.as_str().to_owned())
-                .filter(|p| !writable(p))
-                .collect();
-        paths.sort();
-        paths.dedup();
+        let paths = refused_paths(state, &ops, writable);
         if !paths.is_empty() {
             // Like a refused push: local changes are kept, remote ones still
             // arrive (code review of 2026-11-17, #1).
@@ -1307,6 +1347,45 @@ enum Applied {
     Deferred,
 }
 
+/// Makes room at the item's path; false when a local file there is in the
+/// way and the item must wait.
+async fn clear_path<H: Host>(
+    host: &H,
+    state: &mut LocalState,
+    item: &EntryState,
+    known: Option<&Known>,
+    opts: &Options,
+    report: &mut Report,
+) -> Result<bool, SyncError> {
+    // The path is held here by another entry: if that file is untouched, the
+    // server holds its content, and its own change (later in the log) brings
+    // it back where it now lives; move it out of the way (review 3.6 F1).
+    if let Some(other) = state.entry_at(&item.path).filter(|e| *e != item.entry) {
+        if let Some(o) = state.entries.get(&other).cloned() {
+            if !untouched(host, &o).await? {
+                report.deferred.push(item.path.clone());
+                return Ok(false);
+            }
+            if host.stat(&o.path).await?.is_some() {
+                host.trash(&o.path).await?;
+            }
+            state.entries.remove(&other);
+        }
+    } else if known.is_none_or(|k| k.path != item.path && !k.path.same_but_case(&item.path))
+        && host.stat(&item.path).await?.is_some()
+    {
+        if !opts.prefer_remote {
+            // A local file this device never synced: never written over.
+            report.deferred.push(item.path.clone());
+            return Ok(false);
+        }
+        // Configuration: the server's copy is the user's; this one is kept
+        // in `.trash`.
+        host.trash(&item.path).await?;
+    }
+    Ok(true)
+}
+
 /// Brings one remote entry state onto the disk, never over a local edit.
 async fn apply<H: Host, R: Remote>(
     host: &H,
@@ -1342,33 +1421,8 @@ async fn apply<H: Host, R: Remote>(
         ));
         return Ok(Applied::Done);
     }
-    // The path is held here by another entry: if that file is untouched, the
-    // server holds its content, and its own change (later in the log) brings
-    // it back where it now lives; move it out of the way (review 3.6 F1).
-    if let Some(other) = state.entry_at(&item.path).filter(|e| *e != item.entry) {
-        if let Some(o) = state.entries.get(&other).cloned() {
-            if !untouched(host, &o).await? {
-                report.deferred.push(item.path.clone());
-                return Ok(Applied::Deferred);
-            }
-            if host.stat(&o.path).await?.is_some() {
-                host.trash(&o.path).await?;
-            }
-            state.entries.remove(&other);
-        }
-    } else if known
-        .as_ref()
-        .is_none_or(|k| k.path != item.path && !k.path.same_but_case(&item.path))
-        && host.stat(&item.path).await?.is_some()
-    {
-        if !opts.prefer_remote {
-            // A local file this device never synced: never written over.
-            report.deferred.push(item.path.clone());
-            return Ok(Applied::Deferred);
-        }
-        // Configuration: the server's copy is the user's; this one is kept
-        // in `.trash`.
-        host.trash(&item.path).await?;
+    if !clear_path(host, state, item, known.as_ref(), opts, report).await? {
+        return Ok(Applied::Deferred);
     }
     // A change of case first moves the file, which a case-insensitive disk
     // sees at both paths (review 2026-11-15 #11); the content follows below.

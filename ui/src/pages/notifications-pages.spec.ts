@@ -1,10 +1,9 @@
-import { flushPromises, mount } from "@vue/test-utils";
+import { flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createMemoryHistory, createRouter } from "vue-router";
 
 import { i18n } from "@/i18n";
-import { refusal } from "@/test-utils";
+import { at, refusal } from "@/test-utils";
 
 vi.mock("@/api/generated/sdk.gen", () => ({
   listRules: vi.fn(),
@@ -37,21 +36,6 @@ const ruleView = (over: object = {}) => ({
   last: { at: "2026-11-15T12:33:21Z", result: "200" },
   ...over,
 });
-
-async function at(component: object, path: string, routePath: string) {
-  const router = createRouter({
-    history: createMemoryHistory("/app/"),
-    routes: [
-      { path: routePath, component },
-      { path: "/:any(.*)*", component: { template: "<p/>" } },
-    ],
-  });
-  await router.push(path);
-  const w = mount(component, { global: { plugins: [router, i18n] } });
-  await flushPromises();
-  await flushPromises();
-  return w;
-}
 
 beforeEach(() => {
   setActivePinia(createPinia());

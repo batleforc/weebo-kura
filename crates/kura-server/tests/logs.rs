@@ -5,7 +5,7 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::app::{Captured, env, vault_id};
+use common::app::{capture_logs, env, vault_id};
 
 /// T19 (logging half): logs carry the route template, never the path, which
 /// holds vault ids and, later, note paths. T10 (denial half): every refusal is
@@ -15,14 +15,7 @@ async fn logs_name_routes_and_audit_every_denial() {
     let Some(e) = env(module_path!()).await else {
         return;
     };
-    let captured = Captured::default();
-    let sink = captured.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_env_filter("debug,sqlx=off")
-        .with_writer(move || sink.clone())
-        .with_ansi(false)
-        .finish();
-    let _guard = tracing::subscriber::set_default(subscriber);
+    let (captured, _guard) = capture_logs();
     let member = e.key.token("u1", "s1", &["maxime-members"]);
     let d = e.register(&member, "laptop").await;
     let secret = vault_id(&e, "secrets").await;

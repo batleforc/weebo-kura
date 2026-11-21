@@ -241,6 +241,16 @@ async fn readyz(State(state): State<SharedState>) -> Result<Json<ProbeStatus>, A
 
 /// `/v1`: every API route.
 fn v1_router() -> OpenApiRouter<SharedState> {
+    small_body_routes().merge(large_body_routes())
+}
+
+/// The routes that keep the default body limit.
+fn small_body_routes() -> OpenApiRouter<SharedState> {
+    account_routes().merge(vault_routes())
+}
+
+/// Status, devices, identity and notifications.
+fn account_routes() -> OpenApiRouter<SharedState> {
     OpenApiRouter::new()
         .routes(routes!(admin::admin_status))
         .routes(routes!(devices::register_device, devices::list_devices))
@@ -257,6 +267,11 @@ fn v1_router() -> OpenApiRouter<SharedState> {
         ))
         .routes(routes!(notifications::test_rule))
         .routes(routes!(notifications::list_deliveries))
+}
+
+/// Vaults and everything read or written through them.
+fn vault_routes() -> OpenApiRouter<SharedState> {
+    OpenApiRouter::new()
         .routes(routes!(vaults::list_vaults, vaults::create_vault))
         .routes(routes!(vaults::delete_vault))
         .routes(routes!(vaults::list_bindings))
@@ -272,6 +287,11 @@ fn v1_router() -> OpenApiRouter<SharedState> {
         .routes(routes!(search::search))
         .routes(routes!(events::create_ticket))
         .routes(routes!(events::events))
+}
+
+/// The routes with their own, larger body limit.
+fn large_body_routes() -> OpenApiRouter<SharedState> {
+    OpenApiRouter::new()
         .merge(
             // 1,000 hashes (about 67 KB of JSON) and a large file's manifest
             // do not fit in 64 KiB either (found by the first-attach run).

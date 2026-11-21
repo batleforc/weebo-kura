@@ -239,7 +239,7 @@ pub(super) async fn store_chunks(
 
     // 2. Seal and store, no transaction open. Storage first: if it fails, no
     //    row points at a missing object (§14); objects already put are left
-    //    to the orphan sweep (migration 0011).
+    //    to the orphan sweep.
     let key = store
         .keys
         .get(&state.db, a.tenant, &a.tenant_slug, v)

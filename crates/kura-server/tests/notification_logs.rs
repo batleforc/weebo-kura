@@ -7,7 +7,7 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::app::{Captured, env_custom, storage};
+use common::app::{capture_logs, env_custom, storage};
 use kura_server::notifier::Notifier;
 use serde_json::json;
 
@@ -30,14 +30,7 @@ async fn rule_changes_are_audited() {
     else {
         return;
     };
-    let captured = Captured::default();
-    let sink = captured.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_env_filter("debug,sqlx=off")
-        .with_writer(move || sink.clone())
-        .with_ansi(false)
-        .finish();
-    let _guard = tracing::subscriber::set_default(subscriber);
+    let (captured, _guard) = capture_logs();
 
     let token = e.key.token("boss", "sa", &["maxime-admins"]);
     let device = e.register(&token, "desk").await;

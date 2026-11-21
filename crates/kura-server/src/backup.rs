@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use futures_util::TryStreamExt as _;
 use object_store::path::Path as ObjectPath;
-use object_store::{ObjectStore, ObjectStoreExt as _, PutPayload};
+use object_store::{ObjectStore, ObjectStoreExt as _, PutPayload, WriteMultipart};
 use sqlx::Row as _;
 use uuid::Uuid;
 
@@ -114,48 +114,37 @@ async fn copy_locked(
         objects: 0,
         copied: 0,
     };
-    // shortcut: every key of the copy in memory (about 100 bytes each) for
-    // the key list; stream it to the target if vaults reach millions.
-    let mut keys: Vec<String> = Vec::new();
-    for v in vaults {
-        let prefix = ObjectPath::from(v.to_string());
-        // Object keys are unique per upload, so a key present is the same bytes.
-        let have: HashSet<ObjectPath> = target
-            .list(Some(&prefix))
-            .map_ok(|m| m.location)
-            .try_collect()
-            .await?;
-        let mut listing = source.list(Some(&prefix));
-        while let Some(meta) = listing.try_next().await? {
-            out.objects = out.objects.saturating_add(1);
-            keys.push(meta.location.to_string());
-            if have.contains(&meta.location) {
-                continue;
-            }
-            let bytes = source.get(&meta.location).await?.bytes().await?;
-            target.put(&meta.location, PutPayload::from(bytes)).await?;
-            out.copied = out.copied.saturating_add(1);
+    // The key list streams to the target in parts as the copy goes; it only
+    // becomes visible once the lock check below passed.
+    let mut keys = None;
+    if let Err(e) = copy_objects(source, target, &vaults, &mut out, &mut keys).await {
+        if let Some(k) = keys {
+            drop(k.abort().await);
         }
+        return Err(e);
     }
     // A dropped session releases the lock silently, and maintenance may have
     // deleted objects since: then this copy proves nothing (review 6 M4).
-    let held: bool = sqlx::query_scalar(
+    let held: Result<bool, BackupError> = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND mode = 'ExclusiveLock' AND granted)",
     )
     .fetch_one(&mut **conn)
     .await
-    .map_err(|_| BackupError::LockLost)?;
-    if !held {
+    .map_err(|_| BackupError::LockLost);
+    if !matches!(held, Ok(true)) {
+        if let Some(k) = keys {
+            drop(k.abort().await);
+        }
         return Err(BackupError::LockLost);
     }
     // Every key the database may name at T: pruning the copy deletes only
     // keys no kept restore point lists (operator guide §12).
-    target
-        .put(
-            &ObjectPath::from(format!("backups/{}.keys", out.recover_to)),
-            PutPayload::from(keys.join("\n").into_bytes()),
-        )
-        .await?;
+    let keys_path = ObjectPath::from(format!("backups/{}.keys", out.recover_to));
+    match keys {
+        Some(k) => drop(k.finish().await?),
+        // Nothing listed: a multipart upload cannot be empty.
+        None => drop(target.put(&keys_path, PutPayload::default()).await?),
+    }
     let manifest =
         serde_json::to_vec_pretty(&out).map_err(|e| BackupError::Other(e.to_string()))?;
     target
@@ -170,6 +159,54 @@ async fn copy_locked(
         .execute(&state.db)
         .await?;
     Ok(out)
+}
+
+/// Copies the objects `target` lacks, vault by vault, and appends every key
+/// of the copy to `keys` (newline-separated, no trailing one), a multipart
+/// upload opened at the first key.
+async fn copy_objects(
+    source: &dyn ObjectStore,
+    target: &dyn ObjectStore,
+    vaults: &[Uuid],
+    out: &mut Copied,
+    keys: &mut Option<WriteMultipart>,
+) -> Result<(), BackupError> {
+    for v in vaults {
+        let prefix = ObjectPath::from(v.to_string());
+        // Object keys are unique per upload, so a key present is the same bytes.
+        let have: HashSet<ObjectPath> = target
+            .list(Some(&prefix))
+            .map_ok(|m| m.location)
+            .try_collect()
+            .await?;
+        let mut listing = source.list(Some(&prefix));
+        while let Some(meta) = listing.try_next().await? {
+            let up = match keys {
+                Some(up) => {
+                    up.wait_for_capacity(4).await?;
+                    up.write(b"\n");
+                    up
+                }
+                None => keys.insert(WriteMultipart::new(
+                    target
+                        .put_multipart(&ObjectPath::from(format!(
+                            "backups/{}.keys",
+                            out.recover_to
+                        )))
+                        .await?,
+                )),
+            };
+            up.write(meta.location.as_ref().as_bytes());
+            out.objects = out.objects.saturating_add(1);
+            if have.contains(&meta.location) {
+                continue;
+            }
+            let bytes = source.get(&meta.location).await?.bytes().await?;
+            target.put(&meta.location, PutPayload::from(bytes)).await?;
+            out.copied = out.copied.saturating_add(1);
+        }
+    }
+    Ok(())
 }
 
 /// The restore drill's check: `count` random chunks fetched, decrypted with

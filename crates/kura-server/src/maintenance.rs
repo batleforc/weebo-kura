@@ -536,45 +536,57 @@ pub async fn purge_objects(
     cutoff: time::OffsetDateTime,
 ) -> Result<bool, MaintenanceError> {
     let prefix = ObjectPath::from(vault.to_string());
-    // shortcut: the prefix is listed whole in memory (about 100 bytes a key);
-    // stream it in pages if vaults reach millions of objects.
-    let listed: Vec<(String, bool)> = objects
-        .list(Some(&prefix))
-        .map(|m| {
-            m.map(|m| {
-                (
-                    m.location.to_string(),
-                    i128::from(m.last_modified.timestamp_millis())
-                        < cutoff.unix_timestamp_nanos() / 1_000_000,
-                )
-            })
-        })
-        .try_collect()
-        .await?;
+    // One pass over the listing, a page of BATCH keys at a time.
+    let page_len = BATCH.unsigned_abs() as usize;
     let mut kept = 0usize;
-    for page in listed.chunks(BATCH.unsigned_abs() as usize) {
-        let old: Vec<String> = page
-            .iter()
-            .filter(|(_, old)| *old)
-            .map(|(k, _)| k.clone())
-            .collect();
-        lock_held(db, lock_pid).await?;
-        let known: HashSet<String> =
-            sqlx::query_scalar::<_, String>("SELECT kura_known_objects($1, $2)")
-                .bind(vault)
-                .bind(&old)
-                .fetch_all(db)
-                .await?
-                .into_iter()
-                .collect();
-        let gone: Vec<String> = old.into_iter().filter(|k| !known.contains(k)).collect();
-        let n = gone.len();
-        let deleted = delete_objects(objects, gone).await;
-        kept = kept
-            .saturating_add(page.len().saturating_sub(n))
-            .saturating_add(n.saturating_sub(usize::try_from(deleted).unwrap_or(n)));
+    let mut page: Vec<(String, bool)> = Vec::with_capacity(page_len);
+    let mut listing = objects.list(Some(&prefix));
+    while let Some(m) = listing.try_next().await? {
+        page.push((
+            m.location.to_string(),
+            i128::from(m.last_modified.timestamp_millis())
+                < cutoff.unix_timestamp_nanos() / 1_000_000,
+        ));
+        if page.len() >= page_len {
+            kept = kept.saturating_add(purge_page(db, lock_pid, objects, vault, &page).await?);
+            page.clear();
+        }
+    }
+    if !page.is_empty() {
+        kept = kept.saturating_add(purge_page(db, lock_pid, objects, vault, &page).await?);
     }
     Ok(kept == 0)
+}
+
+/// Deletes the old, unreferenced keys of one page; returns how many stay.
+async fn purge_page(
+    db: &sqlx::PgPool,
+    lock_pid: i32,
+    objects: &dyn ObjectStore,
+    vault: Uuid,
+    page: &[(String, bool)],
+) -> Result<usize, MaintenanceError> {
+    let old: Vec<String> = page
+        .iter()
+        .filter(|(_, old)| *old)
+        .map(|(k, _)| k.clone())
+        .collect();
+    lock_held(db, lock_pid).await?;
+    let known: HashSet<String> =
+        sqlx::query_scalar::<_, String>("SELECT kura_known_objects($1, $2)")
+            .bind(vault)
+            .bind(&old)
+            .fetch_all(db)
+            .await?
+            .into_iter()
+            .collect();
+    let gone: Vec<String> = old.into_iter().filter(|k| !known.contains(k)).collect();
+    let n = gone.len();
+    let deleted = delete_objects(objects, gone).await;
+    Ok(page
+        .len()
+        .saturating_sub(n)
+        .saturating_add(n.saturating_sub(usize::try_from(deleted).unwrap_or(n))))
 }
 
 #[cfg(test)]

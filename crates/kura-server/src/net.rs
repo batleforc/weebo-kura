@@ -21,7 +21,7 @@ pub fn client_addr(peer: IpAddr, headers: &HeaderMap, trusted: &[IpNet]) -> IpAd
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(','))
         .map(str::trim)
-        .map(|s| s.parse::<IpAddr>())
+        .map(str::parse::<IpAddr>)
         .collect::<Result<_, _>>()
         .unwrap_or_default();
     let mut client = peer;

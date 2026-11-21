@@ -5,93 +5,46 @@
 #![expect(
     clippy::unwrap_used,
     clippy::expect_used,
-    clippy::indexing_slicing,
     reason = "test helpers fail the test on purpose"
 )]
 
 mod common;
 
-use std::sync::Arc;
-
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::app::{CONFIG, Env, env_with, problem, storage, vault_id};
+use common::app::{CONFIG, Stored as S, problem};
 use futures_util::TryStreamExt as _;
 use kura_core::{ChunkHash, blob_hash};
 use kura_server::app::app;
 use kura_server::maintenance::{BACKUP_LOCK, Report, Settings, pass};
-use kura_server::store::Storage;
 use object_store::ObjectStoreExt as _;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-struct S {
-    e: Env,
-    st: Arc<Storage>,
-    tok: String,
-    d: String,
-    v: String,
-}
-
 async fn setup(test: &str) -> Option<S> {
-    let st = storage(test).await?;
-    let e = env_with(test, Some(st.clone())).await?;
-    let tok = e.key.token("u1", "s1", &["maxime-members"]);
-    let d = e.register(&tok, "desk").await;
-    let v = vault_id(&e, "knowledge").await;
-    Some(S { e, st, tok, d, v })
+    S::new(test, ("u1", "s1", &["maxime-members"]), "desk").await
 }
 
 impl S {
     async fn put_chunk(&self, data: &[u8]) -> String {
-        let h = ChunkHash::of(data).to_string();
-        let req = Request::put(format!("/v1/vaults/{}/chunks/{h}", self.v))
-            .header("authorization", format!("Bearer {}", self.tok))
-            .header("x-kura-device", &self.d)
-            .body(Body::from(data.to_vec()))
-            .unwrap();
-        let r = app(self.e.state.clone()).oneshot(req).await.unwrap();
-        assert!(r.status().is_success(), "{}", r.status());
-        h
+        self.e.put_chunk(&self.tok, &self.d, &self.v, data).await
     }
 
     /// One chunk's file: chunk, manifest; returns (blob, size).
     async fn put_file(&self, data: &[u8]) -> (String, u64) {
-        let c = self.put_chunk(data).await;
-        let size = data.len() as u64;
-        let b = blob_hash(size, &[ChunkHash::of(data)]).to_string();
-        let (st, body) = self.put_blob(&b, size, &c).await;
-        assert_eq!(st, StatusCode::NO_CONTENT, "{body}");
-        (b, size)
+        self.e.upload(&self.tok, &self.d, &self.v, data).await
     }
 
     async fn put_blob(&self, b: &str, size: u64, chunk: &str) -> (StatusCode, Value) {
         self.e
-            .call(
-                "PUT",
-                &format!("/v1/vaults/{}/blobs/{b}", self.v),
-                &self.tok,
-                Some(&self.d),
-                Some(json!({ "size": size, "chunks": [chunk] })),
-            )
+            .put_blob((&self.tok, &self.d, &self.v), b, size, chunk)
             .await
     }
 
     async fn commit(&self, op: Value) -> Value {
-        let (st, b) = self
-            .e
-            .call(
-                "POST",
-                &format!("/v1/vaults/{}/commits", self.v),
-                &self.tok,
-                Some(&self.d),
-                Some(json!({ "idempotencyKey": Uuid::new_v4().to_string(), "operations": [op] })),
-            )
-            .await;
-        assert_eq!(st, StatusCode::OK, "{b}");
-        b["results"][0]["head"].clone()
+        self.e.commit_head(&self.tok, &self.d, &self.v, op).await
     }
 
     async fn objects(&self) -> usize {
@@ -308,6 +261,86 @@ async fn orphans_are_swept_and_the_backup_lock_pauses_deletion() {
     );
 }
 
+async fn reconcile(s: &S, docs: &str) {
+    let dir = std::env::temp_dir().join(format!("kura-t18-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("config.yaml"), docs).unwrap();
+    let files = kura_server::reconcile::files::read_dir(&dir).unwrap();
+    kura_server::reconcile::reconcile(&s.e.t.app, &files, true)
+        .await
+        .unwrap();
+}
+
+async fn epoch(s: &S) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>("SELECT epoch FROM vault WHERE id = $1::uuid")
+        .bind(&s.v)
+        .fetch_one(&s.e.t.owner)
+        .await
+        .unwrap()
+}
+
+async fn make_due(s: &S) {
+    s.sql("UPDATE vault SET delete_after = now() - interval '1 second' WHERE delete_after IS NOT NULL")
+        .await;
+}
+
+async fn purge_vault(s: &S) -> i64 {
+    sqlx::query_scalar("SELECT kura_purge_vault($1::uuid, 1)")
+        .bind(&s.v)
+        .fetch_one(&s.e.t.app)
+        .await
+        .unwrap()
+}
+
+/// Removed and due again, then back after a first batch: every device must
+/// resync without deleting (a new epoch), and no entry is left without its
+/// head (review 5 H1). Returns the epoch once restored.
+async fn restored_after_first_batch(s: &S, with: &str, without: &str) -> Uuid {
+    let before = epoch(s).await;
+    reconcile(s, without).await;
+    make_due(s).await;
+    for _ in 0..2 {
+        assert_eq!(purge_vault(s).await, 1);
+    }
+    assert_eq!(s.count("entry").await, 0, "the entry left with its history");
+    reconcile(s, with).await;
+    assert_ne!(epoch(s).await, before, "devices get history_rewound");
+    let headless: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM entry e WHERE NOT EXISTS (SELECT 1 FROM revision r WHERE r.id = e.head_revision)",
+    )
+    .fetch_one(&s.e.t.owner)
+    .await
+    .unwrap();
+    assert_eq!(headless, 0);
+    assert_eq!(purge_vault(s).await, -1, "no longer due");
+    epoch(s).await
+}
+
+/// Removed again and due: purged, rows then objects, the vault row last;
+/// this second cycle changes the epoch again from its first batch.
+async fn purged_when_due(s: &S, without: &str, restored: Uuid) {
+    reconcile(s, without).await;
+    make_due(s).await;
+    assert!(purge_vault(s).await >= 0);
+    assert_ne!(
+        epoch(s).await,
+        restored,
+        "a second cycle changes the epoch too"
+    );
+    let r = s.pass().await;
+    assert_eq!(r.purged_vaults, 1, "{r:?}");
+    for t in ["entry", "revision", "blob", "chunk", "commit_record"] {
+        assert_eq!(s.count(t).await, 0, "{t}");
+    }
+    assert_eq!(s.objects().await, 0);
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM vault WHERE id = $1::uuid")
+        .bind(&s.v)
+        .fetch_one(&s.e.t.owner)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+}
+
 /// T18 and decision 33: a vault removed with `Delete` keeps everything for
 /// its grace period; its document returning cancels the deletion; once due,
 /// its rows and objects are purged, the vault row last.
@@ -330,20 +363,8 @@ async fn restored_document_cancels_deletion() {
         .filter(|d| !d.contains("name: knowledge"))
         .collect::<Vec<_>>()
         .join("\n---\n");
-    let reconcile = |docs: String| {
-        let pool = s.e.t.app.clone();
-        async move {
-            let dir = std::env::temp_dir().join(format!("kura-t18-{}", Uuid::new_v4()));
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("config.yaml"), docs).unwrap();
-            let files = kura_server::reconcile::files::read_dir(&dir).unwrap();
-            kura_server::reconcile::reconcile(&pool, &files, true)
-                .await
-                .unwrap()
-        }
-    };
-    reconcile(with.clone()).await;
-    reconcile(without.clone()).await;
+    reconcile(&s, &with).await;
+    reconcile(&s, &without).await;
     let due: Option<time::OffsetDateTime> =
         sqlx::query_scalar("SELECT delete_after FROM vault WHERE id = $1::uuid")
             .bind(&s.v)
@@ -353,82 +374,13 @@ async fn restored_document_cancels_deletion() {
     let days = (due.unwrap() - time::OffsetDateTime::now_utc()).whole_days();
     assert_eq!(days, 29, "30 days of grace");
     // The grace period passes, then the document comes back.
-    s.sql("UPDATE vault SET delete_after = now() - interval '1 second' WHERE delete_after IS NOT NULL")
-        .await;
-    reconcile(with.clone()).await;
+    make_due(&s).await;
+    reconcile(&s, &with).await;
     let r = s.pass().await;
     assert_eq!(r.purged_vaults, 0, "{r:?}");
     assert_eq!((s.count("entry").await, s.objects().await), (1, 1));
-    // Removed and due again, then back after a first batch: every device
-    // must resync without deleting (a new epoch), and no entry is left
-    // without its head (review 5 H1).
-    let epoch = |s: &S| {
-        let (pool, v) = (s.e.t.owner.clone(), s.v.clone());
-        async move {
-            sqlx::query_scalar::<_, Uuid>("SELECT epoch FROM vault WHERE id = $1::uuid")
-                .bind(v)
-                .fetch_one(&pool)
-                .await
-                .unwrap()
-        }
-    };
-    let before = epoch(&s).await;
-    reconcile(without.clone()).await;
-    s.sql("UPDATE vault SET delete_after = now() - interval '1 second' WHERE delete_after IS NOT NULL")
-        .await;
-    for _ in 0..2 {
-        let n: i64 = sqlx::query_scalar("SELECT kura_purge_vault($1::uuid, 1)")
-            .bind(&s.v)
-            .fetch_one(&s.e.t.app)
-            .await
-            .unwrap();
-        assert_eq!(n, 1);
-    }
-    assert_eq!(s.count("entry").await, 0, "the entry left with its history");
-    reconcile(with.clone()).await;
-    assert_ne!(epoch(&s).await, before, "devices get history_rewound");
-    let headless: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM entry e WHERE NOT EXISTS (SELECT 1 FROM revision r WHERE r.id = e.head_revision)",
-    )
-    .fetch_one(&s.e.t.owner)
-    .await
-    .unwrap();
-    assert_eq!(headless, 0);
-    let n: i64 = sqlx::query_scalar("SELECT kura_purge_vault($1::uuid, 1)")
-        .bind(&s.v)
-        .fetch_one(&s.e.t.app)
-        .await
-        .unwrap();
-    assert_eq!(n, -1, "no longer due");
-    // Removed again and due: purged, rows then objects, the vault row last;
-    // this second cycle changes the epoch again from its first batch.
-    let restored = epoch(&s).await;
-    reconcile(without).await;
-    s.sql("UPDATE vault SET delete_after = now() - interval '1 second' WHERE delete_after IS NOT NULL")
-        .await;
-    let n: i64 = sqlx::query_scalar("SELECT kura_purge_vault($1::uuid, 1)")
-        .bind(&s.v)
-        .fetch_one(&s.e.t.app)
-        .await
-        .unwrap();
-    assert!(n >= 0);
-    assert_ne!(
-        epoch(&s).await,
-        restored,
-        "a second cycle changes the epoch too"
-    );
-    let r = s.pass().await;
-    assert_eq!(r.purged_vaults, 1, "{r:?}");
-    for t in ["entry", "revision", "blob", "chunk", "commit_record"] {
-        assert_eq!(s.count(t).await, 0, "{t}");
-    }
-    assert_eq!(s.objects().await, 0);
-    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM vault WHERE id = $1::uuid")
-        .bind(&s.v)
-        .fetch_one(&s.e.t.owner)
-        .await
-        .unwrap();
-    assert_eq!(left, 0);
+    let restored = restored_after_first_batch(&s, &with, &without).await;
+    purged_when_due(&s, &without, restored).await;
 }
 
 /// §10.1: the phase 6 metrics move with real traffic (PR 6.1).
@@ -577,6 +529,22 @@ async fn backup_copies_new_objects_and_the_drill_check_catches_corruption() {
     );
 }
 
+/// A connection holding the shared backup lock, and its backend pid.
+async fn hold_backup_lock(db: &sqlx::PgPool) -> (sqlx::pool::PoolConnection<sqlx::Postgres>, i32) {
+    let mut lock = db.acquire().await.unwrap();
+    let held: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock_shared($1)")
+        .bind(BACKUP_LOCK)
+        .fetch_one(&mut *lock)
+        .await
+        .unwrap();
+    assert!(held);
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *lock)
+        .await
+        .unwrap();
+    (lock, pid)
+}
+
 /// Review 2026-11-15 #8 and #15: a vault restored while its objects are
 /// purged. An object a device uploads again (written after the cutoff, or
 /// named by a chunk row) is kept, and the purge does not finish. And once
@@ -592,17 +560,7 @@ async fn purge_keeps_objects_uploaded_after_its_rows_went() {
         .put(&stray, b"sealed bytes".to_vec().into())
         .await
         .unwrap();
-    let mut lock = s.e.state.db.acquire().await.unwrap();
-    let held: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock_shared($1)")
-        .bind(BACKUP_LOCK)
-        .fetch_one(&mut *lock)
-        .await
-        .unwrap();
-    assert!(held);
-    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
-        .fetch_one(&mut *lock)
-        .await
-        .unwrap();
+    let (mut lock, pid) = hold_backup_lock(&s.e.state.db).await;
     let v: Uuid = s.v.parse().unwrap();
     let objects = s.st.objects();
     let now = time::OffsetDateTime::now_utc();
@@ -636,4 +594,34 @@ async fn purge_keeps_objects_uploaded_after_its_rows_went() {
         .unwrap();
     assert!(purge(after).await.unwrap(), "nothing left");
     assert_eq!(s.objects().await, 0);
+}
+
+/// The purge lists the prefix as a stream, a page of BATCH keys at a time:
+/// more keys than one page are all deleted, and the sibling prefix stays.
+#[tokio::test]
+async fn purge_walks_a_listing_longer_than_one_page() {
+    let Some(s) = setup(module_path!()).await else {
+        return;
+    };
+    let mem = object_store::memory::InMemory::new();
+    let v: Uuid = s.v.parse().unwrap();
+    let total = kura_server::maintenance::BATCH as usize * 2 + 37;
+    for i in 0..total {
+        let key = object_store::path::Path::from(format!("{v}/k{i}"));
+        mem.put(&key, vec![1u8].into()).await.unwrap();
+    }
+    let other = object_store::path::Path::from(format!("{}/k", Uuid::new_v4()));
+    mem.put(&other, vec![1u8].into()).await.unwrap();
+    let (_lock, pid) = hold_backup_lock(&s.e.state.db).await;
+    let cutoff = time::OffsetDateTime::now_utc() + time::Duration::hours(1);
+    assert!(
+        kura_server::maintenance::purge_objects(&s.e.state.db, pid, &mem, v, cutoff)
+            .await
+            .unwrap()
+    );
+    let left: Vec<_> = object_store::ObjectStore::list(&mem, None)
+        .try_collect()
+        .await
+        .unwrap();
+    assert_eq!(left.len(), 1, "only the other prefix remains");
 }

@@ -183,8 +183,7 @@ async function diagrams(doc: Document): Promise<void> {
   ).filter((c) => (c.textContent ?? "").length <= MAX_DIAGRAM);
   if (blocks.length === 0) return;
   const { default: mermaid } = await import("mermaid");
-  // shortcut: drawn in the theme the note opens in, a theme switch keeps it
-  // until the note is opened again; redraw on the switch if that shows.
+  // The theme in force now: BrowsePage draws again on a switch.
   mermaid.initialize({
     startOnLoad: false,
     securityLevel: "strict",

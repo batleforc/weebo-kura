@@ -3,6 +3,12 @@
 //! the configuration space, purged after 30 days) and the console's files.
 //! Opt-in: KURA_TEST_DATABASE_URL.
 
+#![expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test helpers fail the test on purpose"
+)]
+
 mod common;
 
 use axum::body::Body;
@@ -229,9 +235,14 @@ async fn web_device_is_reused_per_sid() {
         (StatusCode::UNAUTHORIZED, "/v1/problems/device_revoked")
     );
 
+    idle_web_devices_are_purged(&e).await;
+}
+
+/// idle web devices are purged: one phase of the test below.
+async fn idle_web_devices_are_purged(e: &Env) {
     // Web devices idle 30 days are purged; others stay to 180.
     let fresh = e.key.token("u3", "third-session", &["maxime-members"]);
-    let (_, w) = web(&e, &fresh).await;
+    let (_, w) = web(e, &fresh).await;
     let desk = e.register(&fresh, "desk").await;
     sqlx::query("UPDATE device SET last_seen = now() - interval '31 days' WHERE user_sub = 'u3'")
         .execute(&e.t.owner)
@@ -263,18 +274,7 @@ async fn a_web_device_never_gets_the_configuration_space() {
         "  tenantRef: { name: maxime }\n  bindings:",
         "  tenantRef: { name: maxime }\n  configSync: { categories: [snippets] }\n  bindings:",
     );
-    let dir = std::env::temp_dir().join(format!("kura-http-{}", e.t.name));
-    std::fs::write(dir.join("config.yaml"), docs).unwrap();
-    let files = kura_server::reconcile::files::read_dir(&dir).unwrap();
-    kura_server::reconcile::reconcile(&e.t.app, &files, true)
-        .await
-        .unwrap();
-    e.state.set_snapshot(
-        kura_server::reconcile::snapshot::load_if_changed(&e.t.app, None)
-            .await
-            .unwrap()
-            .unwrap(),
-    );
+    e.apply_config(&docs).await;
     let v = vault_id(&e, "knowledge").await;
     let token = e.key.token("u1", "s1", &["maxime-members"]);
     let (_, w) = web(&e, &token).await;

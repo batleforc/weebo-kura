@@ -435,3 +435,43 @@ async fn a_failed_tick_is_retried_as_a_local_change() {
     token.cancel();
     task.await.unwrap();
 }
+
+/// A configuration written elsewhere reaches the snapshot through the
+/// `NOTIFY`, well before the 5 s poll.
+#[tokio::test]
+async fn a_config_change_is_seen_before_the_poll() {
+    let Some(t) = test_db(module_path!()).await else {
+        return;
+    };
+    let state = std::sync::Arc::new(kura_server::app::AppState::new(
+        kura_server::metrics::Metrics::new().unwrap(),
+        t.app.clone(),
+        common::no_key_verifier(),
+    ));
+    let token = tokio_util::sync::CancellationToken::new();
+    let tasks = [
+        tokio::spawn(kura_server::reconcile::snapshot::run(
+            t.app.clone(),
+            state.clone(),
+            token.clone(),
+        )),
+        tokio::spawn(kura_server::notify::listen(
+            t.app.clone(),
+            state.clone(),
+            token.clone(),
+        )),
+    ];
+    // The loader has polled once (nothing stored) and sleeps; LISTEN is up.
+    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    assert!(state.snapshot().is_none());
+    let started = std::time::Instant::now();
+    apply(&t.app, &[tenant("a", ""), vault("a", "notes")]).await;
+    while state.snapshot().is_none() && started.elapsed() < std::time::Duration::from_secs(4) {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(state.snapshot().is_some(), "not loaded within 4 s");
+    token.cancel();
+    for task in tasks {
+        task.await.unwrap();
+    }
+}

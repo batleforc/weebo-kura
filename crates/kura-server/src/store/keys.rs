@@ -131,27 +131,26 @@ impl DataKeys {
             .fetch_optional(&mut *tx)
             .await?
             .flatten();
-        let wrapped = match stored {
-            Some(w) => w,
-            None => {
-                let (_ours, wrapped) = self
-                    .vault
-                    .new_data_key(&transit)
-                    .await
-                    .map_err(unavailable)?;
-                sqlx::query(write)
-                    .bind(&wrapped)
-                    .bind(vault)
-                    .execute(&mut *tx)
-                    .await?;
-                // Read back: if another replica won the race, its key is the key.
-                sqlx::query_scalar::<_, Option<String>>(read)
-                    .bind(vault)
-                    .fetch_optional(&mut *tx)
-                    .await?
-                    .flatten()
-                    .ok_or(ApiError::Unavailable("data key not stored".into()))?
-            }
+        let wrapped = if let Some(w) = stored {
+            w
+        } else {
+            let (_ours, wrapped) = self
+                .vault
+                .new_data_key(&transit)
+                .await
+                .map_err(unavailable)?;
+            sqlx::query(write)
+                .bind(&wrapped)
+                .bind(vault)
+                .execute(&mut *tx)
+                .await?;
+            // Read back: if another replica won the race, its key is the key.
+            sqlx::query_scalar::<_, Option<String>>(read)
+                .bind(vault)
+                .fetch_optional(&mut *tx)
+                .await?
+                .flatten()
+                .ok_or(ApiError::Unavailable("data key not stored".into()))?
         };
         tx.commit().await?;
         let plain = self

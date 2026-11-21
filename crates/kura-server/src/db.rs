@@ -77,7 +77,7 @@ pub async fn connect(
                             "cluster identity changed: vault epochs regenerated"
                         );
                     }
-                    // Before migration 0011 (the `migrate` job's own pool).
+                    // Before the migrations ran (the `migrate` job's own pool).
                     Err(sqlx::Error::Database(d)) if d.code().as_deref() == Some("42883") => {}
                     // A connection that could not check may run under a stale
                     // epoch: it is refused, and the pool tries a new one.

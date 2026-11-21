@@ -97,4 +97,22 @@ describe("event socket", () => {
     expect(FakeSocket.all).toHaveLength(4);
     w.close();
   });
+
+  it("drops a socket that goes silent for 2.5 pings, and reconnects", async () => {
+    const w = watchVault("v1", vi.fn());
+    await vi.advanceTimersByTimeAsync(0);
+    last()?.onopen?.();
+    // A ping every 30 s keeps it.
+    for (let i = 0; i < 4; i++) {
+      await vi.advanceTimersByTimeAsync(30_000);
+      last()?.send(JSON.stringify({ type: "ping", headSeq: 1 }));
+    }
+    expect(FakeSocket.all).toHaveLength(1);
+    expect(last()?.closed).toBe(false);
+    await vi.advanceTimersByTimeAsync(75_000);
+    expect(FakeSocket.all[0]?.closed).toBe(true);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeSocket.all).toHaveLength(2);
+    w.close();
+  });
 });

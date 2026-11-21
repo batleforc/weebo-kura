@@ -160,13 +160,31 @@ export const routes: RouteRecordRaw[] = [
   { path: "/:pathMatch(.*)*", redirect: "/vaults" },
 ];
 
+const TALL_WAIT = 1500;
+
+/**
+ * A saved place waits for the page to be tall enough to hold it (an async
+ * note reports its height after it renders), or `TALL_WAIT` ms, then lands.
+ */
+export async function whenTall<T extends { top?: number }>(
+  saved: T,
+): Promise<T> {
+  const need = (saved.top ?? 0) + window.innerHeight;
+  for (
+    let waited = 0;
+    waited < TALL_WAIT && document.documentElement.scrollHeight < need;
+    waited += 50
+  )
+    await new Promise((r) => setTimeout(r, 50));
+  return saved;
+}
+
 export function makeRouter(history = createWebHistory("/app/")): Router {
   const router = createRouter({
     history,
     routes,
-    // shortcut: a saved place is restored before an async note has its height, so a long note may land short; restore after the frame reports its height if it shows.
     scrollBehavior(to, from, saved) {
-      if (saved) return saved;
+      if (saved) return whenTall(saved);
       // Opening or closing a note's history keeps the reader's place.
       if (to.params.entry && to.params.entry === from.params.entry)
         return false;

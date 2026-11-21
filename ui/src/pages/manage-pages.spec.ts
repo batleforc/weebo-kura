@@ -1,10 +1,9 @@
-import { flushPromises, mount } from "@vue/test-utils";
+import { flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createMemoryHistory, createRouter } from "vue-router";
 
 import { i18n } from "@/i18n";
-import { refusal } from "@/test-utils";
+import { at, refusal } from "@/test-utils";
 
 vi.mock("@/api/generated/sdk.gen", () => ({
   listVaults: vi.fn(),
@@ -38,20 +37,6 @@ const vault = (
   role: string,
   managedBy = "config",
 ) => ({ id, name: id, namespace: tenant, tenant, role, managedBy });
-
-async function at(component: object, path: string, routePath: string) {
-  const router = createRouter({
-    history: createMemoryHistory("/app/"),
-    routes: [
-      { path: routePath, component },
-      { path: "/:any(.*)*", component: { template: "<p/>" } },
-    ],
-  });
-  await router.push(path);
-  const wrapper = mount(component, { global: { plugins: [router, i18n] } });
-  await flushPromises();
-  return wrapper;
-}
 
 beforeEach(() => {
   setActivePinia(createPinia());

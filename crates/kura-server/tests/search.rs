@@ -11,69 +11,21 @@
 
 mod common;
 
-use std::net::SocketAddr;
-use std::sync::Arc;
-
-use axum::body::Body;
-use axum::extract::ConnectInfo;
-use axum::http::{Request, StatusCode};
-use common::app::{CONFIG, Env, env_with, problem, storage, vault_id};
-use kura_core::{ChunkHash, blob_hash};
-use kura_server::app::app;
+use axum::http::StatusCode;
+use common::app::{CONFIG, Stored as S, problem};
 use kura_server::app::search::round;
-use kura_server::store::Storage;
 use object_store::ObjectStoreExt as _;
 use serde_json::{Value, json};
-use tower::ServiceExt;
 use uuid::Uuid;
 
-struct S {
-    e: Env,
-    st: Arc<Storage>,
-    tok: String,
-    d: String,
-    v: String,
-}
-
 async fn setup(test: &str) -> Option<S> {
-    let st = storage(test).await?;
-    let e = env_with(test, Some(st.clone())).await?;
-    let tok = e.key.token("boss", "sb", &["maxime-admins"]);
-    let d = e.register(&tok, "desk").await;
-    let v = vault_id(&e, "knowledge").await;
-    Some(S { e, st, tok, d, v })
+    S::new(test, ("boss", "sb", &["maxime-admins"]), "desk").await
 }
 
 impl S {
     async fn file(&self, entry: &str, path: &str, text: &str, base: Option<&str>) -> Value {
         let data = text.as_bytes();
-        let c = ChunkHash::of(data).to_string();
-        let req = Request::put(format!("/v1/vaults/{}/chunks/{c}", self.v))
-            .header("authorization", format!("Bearer {}", self.tok))
-            .header("x-kura-device", &self.d)
-            .body(Body::from(data.to_vec()))
-            .unwrap();
-        assert!(
-            app(self.e.state.clone())
-                .oneshot(req)
-                .await
-                .unwrap()
-                .status()
-                .is_success()
-        );
-        let size = data.len() as u64;
-        let b = blob_hash(size, &[ChunkHash::of(data)]).to_string();
-        let (st, body) = self
-            .e
-            .call(
-                "PUT",
-                &format!("/v1/vaults/{}/blobs/{b}", self.v),
-                &self.tok,
-                Some(&self.d),
-                Some(json!({ "size": size, "chunks": [c] })),
-            )
-            .await;
-        assert_eq!(st, StatusCode::NO_CONTENT, "{body}");
+        let (b, size) = self.e.upload(&self.tok, &self.d, &self.v, data).await;
         let mut op = json!({ "op": "put", "entry": entry, "path": path, "blob": b, "size": size });
         if let Some(base) = base {
             op["base"] = json!(base);
@@ -82,18 +34,7 @@ impl S {
     }
 
     async fn commit(&self, op: Value) -> Value {
-        let (st, body) = self
-            .e
-            .call(
-                "POST",
-                &format!("/v1/vaults/{}/commits", self.v),
-                &self.tok,
-                Some(&self.d),
-                Some(json!({ "idempotencyKey": Uuid::new_v4().to_string(), "operations": [op] })),
-            )
-            .await;
-        assert_eq!(st, StatusCode::OK, "{body}");
-        body["results"][0]["head"].clone()
+        self.e.commit_head(&self.tok, &self.d, &self.v, op).await
     }
 
     async fn search(&self, query: &str) -> (StatusCode, Value) {
@@ -130,18 +71,7 @@ impl S {
         } else {
             CONFIG.to_owned()
         };
-        let dir = std::env::temp_dir().join(format!("kura-search-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("config.yaml"), docs).unwrap();
-        let files = kura_server::reconcile::files::read_dir(&dir).unwrap();
-        kura_server::reconcile::reconcile(&self.e.t.app, &files, true)
-            .await
-            .unwrap();
-        let snap = kura_server::reconcile::snapshot::load_if_changed(&self.e.t.app, None)
-            .await
-            .unwrap()
-            .unwrap();
-        self.e.state.set_snapshot(snap);
+        self.e.apply_config(&docs).await;
     }
 
     async fn index(&self) -> kura_server::app::search::Round {
@@ -197,66 +127,9 @@ async fn search_is_opt_in_indexes_markdown_and_follows_edits() {
     .await;
     assert_eq!(s.index().await.indexed, 2);
 
-    assert_eq!(
-        s.paths("previsionnel").await,
-        ["finance/budget.md"],
-        "accents folded, French stems"
-    );
-    assert_eq!(s.paths("run").await, ["notes/running.md"], "English stems");
-    assert_eq!(
-        s.paths("rapport-annuel").await,
-        ["rapports/rapport-annuel.md"],
-        "file names by trigram"
-    );
-    let (_, b) = s.search("approuvé").await;
-    assert!(
-        b["results"][0]["snippet"]
-            .as_str()
-            .unwrap()
-            .contains("approuvé"),
-        "{b}"
-    );
-    let (st, b) = s.search("x").await;
-    assert_eq!(
-        (st, problem(&b)),
-        (StatusCode::BAD_REQUEST, "/v1/problems/invalid_request")
-    );
+    the_queries_fold_accents_and_stems(&s).await;
 
-    // A scoped token searches under its prefix only (T16).
-    let (st, t) =
-        s.e.call(
-            "POST",
-            &format!("/v1/vaults/{}/tokens", s.v),
-            &s.tok,
-            Some(&s.d),
-            Some(json!({ "prefix": "notes/", "expiresInDays": 1, "cidrs": ["10.0.0.0/8"] })),
-        )
-        .await;
-    assert_eq!(st, StatusCode::CREATED, "{t}");
-    let mut req = Request::post(format!("/v1/vaults/{}/search", s.v))
-        .header(
-            "authorization",
-            format!("Bearer {}", t["token"].as_str().unwrap()),
-        )
-        .header("content-type", "application/json")
-        .body(Body::from(
-            json!({ "query": "budget or running" }).to_string(),
-        ))
-        .unwrap();
-    req.extensions_mut()
-        .insert(ConnectInfo("10.1.2.3:4".parse::<SocketAddr>().unwrap()));
-    let r = app(s.e.state.clone()).oneshot(req).await.unwrap();
-    assert_eq!(r.status(), StatusCode::OK);
-    let body: Value =
-        serde_json::from_slice(&axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap())
-            .unwrap();
-    let paths: Vec<&str> = body["results"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|h| h["path"].as_str().unwrap())
-        .collect();
-    assert_eq!(paths, ["notes/running.md"]);
+    a_scoped_token_searches_under_its_prefix(&s).await;
 
     // An edit replaces the document; a deletion drops it.
     let h = s
@@ -304,6 +177,66 @@ async fn search_is_opt_in_indexes_markdown_and_follows_edits() {
         .unwrap();
     assert_eq!(docs, 0);
     assert_eq!(s.search("running").await.0, StatusCode::CONFLICT);
+}
+
+/// the queries fold accents and stems: one phase of the test below.
+async fn the_queries_fold_accents_and_stems(s: &S) {
+    assert_eq!(
+        s.paths("previsionnel").await,
+        ["finance/budget.md"],
+        "accents folded, French stems"
+    );
+    assert_eq!(s.paths("run").await, ["notes/running.md"], "English stems");
+    assert_eq!(
+        s.paths("rapport-annuel").await,
+        ["rapports/rapport-annuel.md"],
+        "file names by trigram"
+    );
+    let (_, b) = s.search("approuvé").await;
+    assert!(
+        b["results"][0]["snippet"]
+            .as_str()
+            .unwrap()
+            .contains("approuvé"),
+        "{b}"
+    );
+    let (st, b) = s.search("x").await;
+    assert_eq!(
+        (st, problem(&b)),
+        (StatusCode::BAD_REQUEST, "/v1/problems/invalid_request")
+    );
+}
+
+/// a scoped token searches under its prefix: one phase of the test below.
+async fn a_scoped_token_searches_under_its_prefix(s: &S) {
+    // A scoped token searches under its prefix only (T16).
+    let (st, t) =
+        s.e.call(
+            "POST",
+            &format!("/v1/vaults/{}/tokens", s.v),
+            &s.tok,
+            Some(&s.d),
+            Some(json!({ "prefix": "notes/", "expiresInDays": 1, "cidrs": ["10.0.0.0/8"] })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::CREATED, "{t}");
+    let (st, body) =
+        s.e.call_peer(
+            "10.1.2.3:4",
+            "POST",
+            &format!("/v1/vaults/{}/search", s.v),
+            t["token"].as_str().unwrap(),
+            Some(json!({ "query": "budget or running" })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    let paths: Vec<&str> = body["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, ["notes/running.md"]);
 }
 
 /// §6.7: a job that cannot be indexed is retried, then kept as failed after

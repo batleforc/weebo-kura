@@ -95,180 +95,43 @@ pub struct Metrics {
 impl Metrics {
     pub fn new() -> Result<Self, prometheus::Error> {
         let registry = Registry::new_custom(Some("kura".into()), None)?;
-        let ready = IntGauge::new("ready", "1 while the configuration is loaded")?;
-        let config_rejected_total =
-            IntCounter::new("config_rejected_total", "Rejected configuration changes")?;
-        let config_warnings = IntGauge::new("config_warnings", "Configuration objects not Ready")?;
-        registry.register(Box::new(ready.clone()))?;
-        registry.register(Box::new(config_rejected_total.clone()))?;
-        registry.register(Box::new(config_warnings.clone()))?;
-        let authz_denied_total = IntCounterVec::new(
-            Opts::new("authz_denied_total", "Authorization denials"),
-            &["outcome"],
-        )?;
-        registry.register(Box::new(authz_denied_total.clone()))?;
-        let chunk_corrupt_total =
-            IntCounter::new("chunk_corrupt_total", "Stored chunks failing their check")?;
-        registry.register(Box::new(chunk_corrupt_total.clone()))?;
-        let commits_total = IntCounter::new("commits_total", "Commits that wrote revisions")?;
-        registry.register(Box::new(commits_total.clone()))?;
-        let token_writes_total = IntCounterVec::new(
-            Opts::new("token_writes_total", "Writes asked by scoped tokens"),
-            &["outcome"],
-        )?;
-        registry.register(Box::new(token_writes_total.clone()))?;
-        let notification_deliveries_total = IntCounterVec::new(
-            Opts::new(
-                "notification_deliveries_total",
-                "Notification delivery attempts by outcome",
-            ),
-            &["outcome"],
-        )?;
-        registry.register(Box::new(notification_deliveries_total.clone()))?;
-        let notification_pending =
-            IntGauge::new("notification_pending", "Notification deliveries waiting")?;
-        registry.register(Box::new(notification_pending.clone()))?;
-        let notification_oldest_pending_seconds = Gauge::new(
-            "notification_oldest_pending_seconds",
-            "Age of the oldest delivery due and not sent",
-        )?;
-        registry.register(Box::new(notification_oldest_pending_seconds.clone()))?;
-        let notification_rules_disabled = IntGauge::new(
-            "notification_rules_disabled",
-            "Notification rules switched off after failures",
-        )?;
-        registry.register(Box::new(notification_rules_disabled.clone()))?;
-        let merge_total = IntCounterVec::new(
-            Opts::new("merge_total", "Three-way merges attempted"),
-            &["outcome"],
-        )?;
-        registry.register(Box::new(merge_total.clone()))?;
-        let batch_items_total = IntCounterVec::new(
-            Opts::new(
-                "batch_items_total",
-                "Items asked of, or sent to, the batch routes",
-            ),
-            &["route", "outcome"],
-        )?;
-        registry.register(Box::new(batch_items_total.clone()))?;
-        let batch_response_bytes = Histogram::with_opts(
-            HistogramOpts::new("batch_response_bytes", "Body size of chunks/batch answers")
-                .buckets(vec![
-                    4096.0,
-                    65536.0,
-                    262_144.0,
-                    1_048_576.0,
-                    2_097_152.0,
-                    4_194_304.0,
-                    4_500_000.0,
-                ]),
-        )?;
-        registry.register(Box::new(batch_response_bytes.clone()))?;
-        let vault_epoch_changes_total = IntCounter::new(
-            "vault_epoch_changes_total",
-            "Vault epochs regenerated after a promotion or a restore",
-        )?;
-        registry.register(Box::new(vault_epoch_changes_total.clone()))?;
-        let maintenance_deleted_total = IntCounterVec::new(
-            Opts::new(
-                "maintenance_deleted_total",
-                "Rows and objects removed by maintenance",
-            ),
-            &["outcome"],
-        )?;
-        registry.register(Box::new(maintenance_deleted_total.clone()))?;
-        let tenants_awaiting_key_destruction = IntGauge::new(
-            "tenants_awaiting_key_destruction",
-            "Tenants purged by Delete whose Transit key awaits an operator",
-        )?;
-        registry.register(Box::new(tenants_awaiting_key_destruction.clone()))?;
-        let maintenance_failures_total = IntCounter::new(
-            "maintenance_failures_total",
-            "Vaults whose maintenance failed in a pass",
-        )?;
-        registry.register(Box::new(maintenance_failures_total.clone()))?;
-        let commit_duration_seconds = Histogram::with_opts(
-            HistogramOpts::new("commit_duration_seconds", "Commit handling time")
-                .buckets(vec![0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1.0, 2.5, 5.0]),
-        )?;
-        registry.register(Box::new(commit_duration_seconds.clone()))?;
-        let notify_lag_seconds = Gauge::new(
-            "notify_lag_seconds",
-            "Round trip of this replica's heartbeat through NOTIFY",
-        )?;
-        registry.register(Box::new(notify_lag_seconds.clone()))?;
-        let notify_queue_usage = Gauge::new(
-            "notify_queue_usage",
-            "pg_notification_queue_usage(), from 0 to 1",
-        )?;
-        registry.register(Box::new(notify_queue_usage.clone()))?;
-        let ws_connections = IntGauge::new("ws_connections", "Open notification sockets")?;
-        registry.register(Box::new(ws_connections.clone()))?;
-        let vault_call_duration_seconds = HistogramVec::new(
-            HistogramOpts::new("vault_call_duration_seconds", "Vault Transit calls"),
-            &["outcome"],
-        )?;
-        registry.register(Box::new(vault_call_duration_seconds.clone()))?;
-        let resync_total = IntCounterVec::new(
-            Opts::new("resync_total", "410 answers sent, by problem type"),
-            &["outcome"],
-        )?;
-        registry.register(Box::new(resync_total.clone()))?;
-        let chunk_bytes_stored = GaugeVec::new(
-            Opts::new("chunk_bytes_stored", "Encrypted bytes stored"),
-            &["tenant"],
-        )?;
-        registry.register(Box::new(chunk_bytes_stored.clone()))?;
-        let dedup_ratio = GaugeVec::new(
-            Opts::new("dedup_ratio", "Bytes of current files over bytes stored"),
-            &["tenant"],
-        )?;
-        registry.register(Box::new(dedup_ratio.clone()))?;
-        let quota_used_ratio = GaugeVec::new(
-            Opts::new("quota_used_ratio", "Bytes stored over the quota"),
-            &["tenant"],
-        )?;
-        registry.register(Box::new(quota_used_ratio.clone()))?;
-        let unavailable_total =
-            IntCounter::new("unavailable_total", "503 answers from a failed dependency")?;
-        registry.register(Box::new(unavailable_total.clone()))?;
-        let device_sync_write_failures_total = IntCounter::new(
-            "device_sync_write_failures_total",
-            "Device sync state not recorded; sync went on",
-        )?;
-        registry.register(Box::new(device_sync_write_failures_total.clone()))?;
-        let deletions_scheduled = IntGauge::new(
-            "deletions_scheduled",
-            "Tenants and vaults removed with Delete, in their grace period",
-        )?;
-        registry.register(Box::new(deletions_scheduled.clone()))?;
-        let backup_last_success_timestamp_seconds = Gauge::new(
-            "backup_last_success_timestamp_seconds",
-            "When the last bucket copy finished, unix seconds; 0 if never",
-        )?;
-        registry.register(Box::new(backup_last_success_timestamp_seconds.clone()))?;
-        let storage_refreshed_timestamp_seconds = Gauge::new(
-            "storage_refreshed_timestamp_seconds",
-            "When the storage gauges were last refreshed, unix seconds",
-        )?;
-        registry.register(Box::new(storage_refreshed_timestamp_seconds.clone()))?;
-        let index_queue_depth = IntGauge::new("index_queue_depth", "Search index jobs waiting")?;
-        registry.register(Box::new(index_queue_depth.clone()))?;
-        let index_failed = IntGauge::new(
-            "index_failed",
-            "Search index jobs given up after five attempts",
-        )?;
-        registry.register(Box::new(index_failed.clone()))?;
-        let index_round_timestamp_seconds = Gauge::new(
-            "index_round_timestamp_seconds",
-            "When the search indexer last finished a round, unix seconds",
-        )?;
-        registry.register(Box::new(index_round_timestamp_seconds.clone()))?;
-        let maintenance_gc_timestamp_seconds = Gauge::new(
-            "maintenance_gc_timestamp_seconds",
-            "When a maintenance pass last ran garbage collection, unix seconds",
-        )?;
-        registry.register(Box::new(maintenance_gc_timestamp_seconds.clone()))?;
+        let (ready, config_rejected_total, config_warnings, authz_denied_total, unavailable_total) =
+            http(&registry)?;
+        let (resync_total, ws_connections, vault_call_duration_seconds, vault_epoch_changes_total) =
+            transport(&registry)?;
+        let (
+            chunk_corrupt_total,
+            commits_total,
+            token_writes_total,
+            merge_total,
+            commit_duration_seconds,
+        ) = commits(&registry)?;
+        let (batch_items_total, batch_response_bytes, device_sync_write_failures_total) =
+            batches(&registry)?;
+        let (
+            notification_deliveries_total,
+            notification_pending,
+            notification_oldest_pending_seconds,
+            notification_rules_disabled,
+        ) = notifications(&registry)?;
+        let (notify_lag_seconds, notify_queue_usage) = notify(&registry)?;
+        let (
+            chunk_bytes_stored,
+            dedup_ratio,
+            quota_used_ratio,
+            storage_refreshed_timestamp_seconds,
+        ) = storage(&registry)?;
+        let (
+            backup_last_success_timestamp_seconds,
+            deletions_scheduled,
+            tenants_awaiting_key_destruction,
+        ) = lifecycle(&registry)?;
+        let (
+            maintenance_deleted_total,
+            maintenance_failures_total,
+            maintenance_gc_timestamp_seconds,
+        ) = maintenance(&registry)?;
+        let (index_queue_depth, index_failed, index_round_timestamp_seconds) = index(&registry)?;
         Ok(Self {
             registry,
             ready,
@@ -309,6 +172,315 @@ impl Metrics {
             maintenance_gc_timestamp_seconds,
         })
     }
+}
+
+/// Registers `c` and hands it back, so a field is built and registered in one go.
+fn reg<C: prometheus::core::Collector + Clone + 'static>(
+    r: &Registry,
+    c: C,
+) -> Result<C, prometheus::Error> {
+    r.register(Box::new(c.clone()))?;
+    Ok(c)
+}
+
+fn outcome_counter(name: &str, help: &str) -> Result<IntCounterVec, prometheus::Error> {
+    IntCounterVec::new(Opts::new(name, help), &["outcome"])
+}
+
+fn tenant_gauge(name: &str, help: &str) -> Result<GaugeVec, prometheus::Error> {
+    GaugeVec::new(Opts::new(name, help), &["tenant"])
+}
+
+/// The `http` metrics, registered.
+fn http(
+    r: &Registry,
+) -> Result<(IntGauge, IntCounter, IntGauge, IntCounterVec, IntCounter), prometheus::Error> {
+    Ok((
+        reg(
+            r,
+            IntGauge::new("ready", "1 while the configuration is loaded")?,
+        )?,
+        reg(
+            r,
+            IntCounter::new("config_rejected_total", "Rejected configuration changes")?,
+        )?,
+        reg(
+            r,
+            IntGauge::new("config_warnings", "Configuration objects not Ready")?,
+        )?,
+        reg(
+            r,
+            outcome_counter("authz_denied_total", "Authorization denials")?,
+        )?,
+        reg(
+            r,
+            IntCounter::new("unavailable_total", "503 answers from a failed dependency")?,
+        )?,
+    ))
+}
+
+/// The `transport` metrics, registered.
+fn transport(
+    r: &Registry,
+) -> Result<(IntCounterVec, IntGauge, HistogramVec, IntCounter), prometheus::Error> {
+    Ok((
+        reg(
+            r,
+            outcome_counter("resync_total", "410 answers sent, by problem type")?,
+        )?,
+        reg(
+            r,
+            IntGauge::new("ws_connections", "Open notification sockets")?,
+        )?,
+        reg(
+            r,
+            HistogramVec::new(
+                HistogramOpts::new("vault_call_duration_seconds", "Vault Transit calls"),
+                &["outcome"],
+            )?,
+        )?,
+        reg(
+            r,
+            IntCounter::new(
+                "vault_epoch_changes_total",
+                "Vault epochs regenerated after a promotion or a restore",
+            )?,
+        )?,
+    ))
+}
+
+/// The `commits` metrics, registered.
+fn commits(
+    r: &Registry,
+) -> Result<
+    (
+        IntCounter,
+        IntCounter,
+        IntCounterVec,
+        IntCounterVec,
+        Histogram,
+    ),
+    prometheus::Error,
+> {
+    Ok((
+        reg(
+            r,
+            IntCounter::new("chunk_corrupt_total", "Stored chunks failing their check")?,
+        )?,
+        reg(
+            r,
+            IntCounter::new("commits_total", "Commits that wrote revisions")?,
+        )?,
+        reg(
+            r,
+            outcome_counter("token_writes_total", "Writes asked by scoped tokens")?,
+        )?,
+        reg(
+            r,
+            outcome_counter("merge_total", "Three-way merges attempted")?,
+        )?,
+        reg(
+            r,
+            Histogram::with_opts(
+                HistogramOpts::new("commit_duration_seconds", "Commit handling time")
+                    .buckets(vec![0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1.0, 2.5, 5.0]),
+            )?,
+        )?,
+    ))
+}
+
+/// The `batches` metrics, registered.
+fn batches(r: &Registry) -> Result<(IntCounterVec, Histogram, IntCounter), prometheus::Error> {
+    Ok((
+        reg(
+            r,
+            IntCounterVec::new(
+                Opts::new(
+                    "batch_items_total",
+                    "Items asked of, or sent to, the batch routes",
+                ),
+                &["route", "outcome"],
+            )?,
+        )?,
+        reg(
+            r,
+            Histogram::with_opts(
+                HistogramOpts::new("batch_response_bytes", "Body size of chunks/batch answers")
+                    .buckets(vec![
+                        4096.0,
+                        65536.0,
+                        262_144.0,
+                        1_048_576.0,
+                        2_097_152.0,
+                        4_194_304.0,
+                        4_500_000.0,
+                    ]),
+            )?,
+        )?,
+        reg(
+            r,
+            IntCounter::new(
+                "device_sync_write_failures_total",
+                "Device sync state not recorded; sync went on",
+            )?,
+        )?,
+    ))
+}
+
+/// The `notifications` metrics, registered.
+fn notifications(
+    r: &Registry,
+) -> Result<(IntCounterVec, IntGauge, Gauge, IntGauge), prometheus::Error> {
+    Ok((
+        reg(
+            r,
+            outcome_counter(
+                "notification_deliveries_total",
+                "Notification delivery attempts by outcome",
+            )?,
+        )?,
+        reg(
+            r,
+            IntGauge::new("notification_pending", "Notification deliveries waiting")?,
+        )?,
+        reg(
+            r,
+            Gauge::new(
+                "notification_oldest_pending_seconds",
+                "Age of the oldest delivery due and not sent",
+            )?,
+        )?,
+        reg(
+            r,
+            IntGauge::new(
+                "notification_rules_disabled",
+                "Notification rules switched off after failures",
+            )?,
+        )?,
+    ))
+}
+
+/// The `notify` metrics, registered.
+fn notify(r: &Registry) -> Result<(Gauge, Gauge), prometheus::Error> {
+    Ok((
+        reg(
+            r,
+            Gauge::new(
+                "notify_lag_seconds",
+                "Round trip of this replica's heartbeat through NOTIFY",
+            )?,
+        )?,
+        reg(
+            r,
+            Gauge::new(
+                "notify_queue_usage",
+                "pg_notification_queue_usage(), from 0 to 1",
+            )?,
+        )?,
+    ))
+}
+
+/// The `storage` metrics, registered.
+fn storage(r: &Registry) -> Result<(GaugeVec, GaugeVec, GaugeVec, Gauge), prometheus::Error> {
+    Ok((
+        reg(
+            r,
+            tenant_gauge("chunk_bytes_stored", "Encrypted bytes stored")?,
+        )?,
+        reg(
+            r,
+            tenant_gauge("dedup_ratio", "Bytes of current files over bytes stored")?,
+        )?,
+        reg(
+            r,
+            tenant_gauge("quota_used_ratio", "Bytes stored over the quota")?,
+        )?,
+        reg(
+            r,
+            Gauge::new(
+                "storage_refreshed_timestamp_seconds",
+                "When the storage gauges were last refreshed, unix seconds",
+            )?,
+        )?,
+    ))
+}
+
+/// The `lifecycle` metrics, registered.
+fn lifecycle(r: &Registry) -> Result<(Gauge, IntGauge, IntGauge), prometheus::Error> {
+    Ok((
+        reg(
+            r,
+            Gauge::new(
+                "backup_last_success_timestamp_seconds",
+                "When the last bucket copy finished, unix seconds; 0 if never",
+            )?,
+        )?,
+        reg(
+            r,
+            IntGauge::new(
+                "deletions_scheduled",
+                "Tenants and vaults removed with Delete, in their grace period",
+            )?,
+        )?,
+        reg(
+            r,
+            IntGauge::new(
+                "tenants_awaiting_key_destruction",
+                "Tenants purged by Delete whose Transit key awaits an operator",
+            )?,
+        )?,
+    ))
+}
+
+/// The `maintenance` metrics, registered.
+fn maintenance(r: &Registry) -> Result<(IntCounterVec, IntCounter, Gauge), prometheus::Error> {
+    Ok((
+        reg(
+            r,
+            outcome_counter(
+                "maintenance_deleted_total",
+                "Rows and objects removed by maintenance",
+            )?,
+        )?,
+        reg(
+            r,
+            IntCounter::new(
+                "maintenance_failures_total",
+                "Vaults whose maintenance failed in a pass",
+            )?,
+        )?,
+        reg(
+            r,
+            Gauge::new(
+                "maintenance_gc_timestamp_seconds",
+                "When a maintenance pass last ran garbage collection, unix seconds",
+            )?,
+        )?,
+    ))
+}
+
+/// The `index` metrics, registered.
+fn index(r: &Registry) -> Result<(IntGauge, IntGauge, Gauge), prometheus::Error> {
+    Ok((
+        reg(
+            r,
+            IntGauge::new("index_queue_depth", "Search index jobs waiting")?,
+        )?,
+        reg(
+            r,
+            IntGauge::new(
+                "index_failed",
+                "Search index jobs given up after five attempts",
+            )?,
+        )?,
+        reg(
+            r,
+            Gauge::new(
+                "index_round_timestamp_seconds",
+                "When the search indexer last finished a round, unix seconds",
+            )?,
+        )?,
+    ))
 }
 
 /// Refreshes the storage gauges per tenant once a minute, until `shutdown`.

@@ -93,12 +93,12 @@ function registry(app: App): PluginRegistry | null {
 
 const CONFIG_EVERY_MS = 5 * 60 * 1000 - 15_000;
 
-/** A notice with one button: the thing to do about it, at hand. */
 /** Why something failed, in a sentence: the message, not the object. */
 function because(e: unknown): string {
   return e instanceof AuthError || e instanceof Error ? e.message : String(e);
 }
 
+/** A notice with one button: the thing to do about it, at hand. */
 function notify(text: string, action: { label: string; run: () => void }): void {
   const body = createFragment((f) => {
     f.createSpan({ text });
@@ -164,11 +164,10 @@ export default class KuraPlugin extends Plugin {
     this.registerEvent(this.app.vault.on("modify", touched));
     this.registerEvent(this.app.vault.on("delete", touched));
     this.registerEvent(this.app.vault.on("rename", touched));
-    // Resume: pull when the app comes back (§6.3).
-    // The configuration is scanned at most every 5 minutes, and on resume (§6.8).
     this.registerInterval(window.setInterval(() => void this.controller?.sync(), 5 * 60 * 1000));
     // The "2 min ago" of the tooltip and the settings ages with the clock.
     this.registerInterval(window.setInterval(() => { if (this.latest !== null) this.paint(this.latest); }, 60 * 1000));
+    // Resume: pull when the app comes back (§6.3), and scan the configuration (§6.8).
     this.registerDomEvent(document, "visibilitychange", () => {
       if (document.visibilityState === "visible") {
         this.configSyncedAt = 0;
@@ -193,13 +192,13 @@ export default class KuraPlugin extends Plugin {
     return "secretStorage" in this.app;
   }
 
-  username(): string | null {
-    return null;
-  }
-
   /** Signed in, with a vault: the console links mean something. */
   connected(): boolean {
     return this.config.device !== "" && this.config.vault !== "" && this.config.server !== "";
+  }
+
+  private pluginDir(): string {
+    return this.manifest.dir ?? `${this.app.vault.configDir}/plugins/weebo-kura`;
   }
 
   private sessionFor(): Session | null {
@@ -378,7 +377,7 @@ export default class KuraPlugin extends Plugin {
     this.api = api;
     const host = new ObsidianHost({
       adapter: this.app.vault.adapter,
-      pluginDir: this.manifest.dir ?? `${this.app.vault.configDir}/plugins/weebo-kura`,
+      pluginDir: this.pluginDir(),
       vault: s.vault,
       isOpen: (p) => this.app.workspace.getLeavesOfType("markdown").some((l) => l.view instanceof MarkdownView && l.view.file?.path === p),
       now: () => Date.now(),
@@ -463,7 +462,7 @@ export default class KuraPlugin extends Plugin {
       core.configSynced(p, categories) && (own === "" || !p.toLowerCase().startsWith(`${own}/`));
     const host = new ObsidianHost({
       adapter: this.app.vault.adapter,
-      pluginDir: this.manifest.dir ?? `${this.app.vault.configDir}/plugins/weebo-kura`,
+      pluginDir: this.pluginDir(),
       vault: s.vault,
       isOpen: () => false,
       now: () => Date.now(),
@@ -517,8 +516,9 @@ export default class KuraPlugin extends Plugin {
       session.adopt(tokens);
       const api = new Api({ server: s.server, token: () => session.token(), device: () => null, fetch: (u, i) => fetch(u, i), sleep });
       if (s.device === "") {
-        s.deviceName = s.deviceName === "" ? (Platform.isMobile ? "mobile" : "desktop") : s.deviceName;
-        s.device = await api.register(s.deviceName, Platform.isMobile ? "mobile" : "desktop");
+        const kind = Platform.isMobile ? "mobile" : "desktop";
+        s.deviceName = s.deviceName === "" ? kind : s.deviceName;
+        s.device = await api.register(s.deviceName, kind);
       }
       this.vaults = await new Api({ server: s.server, token: () => session.token(), device: () => s.device, fetch: (u, i) => fetch(u, i), sleep }).vaults();
       await this.saveSettings();
@@ -557,8 +557,7 @@ export default class KuraPlugin extends Plugin {
     await this.signIn();
   }
 
-  /** Choosing another vault detaches first: the sync state is dropped, files stay (§4.5). */
-  /** False when the user kept the vault they had. */
+  /** Choosing another vault detaches first: the sync state is dropped, files stay (§4.5). False when the user kept the vault they had. */
   async chooseVault(id: string): Promise<boolean> {
     const v = this.vaults.find((x) => x.id === id);
     if (v === undefined) return false;

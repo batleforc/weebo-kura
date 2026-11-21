@@ -230,7 +230,7 @@ pub mod tokens {
                 Some(&format!("s-{sub}")),
                 Some(1_700_000_000),
                 groups,
-                json!({ "name": name }),
+                &json!({ "name": name }),
             )
         }
 
@@ -242,7 +242,7 @@ pub mod tokens {
             auth_time: Option<i64>,
             groups: &[&str],
         ) -> String {
-            self.token_extra(sub, sid, auth_time, groups, json!({}))
+            self.token_extra(sub, sid, auth_time, groups, &json!({}))
         }
 
         fn token_extra(
@@ -251,7 +251,7 @@ pub mod tokens {
             sid: Option<&str>,
             auth_time: Option<i64>,
             groups: &[&str],
-            extra: Value,
+            extra: &Value,
         ) -> String {
             let exp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

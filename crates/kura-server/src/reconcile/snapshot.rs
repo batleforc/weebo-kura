@@ -1,8 +1,10 @@
 //! The authorization cache: the last reconciled configuration, read from
 //! `config_state`, never from this replica's files (decision 31).
 //!
-//! shortcut: polls `config_state` every 5 s; phase 4 replaces the poll with
-//! `LISTEN/NOTIFY` (plan PR 1.5).
+//! A `NOTIFY` on `kura_config` (sent by the reconciler's write, through the
+//! replica's `LISTEN` connection, see `notify`) reloads at once; the poll every
+//! 5 s stays as the fallback, so a lost notification never leaves a replica
+//! stale for longer than that.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -105,6 +107,7 @@ pub async fn run(pool: PgPool, state: Arc<AppState>, shutdown: CancellationToken
         }
         tokio::select! {
             () = shutdown.cancelled() => return,
+            () = state.hub.config.notified() => {}
             () = tokio::time::sleep(REFRESH) => {}
         }
     }

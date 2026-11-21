@@ -60,22 +60,29 @@ export function parseRecords(body: Uint8Array): Map<string, Uint8Array | null> {
   return out;
 }
 
-/** The bytes of a stored file, by its blob hash; `null` when not visible. */
-export async function fileBytes(
+/** The chunk list of a blob; `null` when it is not visible. */
+async function blobManifest(
   vault: string,
   blob: string,
-): Promise<Uint8Array | null> {
-  let manifest: { size: number; chunks: string[] };
+): Promise<{ size: number; chunks: string[] } | null> {
   try {
-    manifest = (await (
-      await call(`/v1/vaults/${vault}/blobs/${blob}`)
-    ).json()) as typeof manifest;
+    return (await (await call(`/v1/vaults/${vault}/blobs/${blob}`)).json()) as {
+      size: number;
+      chunks: string[];
+    };
   } catch (error) {
     if (error instanceof ContentError && error.status === 404) return null;
     throw error;
   }
+}
+
+/** Every chunk asked for, in batches; `null` when one stays missing. */
+async function fetchChunks(
+  vault: string,
+  chunks: string[],
+): Promise<Map<string, Uint8Array> | null> {
   const found = new Map<string, Uint8Array>();
-  let wanted = [...new Set(manifest.chunks)];
+  let wanted = [...new Set(chunks)];
   while (wanted.length > 0) {
     const response = await call(`/v1/vaults/${vault}/chunks/batch`, {
       method: "POST",
@@ -92,10 +99,21 @@ export async function fileBytes(
       found.set(hash, data);
       progress = true;
     }
+    if (!progress) return null;
     wanted = wanted.filter((h) => !found.has(h));
-    if (!progress) break;
   }
-  if (wanted.length > 0) return null;
+  return found;
+}
+
+/** The bytes of a stored file, by its blob hash; `null` when not visible. */
+export async function fileBytes(
+  vault: string,
+  blob: string,
+): Promise<Uint8Array | null> {
+  const manifest = await blobManifest(vault, blob);
+  if (!manifest) return null;
+  const found = await fetchChunks(vault, manifest.chunks);
+  if (!found) return null;
   const out = new Uint8Array(manifest.size);
   let offset = 0;
   for (const hash of manifest.chunks) {
