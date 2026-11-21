@@ -10,7 +10,7 @@ write route before its identity check and limits (RFC §16).
 | Item | Status | Date | Notes |
 | --- | --- | --- | --- |
 | Accepted | done | 2026-11-21 | Questions 4, 8 and 9 resolved as recommended: projected ServiceAccount token, no break-glass push, webhook `failurePolicy: Fail` |
-| Phase 0 | todo | | Kit pin and source, operator template generated and merged, `KuraInstance`, reason codes, three CRDs |
+| Phase 0 | done | 2026-11-22 | Kit `weebo-si-operator/weebo-operator-kit` v0.32.0 (`8284bb9f`), workspace builds unchanged. `kura-api`: `KuraInstance` (`instance.rs`, cluster-scoped, `url`, `tls`, required `auth.serviceAccountToken.audience`), `Status.instance` (the kit's `BoundInstance`, optional), reason codes `SetRejected`, `SourceIsFiles`, `VaultNamespaceNotAllowed`, `TenantNotFound`, `VaultManagedByApi`, `InstanceUnreachable`, `InstanceUnauthorized` (blocking). `kura-crdgen` writes `kurainstance.yaml`, the instance stands for both schematic roles; docs reference regenerated with its example. Template generated with `cargo-generate` 0.26.0 into the scratchpad; its crates merge in phase 2 (D1) |
 | Phase 1 | todo | | Server: `documents` config, operator verifier, `PUT /v1/admin/documents` |
 | Phase 2 | todo | | `kura-operator`: controllers, push queue, gateway, status, webhook |
 | Phase 3 | todo | | Charts, image, release jobs, §6.P proof on kind, capacity probe |
@@ -194,8 +194,10 @@ request; the §6.P suite `ok` on kind.
 
 | # | Phase | RFC section | Divergence | Reason |
 | --- | --- | --- | --- | --- |
+| D1 | 0 | §16 phase 0 ("merge its crates … the generated operator builds and its template tests pass") | The generated crates are not merged in phase 0; they land in phase 2, already in Kura's shape | Verbatim, they build only with the template's `KuraObject`, `KuraLocalInstance` and `tokenSecretRef`, which §6.3 deletes: merging them first would add code and tests rewritten one phase later |
+| D2 | 0 | §4.3 (`KuraInstance` without `spec.auth` refused "by CEL") | `auth` is a required field of the schema, not a CEL rule | Same refusal at admission (`spec.auth: Required value`), with no rule to maintain |
 
-None yet. Known in advance, to confirm while building:
+Known in advance, to confirm while building:
 
 - Phase 1, step 5: per-object generation without a migration (status is
   `jsonb`).

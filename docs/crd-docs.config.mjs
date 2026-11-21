@@ -1,7 +1,7 @@
 // Input of `weebo-crd-docs` (@weebo/operator-docs), run by `task recu`
 // (`pnpm gen:crds`): ../deploy/crd (kura-crdgen) → content/docs/crds and
-// public/crd-schemas. KuraTenant and KuraVault are documents read from files
-// today and custom resources once the operator lands; the YAML is the same.
+// public/crd-schemas. KuraTenant and KuraVault are read from files or applied
+// as custom resources through kura-operator (RFC 0009); the YAML is the same.
 import { defineConfig } from "@weebo/operator-docs/crd-docs";
 
 export default defineConfig({
@@ -9,13 +9,18 @@ export default defineConfig({
   kindPrefix: "Kura",
   exampleNamespace: "maxime",
   indexIntro:
-    "Kura reads these documents from the files of `KURA_CONFIG_DIR` (the chart's `documents`), reconciled live; the future operator applies the same YAML as custom resources. Each page lists every field, its default and its rules.",
-  order: ["KuraTenant", "KuraVault"],
+    "Kura reads these documents from the files of `KURA_CONFIG_DIR` (the chart's `documents`), reconciled live; or applied as custom resources through kura-operator, whose `KuraInstance` names the server. The YAML is the same. Each page lists every field, its default and its rules.",
+  order: ["KuraInstance", "KuraTenant", "KuraVault"],
   guides: {
+    KuraInstance: ["Tenants and vaults", "/docs/guides/tenants-and-vaults"],
     KuraTenant: ["Tenants and vaults", "/docs/guides/tenants-and-vaults"],
     KuraVault: ["Tenants and vaults", "/docs/guides/tenants-and-vaults"],
   },
   examples: {
+    KuraInstance: {
+      url: "http://kura.kura.svc:8080",
+      auth: { serviceAccountToken: { audience: "kura" } },
+    },
     KuraTenant: {
       claimMappings: {
         claim: "groups",

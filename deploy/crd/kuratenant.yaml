@@ -191,6 +191,26 @@ spec:
                   - type
                   type: object
                 type: array
+              instance:
+                description: The `KuraInstance` the operator pushed this object to (RFC 0009 §6.3).
+                nullable: true
+                properties:
+                  kind:
+                    description: '`Instance` or `LocalInstance`.'
+                    enum:
+                    - Instance
+                    - LocalInstance
+                    type: string
+                  name:
+                    type: string
+                  namespace:
+                    description: The local instance's namespace; absent for a cluster-scoped one.
+                    nullable: true
+                    type: string
+                required:
+                - kind
+                - name
+                type: object
               observedGeneration:
                 description: The `metadata.generation` the last reconcile applied.
                 format: int64

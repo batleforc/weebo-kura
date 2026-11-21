@@ -25,6 +25,23 @@ weebo_kit_domain::reason_codes! {
         /// A viewer binding lists folders while its claim value also opens
         /// the whole vault: the widest grant wins (RFC 0005 §4.3).
         RestrictedBindingWidened,
+        /// Another document of the pushed set was refused, so the whole set
+        /// was; the message names it (RFC 0009 §4.2).
+        SetRejected,
+        /// kura-server reads its documents from files (`documents.source:
+        /// files`): the operator's pushes are refused.
+        SourceIsFiles,
+        /// A `KuraVault` in a namespace its tenant's `vaultNamespaces` does
+        /// not list (refused at admission).
+        VaultNamespaceNotAllowed,
+        /// A `KuraVault` whose `tenantRef` names no `KuraTenant`.
+        TenantNotFound,
+        /// A `KuraVault` naming a vault created through the API: never taken over.
+        VaultManagedByApi,
+        /// The Kura server did not answer (network error, timeout, 5xx).
+        InstanceUnreachable,
+        /// The Kura server refused the operator's identity (401/403).
+        InstanceUnauthorized,
     }
 }
 
@@ -37,7 +54,14 @@ impl Reason for ReasonCode {
 
     fn severity(self) -> Severity {
         match self {
-            Self::InvalidDocument => Severity::Blocking,
+            Self::InvalidDocument
+            | Self::SetRejected
+            | Self::SourceIsFiles
+            | Self::VaultNamespaceNotAllowed
+            | Self::TenantNotFound
+            | Self::VaultManagedByApi
+            | Self::InstanceUnreachable
+            | Self::InstanceUnauthorized => Severity::Blocking,
             Self::Reconciled
             | Self::Orphaned
             | Self::QuotaBelowUsage
@@ -57,7 +81,7 @@ mod tests {
     #[test]
     fn catalogue_is_pascal_case_and_complete() {
         weebo_kit_domain::reason::assert_pascal_case(ReasonCode::ALL);
-        assert_eq!(ReasonCode::ALL.len(), 9);
+        assert_eq!(ReasonCode::ALL.len(), 16);
         assert_eq!(ReasonCode::SUCCESS.severity(), Severity::Advisory);
         assert_eq!(ReasonCode::InvalidDocument.severity(), Severity::Blocking);
     }

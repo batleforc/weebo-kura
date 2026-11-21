@@ -1,0 +1,78 @@
+{
+  "apiVersion": "kura.weebo.io/v1alpha1",
+  "kind": "KuraInstance",
+  "scope": "Cluster",
+  "served": [
+    "v1alpha1"
+  ],
+  "description": "The Kura server the operator pushes `KuraTenant` and `KuraVault` to.\nCluster-scoped: one server serves the cluster. `Ready` tells whether the\nserver answers and accepts the operator's identity.",
+  "properties": {
+    "auth": {
+      "description": "How the operator proves who it is to the server. Required: the server\naccepts the documents from one configured identity only.",
+      "properties": {
+        "serviceAccountToken": {
+          "description": "A projected ServiceAccount token, rotated by the kubelet, that the\nserver verifies against the cluster's OIDC issuer. No secret at rest.",
+          "properties": {
+            "audience": {
+              "description": "The token's audience, equal to the server's `documents.operator.audience`.",
+              "maxLength": 253,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "audience"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "serviceAccountToken"
+      ],
+      "type": "object"
+    },
+    "tls": {
+      "description": "How the operator verifies the server's TLS certificate (`https` only).",
+      "nullable": true,
+      "properties": {
+        "caSecretRef": {
+          "description": "Optional custom CA certificate to verify the instance's TLS with,\nread from a Kubernetes `Secret` (the referenced `key` must hold a PEM\nbundle). Use this to trust a private CA without mounting it into the\noperator pod — the operator reads the Secret via the API and hands the\nPEM to its HTTP client. It is added *on top of* the platform trust\nstore, so publicly-signed endpoints keep working. When unset, only the\nplatform trust store (plus the usual `SSL_CERT_FILE`/`SSL_CERT_DIR`\nenv vars) is used.",
+          "nullable": true,
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "namespace": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "name",
+            "namespace"
+          ],
+          "type": "object"
+        },
+        "insecureSkipVerify": {
+          "default": false,
+          "description": "Skip certificate verification entirely — insecure, intended only for\nthrowaway/self-signed instances. Prefer `caSecretRef` below, which\ntrusts a private CA without turning verification off.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "url": {
+      "description": "Base URL of the Kura server's API, such as `http://kura.kura.svc:8080`.\nUse `https` for anything that leaves the node.",
+      "pattern": "^https?://[^/?#\\s]+(/[^?#\\s]*)?$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "auth",
+    "url"
+  ],
+  "type": "object"
+}
