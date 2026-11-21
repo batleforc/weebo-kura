@@ -17,6 +17,7 @@ includes:
   obsidian: { taskfile: ./.tasks/obsidian.yaml, flatten: true }
   release: { taskfile: ./.tasks/release.yaml, flatten: true }
   docs: { taskfile: ./.tasks/docs.yaml, flatten: true }
+  operator: { taskfile: ./.tasks/operator.yaml, flatten: true }
 
 tasks:
   init:

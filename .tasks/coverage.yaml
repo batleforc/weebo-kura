@@ -11,7 +11,7 @@ tasks:
     cmds:
       # Set KURA_TEST_DATABASE_URL (task dev:up) or the PostgreSQL tests skip and the number is not the real one.
       - cargo llvm-cov clean --workspace
-      - cargo llvm-cov --no-report --workspace
+      - cargo llvm-cov --no-report --workspace --exclude kura-operator-testkit
 
   coverage:
     desc: Write the HTML coverage report to coverage/html and lcov.info (export KURA_TEST_DATABASE_URL first)

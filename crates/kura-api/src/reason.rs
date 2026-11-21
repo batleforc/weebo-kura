@@ -38,6 +38,8 @@ weebo_kit_domain::reason_codes! {
         TenantNotFound,
         /// A `KuraVault` naming a vault created through the API: never taken over.
         VaultManagedByApi,
+        /// No `KuraInstance` names the server, or several do.
+        InstanceNotFound,
         /// The Kura server did not answer (network error, timeout, 5xx).
         InstanceUnreachable,
         /// The Kura server refused the operator's identity (401/403).
@@ -60,6 +62,7 @@ impl Reason for ReasonCode {
             | Self::VaultNamespaceNotAllowed
             | Self::TenantNotFound
             | Self::VaultManagedByApi
+            | Self::InstanceNotFound
             | Self::InstanceUnreachable
             | Self::InstanceUnauthorized => Severity::Blocking,
             Self::Reconciled
@@ -81,7 +84,7 @@ mod tests {
     #[test]
     fn catalogue_is_pascal_case_and_complete() {
         weebo_kit_domain::reason::assert_pascal_case(ReasonCode::ALL);
-        assert_eq!(ReasonCode::ALL.len(), 16);
+        assert_eq!(ReasonCode::ALL.len(), 17);
         assert_eq!(ReasonCode::SUCCESS.severity(), Severity::Advisory);
         assert_eq!(ReasonCode::InvalidDocument.severity(), Severity::Blocking);
     }

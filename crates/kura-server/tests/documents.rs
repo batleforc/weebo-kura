@@ -169,6 +169,31 @@ async fn a_push_applies_like_files() {
     assert_eq!(pushes(&e, "rejected"), 2);
 }
 
+/// T4: with the webhook bypassed (down, or a resource applied before it
+/// existed), the server still refuses a vault outside its tenant's
+/// namespaces: the webhook is a convenience, the server the control.
+#[tokio::test]
+async fn server_rejects_what_the_webhook_would() {
+    let key = OperatorKey::new();
+    let Some(e) = operator_env(module_path!(), &key).await else {
+        return;
+    };
+    let before = stored_generation(&e).await;
+    let mut set = base();
+    let mut intruder = vault("team-b", "recipes", 1);
+    intruder["spec"]["tenantRef"]["name"] = json!("maxime");
+    set.push(intruder);
+    let (s, b) = push(&e, &key.operator(), set).await;
+    assert_eq!((s, b["outcome"].as_str()), (StatusCode::OK, Some("rejected")), "{b}");
+    assert_eq!(b["errors"][0]["location"]["file"], "KuraVault/team-b/recipes", "{b}");
+    assert_eq!(stored_generation(&e).await, before);
+    let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM vault WHERE namespace = 'team-b'")
+        .fetch_one(&e.t.owner)
+        .await
+        .unwrap();
+    assert_eq!(stored, 0);
+}
+
 /// T6: a set pushed while a newer server version wrote last is not applied
 /// (`kura_config_begin`), so a stale writer never reverts a newer one.
 #[tokio::test]

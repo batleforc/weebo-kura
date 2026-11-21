@@ -1,0 +1,30 @@
+# kura-operator (RFC 0009). Its envtest tests live in kura-operator-testkit,
+# left out of the `--workspace` tasks: building envtest needs Go (mise) and a
+# real libclang.so with the C headers. Defaults match Fedora's clang-libs and
+# gcc; an exported value wins, even an empty one (Ubuntu's libclang-dev finds
+# its own headers: BINDGEN_EXTRA_CLANG_ARGS="").
+version: "3"
+
+env:
+  LIBCLANG_PATH:
+    sh: echo "${LIBCLANG_PATH-/usr/lib64}"
+  BINDGEN_EXTRA_CLANG_ARGS:
+    sh: echo "${BINDGEN_EXTRA_CLANG_ARGS--I/usr/lib/gcc/x86_64-redhat-linux/16/include -I/usr/include}"
+
+tasks:
+  operator:test:
+    desc: "Run kura-operator's envtest tests against a real kube-apiserver and etcd (KUBEBUILDER_ASSETS names their directory; unset, envtest downloads its latest release)"
+    # envtest's build script runs `go` from its own crate folder, where mise's
+    # shim finds no version: the real binary first (Task leaves an existing
+    # PATH alone, hence in the command).
+    vars:
+      GO_BIN:
+        sh: dirname "$(mise which go)"
+    cmds:
+      - PATH="{{.GO_BIN}}:$PATH" cargo clippy -p kura-operator-testkit --all-targets -- -D warnings
+      - PATH="{{.GO_BIN}}:$PATH" cargo test -p kura-operator-testkit
+
+  operator:run:
+    desc: "Run kura-operator against the current kubeconfig's cluster (KURA_TOKEN_FILE names the projected token; the webhook needs WEBHOOK_CERT_FILE and WEBHOOK_KEY_FILE)"
+    cmds:
+      - cargo run -p kura-operator
