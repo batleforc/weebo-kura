@@ -58,10 +58,11 @@ tasks:
         fi
       - echo "Repo adapted to '{{.NAME}}' (owner '{{.OWNER}}'), review the changes then commit them"
   update:
-    desc: "Bump every mise tool to its latest version (mise.toml ranges included) and regenerate mise.lock"
+    desc: "Bump every mise tool to its latest version (mise.toml ranges included), regenerate mise.lock, and move the Containerfiles' FROM tags and digests (updatecli)"
     cmds:
       - mise upgrade --bump
       - task mise:lock:gen
+      - updatecli apply --config .updatecli/docker.yaml
 
   recu:
     desc: "Regenerate tracked artefacts (run by the pre-commit hook)"

@@ -1,0 +1,12 @@
+# Dated exceptions (weebo-security): a scope, a reason, a date and an expiry.
+# Read by `task audit:fs` and `task audit:image` (--ignorefile). Nothing is
+# suppressed until the gate reports it. Each entry: the CVE, the path it is
+# pinned to (never the whole image or tree), why the vulnerable code is
+# unreachable, what retires it, and `expired_at:` so the gate reopens alone.
+# The first entry also brings vex/kura.openvex.json, .github/scripts/vex.py and
+# `task vex` (weebo-security references/sbom-vex.md).
+#
+# Removed 2026-11-21: CVE-2026-112366 (picomatch, GHSA-fc5q-39xc-vjpf). Trivy
+# skips dev dependencies and picomatch is dev-only in both lockfiles, so the gate
+# no longer reports it; `pnpm audit` still does and keeps its dated --ignore.
+vulnerabilities: []

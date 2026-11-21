@@ -1,0 +1,70 @@
+name: security
+
+# The gates of weebo-security. The daily run is the point: a CVE disclosed after
+# the last commit fails here the next morning with nothing changed.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "20 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# SARIF goes to the Security tab only when code scanning is on for the repo
+# (repository variable CODE_SCANNING=true): on a private repo without it the
+# upload fails. The gates run either way. A fork PR's token cannot write
+# security events, so its uploads are skipped.
+jobs:
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history: a secret committed then removed is still a finding
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - run: gitleaks git --redact --verbose
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      # cargo audit, cargo deny, pnpm audit, trivy fs; the image is the next job.
+      - run: task audit
+
+  sast:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - run: task sast SARIF=semgrep.sarif
+      - name: Upload SARIF
+        if: always() && vars.CODE_SCANNING == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - run: docker build -f Containerfile -t kura-server:ci .
+      # One scan, report and gate: the task's flags, SARIF output when it is uploaded.
+      - run: task audit:image IMAGE=kura-server:ci -- ${{ vars.CODE_SCANNING == 'true' && '--format sarif --output trivy.sarif' || '' }}
+      - name: Upload SARIF
+        if: always() && vars.CODE_SCANNING == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-image

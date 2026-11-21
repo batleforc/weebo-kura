@@ -37,6 +37,10 @@ kubeconform = "latest"
 "aqua:prometheus/prometheus" = "latest"
 k6 = "latest"
 codex = "latest"
+# task update: Containerfile FROM tags and digests (.updatecli/docker.yaml)
+updatecli = "latest"
+# task sast
+semgrep = "latest"
 
 [env]
 # Nightly only for `cargo fuzz`, pinned by date so a fuzz run is reproducible.

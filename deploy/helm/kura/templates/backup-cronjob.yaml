@@ -18,6 +18,7 @@ spec:
           # The same identity as the server: it reads the database and the
           # bucket from Vault.
           serviceAccountName: {{ .Values.serviceAccount.name }}
+          securityContext: { fsGroup: 65532 }
           containers:
             - name: backup
               image: {{ include "kura.image" . }}

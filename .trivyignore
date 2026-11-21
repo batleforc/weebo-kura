@@ -1,9 +1,0 @@
-# Dated exceptions (weebo-security: a justification and an expiry, no silent
-# suppression). Trivy reports them again once `exp` passes.
-
-# picomatch <=4.0.7, ReDoS on extglobs (GHSA-fc5q-39xc-vjpf), the same
-# exception `pnpm audit` carries in .tasks/ui.yaml and .tasks/plugin.yaml: no
-# fixed release (`npm view picomatch versions` ends at 4.0.7, checked
-# 2026-11-18); a build-time glob matcher (vite, vitest, vue-router's route
-# plugin), in no shipped bundle (`grep -c picomatch ui/dist/assets/*.js` is 0).
-CVE-2026-112366 exp:2026-12-17

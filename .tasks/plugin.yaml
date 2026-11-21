@@ -53,8 +53,11 @@ tasks:
     dir: plugin
     cmds:
       # GHSA-fc5q-39xc-vjpf (picomatch <=4.0.7, ReDoS on extglobs): no fixed
-      # version exists. Checked 2026-11-17: picomatch arrives through vitest's coverage (dev only), a
+      # version exists (re-checked 2026-11-21: fix PRs micromatch/picomatch#273, #274, #277 still open). Checked 2026-11-17: picomatch arrives through vitest's coverage (dev only), a
       # build-time glob matcher, and is in no shipped bundle
       # (`grep -c picomatch main.js` is 0). Drop this ignore once
-      # `npm view picomatch versions` lists a release past 4.0.7.
+      # `npm view picomatch versions` lists a release past 4.0.7; expires
+      # 2027-01-17: the date check fails the task from then on; re-check, then
+      # renew with a new date or drop the ignore.
+      - 'test "$(date -u +%Y%m%d)" -lt 20270118 || { echo "GHSA-fc5q-39xc-vjpf ignore expired 2027-01-17, re-check picomatch" >&2; exit 1; }'
       - pnpm audit --ignore GHSA-fc5q-39xc-vjpf

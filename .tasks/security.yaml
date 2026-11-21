@@ -16,7 +16,7 @@ tasks:
     cmds:
       # The same two dated exceptions as deny.toml (unmaintained crates of
       # object_store 0.14.2, no vulnerability): drop them with deny.toml's,
-      # at the latest on review 2026-12-17.
+      # at the latest on review 2027-01-17 (re-checked 2026-11-21).
       - cargo audit --deny warnings --ignore RUSTSEC-2026-0542 --ignore RUSTSEC-2026-0543
 
   deny:
@@ -27,14 +27,22 @@ tasks:
   audit:fs:
     desc: Trivy on the repository (vulnerable lockfiles, Containerfile misconfigurations)
     cmds:
-      - trivy fs --scanners vuln,misconfig --severity HIGH,CRITICAL --exit-code 1 .
+      # The chart refuses to render without backups (§10.3): scan it rendered as
+      # a real install would be, backups on, so Trivy checks it instead of skipping it.
+      - trivy fs --scanners vuln,misconfig --severity HIGH,CRITICAL --exit-code 1 --ignorefile .trivyignore.yaml --helm-set backup.enabled=true,cnpg.backup.destinationPath=s3://trivy-scan/pg .
 
   audit:image:
-    desc: "Trivy on a built image, fixable HIGH/CRITICAL only (usage: task audit:image IMAGE=<ref>)"
+    desc: "Trivy on a built image, fixable HIGH/CRITICAL only (usage: task audit:image IMAGE=<ref> [-- extra trivy flags])"
     cmds:
       - |
         if [ -z "{{.IMAGE}}" ]; then
           echo "SKIPPED: audit:image — IMAGE unset (CI's image job is the gate)" >&2
           exit 0
         fi
-        trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "{{.IMAGE}}"
+        trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+          --ignorefile .trivyignore.yaml {{.CLI_ARGS}} "{{.IMAGE}}"
+
+  sast:
+    desc: "Semgrep static analysis (p/rust, p/typescript, p/secrets), fails on an ERROR finding; SARIF=<file> also writes a report"
+    cmds:
+      - semgrep scan --config p/rust --config p/typescript --config p/secrets --severity ERROR --error --metrics off {{if .SARIF}}--sarif-output {{.SARIF}}{{end}}
