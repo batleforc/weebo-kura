@@ -24,6 +24,9 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
+          # cog reads user.name and panics without it; the runner has none.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           for c in $(git rev-list --no-merges "$BASE..HEAD"); do
             cog verify "$(git log -1 --format=%B "$c")"
           done
