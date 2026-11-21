@@ -11,7 +11,7 @@ write route before its identity check and limits (RFC §16).
 | --- | --- | --- | --- |
 | Accepted | done | 2026-11-21 | Questions 4, 8 and 9 resolved as recommended: projected ServiceAccount token, no break-glass push, webhook `failurePolicy: Fail` |
 | Phase 0 | done | 2026-11-22 | Kit `weebo-si-operator/weebo-operator-kit` v0.32.0 (`8284bb9f`), workspace builds unchanged. `kura-api`: `KuraInstance` (`instance.rs`, cluster-scoped, `url`, `tls`, required `auth.serviceAccountToken.audience`), `Status.instance` (the kit's `BoundInstance`, optional), reason codes `SetRejected`, `SourceIsFiles`, `VaultNamespaceNotAllowed`, `TenantNotFound`, `VaultManagedByApi`, `InstanceUnreachable`, `InstanceUnauthorized` (blocking). `kura-crdgen` writes `kurainstance.yaml`, the instance stands for both schematic roles; docs reference regenerated with its example. Template generated with `cargo-generate` 0.26.0 into the scratchpad; its crates merge in phase 2 (D1) |
-| Phase 1 | todo | | Server: `documents` config, operator verifier, `PUT /v1/admin/documents` |
+| Phase 1 | done | 2026-11-22 | `server.yaml` `documents` (default `files`; `operator` needs `issuer` https, `audience`, `subject` exactly `system:serviceaccount:<ns>:<name>`, plus `caFile`, `tokenFile`) (D6); `auth/operator.rs` `OperatorVerifier` (`RS256` only, `iss`/`aud` exact, `exp` 30 s leeway, `sub` byte-equal, its own unpersisted `Keys` from `KeySource::cluster`), `OperatorCaller`; `app/documents.rs` `put_documents` (409 `documents_source_files` before the token, 401/403, 30/min per subject, 4 MiB, 2,000 documents, `kura_api::pushed_name`, `ConfigFiles::new`, `reconcile()`), answering `DocumentsResult` (`applied`, `outcome`, structured `errors`, the `AdminStatus` reloaded after a write); audit lines `documents_pushed` / `documents_rejected`; `kura_documents_pushes_total{outcome}` (D4); `reconcile::run` only in files mode; ready at start in operator mode (D7); OpenAPI regenerated, Spectral clean. Tests: `tests/documents.rs` (`a_push_applies_like_files`, T1 `documents_refuses_other_identities`, `files_mode_refuses_every_push`, T5 `documents_body_and_count_limits`, T6 `older_writer_refused`, T10 `empty_set_refused`), T7 `tests/documents_audit.rs`, unit T1 and T9 in `auth/operator.rs` (cluster issuer with a bearer, no userinfo, redirect refused), config; `fuzz_documents_body` 2,310,464 runs in 61 s, no finding. Workspace tests green against PostgreSQL. Docs: problem types, API, rate limits, metrics, reason codes, `server.yaml` |
 | Phase 2 | todo | | `kura-operator`: controllers, push queue, gateway, status, webhook |
 | Phase 3 | todo | | Charts, image, release jobs, §6.P proof on kind, capacity probe |
 | Phase 4 | todo | | Docs, perf budget, status `Implemented` with §18 |
@@ -197,13 +197,16 @@ request; the §6.P suite `ok` on kind.
 | D1 | 0 | §16 phase 0 ("merge its crates … the generated operator builds and its template tests pass") | The generated crates are not merged in phase 0; they land in phase 2, already in Kura's shape | Verbatim, they build only with the template's `KuraObject`, `KuraLocalInstance` and `tokenSecretRef`, which §6.3 deletes: merging them first would add code and tests rewritten one phase later |
 | D2 | 0 | §4.3 (`KuraInstance` without `spec.auth` refused "by CEL") | `auth` is a required field of the schema, not a CEL rule | Same refusal at admission (`spec.auth: Required value`), with no rule to maintain |
 
+| D3 | 1 | §4.4, §7.2 (`GET /v1/admin/status` admits the operator) | Not opened to the operator | Every push answers with the full status; a second read surface for the same identity adds nothing |
+| D4 | 1 | §6.2 (`kura_documents_pushes_total{result}`) | Label `outcome` | The server's metrics take `tenant`, `vault` and `outcome` labels only (`metrics.rs` header) |
+| D5 | 1 | §6.1 ("no change to the specs"), §13 ("one migration adds `generation`") | `Metadata` gains an optional `generation`, which `status::build` reports as `observedGeneration` (the hash stays for files); no migration | `deny_unknown_fields` would refuse `metadata.generation`; the status is already `jsonb` in `config_state` |
+| D6 | 1 | §4.1, §6.2 (`issuer`, `audience`, `subject`; JWKS "through `KeySource::http`") | Two more keys, `caFile` and `tokenFile`; `KeySource::cluster` sends kura-server's own ServiceAccount token to the discovery and JWKS; a discovery without `userinfo_endpoint` is accepted (userinfo then fails) | Kubernetes serves its issuer discovery to authenticated ServiceAccounts only (`system:service-account-issuer-discovery` is bound to `system:serviceaccounts`), under the cluster CA, and its discovery has no userinfo |
+| D7 | 1 | §13 (rollout) | In operator mode the server is ready at start, before any push | Readiness waited for a first snapshot; a fresh server in operator mode would never get one, the operator reaching it through a Service that routes to ready pods only |
+| D8 | 1 | §4.2, §7.1 T6 ("a stale leader's push is refused by `kura_config_begin`'s generation guard") | `kura_config_begin` refuses an older *server version* and an unchanged generation; a stale operator leader of the same version can push once | The guard is about server versions (§6.10 of RFC 0001); the Lease makes one leader and the next push from the cache corrects a stale one, as T6's residual risk says. `older_writer_refused` proves the version guard |
+| D9 | 1 | §4.5 (`source` "becomes `KuraVault/family/recipes`") | `KuraVault/family/recipes#1` | The source keeps the files' `file#index` shape; each pushed document is index 1 of its own "file" |
+
 Known in advance, to confirm while building:
 
-- Phase 1, step 5: per-object generation without a migration (status is
-  `jsonb`).
-- Phase 2, step 1: `Metadata` may need an optional `generation` to carry
-  `metadata.generation` through `deny_unknown_fields`, which RFC §6.1 says
-  does not change.
 - Phase 0, step 3: the RFC's `Touches` names `crates/operator/*`; the existing
   crates are flat (`crates/kura-*`). The plan follows the RFC; flattening
   would be a divergence to record.

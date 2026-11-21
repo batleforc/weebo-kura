@@ -24,6 +24,8 @@ pub enum ProblemType {
     TokenWriteDisabled,
     /// RFC 0003 §4.3: a rule route while `notifications.enabled` is false.
     NotificationsDisabled,
+    /// RFC 0009 §4.1: a push of documents while `documents.source` is `files`.
+    DocumentsSourceFiles,
     CursorExpired,
     HistoryRewound,
     PayloadTooLarge,
@@ -50,7 +52,7 @@ impl ProblemType {
         )
     }
 
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::InvalidRequest,
         Self::InvalidToken,
         Self::DeviceRevoked,
@@ -61,6 +63,7 @@ impl ProblemType {
         Self::SearchDisabled,
         Self::TokenWriteDisabled,
         Self::NotificationsDisabled,
+        Self::DocumentsSourceFiles,
         Self::CursorExpired,
         Self::HistoryRewound,
         Self::PayloadTooLarge,
@@ -85,6 +88,7 @@ impl ProblemType {
             Self::SearchDisabled => "search_disabled",
             Self::TokenWriteDisabled => "token_write_disabled",
             Self::NotificationsDisabled => "notifications_disabled",
+            Self::DocumentsSourceFiles => "documents_source_files",
             Self::CursorExpired => "cursor_expired",
             Self::HistoryRewound => "history_rewound",
             Self::PayloadTooLarge => "payload_too_large",
@@ -106,9 +110,10 @@ impl ProblemType {
             }
             Self::InsufficientRole | Self::AddressNotAllowed => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
-            Self::SearchDisabled | Self::TokenWriteDisabled | Self::NotificationsDisabled => {
-                StatusCode::CONFLICT
-            }
+            Self::SearchDisabled
+            | Self::TokenWriteDisabled
+            | Self::NotificationsDisabled
+            | Self::DocumentsSourceFiles => StatusCode::CONFLICT,
             Self::CursorExpired | Self::HistoryRewound => StatusCode::GONE,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidPath

@@ -363,7 +363,7 @@ async fn tick(
     true
 }
 
-fn log_applied(removed: &[Removed]) {
+pub fn log_applied(removed: &[Removed]) {
     tracing::info!(removed = removed.len(), "configuration reconciled");
     for r in removed {
         tracing::warn!(target: "audit", kind = %r.kind, name = %r.name, delete_after = ?r.delete_after, "configuration object removed");

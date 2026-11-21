@@ -18,6 +18,26 @@ pub struct ConfigFiles {
     pub generation: [u8; 32],
 }
 
+impl ConfigFiles {
+    /// Sorts `files` by name and computes their generation, as a directory
+    /// read does: the same documents give the same generation whatever their
+    /// source.
+    pub fn new(mut files: Vec<(String, String)>) -> Self {
+        files.sort();
+        let mut hasher = Sha256::new();
+        for (name, content) in &files {
+            hasher.update(name.as_bytes());
+            hasher.update([0]);
+            hasher.update((content.len() as u64).to_be_bytes());
+            hasher.update(content.as_bytes());
+        }
+        Self {
+            files,
+            generation: hasher.finalize().into(),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum FilesError {
     #[error("cannot read {path}: {source}")]
@@ -57,22 +77,13 @@ pub fn read_dir(dir: &Path) -> Result<ConfigFiles, FilesError> {
             return Err(FilesError::TooMany(dir.display().to_string()));
         }
     }
-    names.sort();
-    let mut hasher = Sha256::new();
     let mut files = Vec::with_capacity(names.len());
     for name in names {
         let path = dir.join(&name);
         let content = std::fs::read_to_string(&path).map_err(io(&path))?;
-        hasher.update(name.as_bytes());
-        hasher.update([0]);
-        hasher.update((content.len() as u64).to_be_bytes());
-        hasher.update(content.as_bytes());
         files.push((name, content));
     }
-    Ok(ConfigFiles {
-        files,
-        generation: hasher.finalize().into(),
-    })
+    Ok(ConfigFiles::new(files))
 }
 
 #[cfg(test)]

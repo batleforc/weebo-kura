@@ -40,6 +40,7 @@ of
 | `/v1/problems/search_disabled` | 409 | search disabled | A search on a vault whose tenant has not turned search on. |
 | `/v1/problems/token_write_disabled` | 409 | token write disabled | Issuing a token with a `write` rule in a tenant without `scopedTokens.write`. |
 | `/v1/problems/notifications_disabled` | 409 | notifications disabled | A notification rule route while `notifications.enabled` is false in `server.yaml`. |
+| `/v1/problems/documents_source_files` | 409 | documents source files | A push to `PUT /v1/admin/documents` while `documents.source` is `files` in `server.yaml`; answered before the token is read. |
 | `/v1/problems/cursor_expired` | 410 | cursor expired | The device asks for changes from before the vault's horizon (deleted entries were purged since), or pushes onto an entry purged while it was away. The device runs a full resync. |
 | `/v1/problems/history_rewound` | 410 | history rewound | The vault's epoch differs from the one the device knows, or the device's cursor is past the server's head: the server lost history the device has seen (after a restore or a database failover). The device pushes back what the server lacks, deleting nothing. |
 | `/v1/problems/payload_too_large` | 413 | payload too large | A body over the route's limit: 64 KiB for most routes, up to 4 MiB for chunks (see [Body limits](/docs/reference/api#body-limits)). |

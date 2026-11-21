@@ -17,7 +17,7 @@ pub mod validate;
 #[cfg(feature = "crd")]
 pub use instance::{KuraInstance, KuraInstanceSpec};
 pub use names::{DnsLabel, TenantSlug};
-pub use parse::{ConfigError, Resource, Source, parse_file};
+pub use parse::{ConfigError, Resource, Source, parse_file, pushed_name};
 pub use quantity::{Duration, Quantity};
 pub use reason::ReasonCode;
 pub use role::{TenantRole, VaultRole};

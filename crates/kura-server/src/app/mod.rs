@@ -99,6 +99,9 @@ pub struct AppState {
     pub ui: Option<ui::UiSettings>,
     /// Outbound notifications, when `notifications.enabled` (RFC 0003 §6.4).
     pub notifier: Option<Arc<crate::notifier::Notifier>>,
+    /// kura-operator's identity when `documents.source` is `operator` (RFC
+    /// 0009); `None`: the files are the source, the push route answers 409.
+    pub documents: Option<Arc<crate::auth::OperatorVerifier>>,
     snapshot: RwLock<Option<Arc<Snapshot>>>,
     /// This replica's last rejected configuration, for `GET /v1/admin/status`.
     rejection: Mutex<Option<Vec<kura_api::ConfigError>>>,
@@ -117,6 +120,7 @@ impl AppState {
             storage: None,
             ui: None,
             notifier: None,
+            documents: None,
             hub,
             batches: tokio::sync::Semaphore::new(chunks::BATCHES_IN_FLIGHT),
             snapshot: RwLock::new(None),
@@ -187,6 +191,12 @@ impl Default for HttpSettings {
 impl AppState {
     pub fn with_notifier(mut self, n: crate::notifier::Notifier) -> Self {
         self.notifier = Some(Arc::new(n));
+        self
+    }
+
+    /// Makes kura-operator the source of the documents (RFC 0009).
+    pub fn with_documents(mut self, verifier: crate::auth::OperatorVerifier) -> Self {
+        self.documents = Some(Arc::new(verifier));
         self
     }
 
@@ -324,6 +334,14 @@ fn large_body_routes() -> OpenApiRouter<SharedState> {
                 .routes(routes!(chunks::upload_chunks))
                 .layer(axum::extract::DefaultBodyLimit::max(
                     chunks::MAX_UPLOAD_BODY,
+                )),
+        )
+        .merge(
+            // RFC 0009: the whole set of documents, up to 2,000.
+            OpenApiRouter::new()
+                .routes(routes!(documents::put_documents))
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    documents::MAX_BODY_BYTES,
                 )),
         )
         .merge(
@@ -531,6 +549,7 @@ pub mod chunks;
 pub mod commits;
 pub mod device;
 pub mod devices;
+pub mod documents;
 pub mod events;
 pub mod me;
 pub mod notifications;

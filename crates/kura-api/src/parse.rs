@@ -2,14 +2,14 @@
 
 use std::fmt;
 
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_norway::Value;
 
 use crate::spec::{API_VERSION, Document, KIND_TENANT, KIND_VAULT, KuraTenant, KuraVault};
 
 /// Where a document came from: file name and 1-based index in the file.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Source {
     pub file: String,
     pub index: usize,
@@ -38,7 +38,7 @@ impl Resource {
 
 /// A rejected document or set of documents (RFC 0001 §4.3), rendered as
 /// `tenants.yaml#2 spec.claimMappings.roles.ownr: unknown field ...`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 pub struct ConfigError {
     /// `None` for a rule about the whole set (mass removal, no tenant).
     pub location: Option<Source>,
@@ -69,6 +69,31 @@ impl fmt::Display for ConfigError {
             (None, false) => write!(f, "{}: {}", self.path, self.message),
             (None, true) => f.write_str(&self.message),
         }
+    }
+}
+
+/// The name a document pushed by kura-operator is known by in errors, logs
+/// and the status: `KuraTenant/<name>` or `KuraVault/<namespace>/<name>`
+/// (RFC 0009 §5.2). Labels only, so it carries no separator or newline of the
+/// sender's into a log.
+pub fn pushed_name(doc: &serde_json::Value) -> Result<String, String> {
+    let label = |v: Option<&serde_json::Value>, what: &str| {
+        v.and_then(serde_json::Value::as_str)
+            .and_then(|s| crate::DnsLabel::try_from(s.to_owned()).ok())
+            .ok_or_else(|| format!("{what} must be an RFC 1123 label"))
+    };
+    let metadata = doc.get("metadata");
+    let name = label(metadata.and_then(|m| m.get("name")), "metadata.name")?;
+    match doc.get("kind").and_then(serde_json::Value::as_str) {
+        Some(kind @ KIND_TENANT) => Ok(format!("{kind}/{name}")),
+        Some(kind @ KIND_VAULT) => {
+            let namespace = label(
+                metadata.and_then(|m| m.get("namespace")),
+                "metadata.namespace",
+            )?;
+            Ok(format!("{kind}/{namespace}/{name}"))
+        }
+        _ => Err("kind must be KuraTenant or KuraVault".into()),
     }
 }
 

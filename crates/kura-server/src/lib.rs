@@ -27,19 +27,14 @@ use tokio_util::sync::CancellationToken;
 pub type Background = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
 /// The background tasks of a running server: the reconciler of
-/// `config_dir` and the authorization cache refresh.
+/// `config_dir` (absent when kura-operator pushes the documents, RFC 0009)
+/// and the authorization cache refresh.
 pub fn background(
     state: &app::SharedState,
-    config_dir: std::path::PathBuf,
+    config_dir: Option<std::path::PathBuf>,
     shutdown: &CancellationToken,
 ) -> Vec<Background> {
-    vec![
-        Box::pin(reconcile::run(
-            state.db.clone(),
-            config_dir,
-            state.clone(),
-            shutdown.clone(),
-        )),
+    let mut tasks: Vec<Background> = vec![
         Box::pin(reconcile::snapshot::run(
             state.db.clone(),
             state.clone(),
@@ -59,7 +54,16 @@ pub fn background(
         )),
         // Returns at once when notifications are off.
         Box::pin(notifier::run(state.clone(), shutdown.clone())),
-    ]
+    ];
+    if let Some(dir) = config_dir {
+        tasks.push(Box::pin(reconcile::run(
+            state.db.clone(),
+            dir,
+            state.clone(),
+            shutdown.clone(),
+        )));
+    }
+    tasks
 }
 
 /// Serves the API and the metrics on their listeners, with the background

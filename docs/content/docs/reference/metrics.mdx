@@ -20,6 +20,7 @@ on them are in [Alerts](/docs/reference/alerts).
 | --- | --- | --- | --- |
 | `kura_ready` | gauge | none | 1 while the configuration is loaded and the replica serves traffic. |
 | `kura_config_rejected_total` | counter | none | Configuration changes refused by validation; the previous configuration stays in force. |
+| `kura_documents_pushes_total` | counter | `outcome` | Pushes of kura-operator to `PUT /v1/admin/documents`: `applied`, `unchanged`, `rejected` (the set failed validation), `refused` (files mode, or not the operator's identity). |
 | `kura_config_warnings` | gauge | none | Objects of the stored configuration whose `Ready` is not `True`, or that carry an advisory condition (see [Reason codes](/docs/reference/reason-codes)). |
 | `kura_authz_denied_total` | counter | `outcome` | Authorization denials. `outcome` is the problem type: `invalid_token`, `device_revoked`, `device_unknown`, `insufficient_role`, `address_not_allowed`, `not_found`. |
 | `kura_unavailable_total` | counter | none | `503` answers caused by a failed dependency; the `warn` log line names it. |

@@ -126,6 +126,9 @@ async fn connect(
         trusted_proxies: config.trusted_proxies.clone(),
     };
     let mut state = app::AppState::new(metrics, pool, verifier).with_http(http);
+    if let Some(op) = config.documents.operator() {
+        state = state.with_documents(operator_verifier(op)?);
+    }
     if config.notifications.enabled {
         let webhook = &config.notifications.webhook;
         // A caFile that cannot be read, or holds no certificate, stops the
@@ -185,6 +188,34 @@ async fn connect(
         )));
     }
     Ok((state, vault, url))
+}
+
+/// kura-operator's verifier (RFC 0009 §6.2): the cluster issuer, reached
+/// with its CA and kura-server's own token; its keys are never persisted.
+fn operator_verifier(
+    op: &kura_server::config::OperatorIdentity,
+) -> anyhow::Result<kura_server::auth::OperatorVerifier> {
+    let ca = match &op.ca_file {
+        Some(path) => {
+            let pem = std::fs::read(path).map_err(|e| {
+                anyhow::anyhow!("documents.operator.caFile {}: {e}", path.display())
+            })?;
+            let certs = reqwest::Certificate::from_pem_bundle(&pem)?;
+            anyhow::ensure!(
+                !certs.is_empty(),
+                "documents.operator.caFile {}: no certificate",
+                path.display()
+            );
+            certs
+        }
+        None => Vec::new(),
+    };
+    let source = kura_server::auth::KeySource::cluster(&op.issuer, &ca, op.token_file.clone())?
+        .expecting(&op.issuer);
+    Ok(kura_server::auth::OperatorVerifier::new(
+        op,
+        kura_server::auth::Keys::new(source, None),
+    ))
 }
 
 /// One maintenance pass now, outside the window (§6.9): retention, garbage
@@ -247,7 +278,7 @@ async fn check_chunks(config_path: PathBuf, n: &str) -> anyhow::Result<()> {
 /// The background tasks: the library's, the maintenance window and, with Vault, the credential refresh.
 fn spawn_background(
     state: &kura_server::app::SharedState,
-    config_dir: PathBuf,
+    config_dir: Option<PathBuf>,
     config: &ServerConfig,
     vault: Option<std::sync::Arc<kura_server::vault::Vault>>,
     url: String,
@@ -312,9 +343,22 @@ async fn run(config_path: PathBuf) -> anyhow::Result<()> {
         .await
         .context("binding the metrics port")?;
     let (state, vault, url) = connect(&config).await?;
-    let config_dir = std::env::var_os(CONFIG_DIR_ENV)
-        .map(PathBuf::from)
-        .with_context(|| format!("{CONFIG_DIR_ENV} is not set"))?;
+    // One source (RFC 0009 §4.2): the files are not read when the operator pushes.
+    let config_dir = if config.documents.operator().is_some() {
+        if std::env::var_os(CONFIG_DIR_ENV).is_some() {
+            tracing::warn!("{CONFIG_DIR_ENV} is ignored: documents.source is operator");
+        }
+        // Ready before the first push: kura-operator reaches this pod through
+        // its Service, which only routes to ready pods.
+        state.set_ready(true);
+        None
+    } else {
+        Some(
+            std::env::var_os(CONFIG_DIR_ENV)
+                .map(PathBuf::from)
+                .with_context(|| format!("{CONFIG_DIR_ENV} is not set"))?,
+        )
+    };
     startup_checks(&state, &config).await?;
     let state = std::sync::Arc::new(state);
     let shutdown = CancellationToken::new();
