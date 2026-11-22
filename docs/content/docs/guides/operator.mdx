@@ -1,0 +1,114 @@
+---
+title: Operator
+description: Declare tenants and vaults as Kubernetes custom resources, handed to Kura by kura-operator, and move an install from files to the operator.
+---
+
+kura-operator (RFC 0009) watches `KuraTenant`, `KuraVault` and `KuraInstance`
+custom resources and hands the whole set to kura-server. The YAML is the
+documents of [Tenants and vaults](/docs/guides/tenants-and-vaults), unchanged:
+you apply it with `kubectl` instead of putting it in the chart's `documents`.
+
+The operator holds no rule of its own. On every change it builds the set of
+documents from its cache and sends it to `PUT /v1/admin/documents`. The server
+checks the set as it checks files, applies it or refuses it whole, and
+answers with the status of every object. The operator writes that status on
+each resource:
+
+```text
+$ kubectl get kuravaults -A
+NAMESPACE   NAME        TENANT   READY   REASON
+maxime      knowledge   maxime   True    Reconciled
+family      recipes     family   False   InvalidDocument
+```
+
+## One source at a time
+
+kura-server reads its documents from **either** the files **or** the
+operator, as `server.documents.source` says. Never both: two sources of one
+authorization table is how a removed grant survives. Switching is a restart.
+
+| `documents.source` | The files | `PUT /v1/admin/documents` | The resources show |
+| --- | --- | --- | --- |
+| `files` (default) | read | `409 documents_source_files` | `SourceIsFiles` |
+| `operator` | not read | kura-operator's identity only | the server's status |
+
+## Install
+
+1. Install the operator's chart (`deploy/charts/kura-operator`). It installs
+   the three CRDs (`crds.install`, kept by `helm uninstall`) and the
+   admission webhook, which needs cert-manager.
+2. Name the server with a `KuraInstance`, one per cluster:
+
+   ```yaml
+   apiVersion: kura.weebo.io/v1alpha1
+   kind: KuraInstance
+   metadata: { name: kura }
+   spec:
+     url: http://kura.kura.svc:8080
+     auth:
+       serviceAccountToken: { audience: kura }
+   ```
+
+   The operator proves who it is with a token of its own ServiceAccount for
+   that audience, created through the Kubernetes TokenRequest API for each
+   hour of use: no secret is stored anywhere.
+3. In the `kura` chart, allow that identity and the operator's namespace:
+
+   ```yaml
+   server:
+     documents:
+       source: operator
+       operator:
+         issuer: https://kubernetes.default.svc.cluster.local
+         audience: kura
+         subject: system:serviceaccount:kura-operator:kura-operator
+   networkPolicy:
+     operatorNamespace: kura-operator
+   ```
+
+   The chart adds kura-server's own ServiceAccount CA and token, with which
+   it reads the cluster issuer's keys (`documents.operator.caFile` and
+   `tokenFile`, see [server.yaml](/docs/guides/configuration#documents)).
+
+## Moving from files
+
+Nothing is written until the last step, and every step can be undone.
+
+1. Install the operator, server still in `files` mode. The resources show
+   `SourceIsFiles`; the server is untouched.
+2. `kubectl apply` the documents of today (the chart's `documents`). The
+   webhook checks each vault's namespace and tenant.
+3. Set `server.documents.source: operator` and upgrade the `kura` chart. The
+   file reconciler stops, the operator's first push carries the full set.
+   Every object is the same, so nothing is removed.
+4. `kubectl get kuratenants,kuravaults -A`: every resource `Ready`.
+
+To go back, set `source: files` again: the server reads the documents
+ConfigMap as before.
+
+## Who may change what
+
+Kubernetes RBAC now decides who declares what:
+
+- `KuraTenant` and `KuraInstance` are cluster-scoped: cluster admins.
+- `KuraVault` is namespaced. Whoever may create a `KuraVault` in a namespace
+  that a tenant lists in `vaultNamespaces` administers that tenant's vaults
+  there, bindings included. Listing a namespace delegates it.
+
+kura-server sees only the operator. The Kubernetes audit log records which
+person changed which resource; Kura's audit log records each push
+(`documents_pushed`, `documents_rejected`).
+
+## What you see when it goes wrong
+
+| Reason | On | Means |
+| --- | --- | --- |
+| `InvalidDocument` | the refused resource | the server's message, field path included; the last valid set stays in force |
+| `SetRejected` | every other resource | the set was refused because of the named resource |
+| `VaultNamespaceNotAllowed`, `TenantNotFound` | `kubectl apply` | refused by the webhook, nothing reached Kura |
+| `SourceIsFiles` | every resource | the server is in `files` mode |
+| `InstanceUnreachable`, `InstanceUnauthorized`, `InstanceNotFound` | every resource | the server cannot be reached, refuses the operator's identity, or no single `KuraInstance` names it |
+
+With the operator down, Kura keeps serving the last set it received, and the
+webhook (`failurePolicy: Fail`) refuses changes to the three kinds until the
+operator is back.

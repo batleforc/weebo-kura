@@ -40,6 +40,66 @@ impl TestKey {
     }
 }
 
+/// The `RSAPrivateKey` inside a PKCS#8 `PrivateKeyInfo`: SEQUENCE { INTEGER,
+/// SEQUENCE (algorithm), OCTET STRING (the key) }; jsonwebtoken signs with it.
+fn pkcs1_of(der: &[u8]) -> &[u8] {
+    // (header length, content length) of the DER element at the start of `d`.
+    fn element(d: &[u8]) -> (usize, usize) {
+        match d[1] {
+            n if n < 0x80 => (2, usize::from(n)),
+            n => {
+                let bytes = usize::from(n & 0x7f);
+                let len = d[2..2 + bytes]
+                    .iter()
+                    .fold(0, |a, b| (a << 8) | usize::from(*b));
+                (2 + bytes, len)
+            }
+        }
+    }
+    let (outer, _) = element(der);
+    let mut rest = &der[outer..];
+    for _ in 0..2 {
+        let (h, l) = element(rest);
+        rest = &rest[h.saturating_add(l)..];
+    }
+    assert_eq!(rest[0], 0x04, "the key's OCTET STRING");
+    let (h, l) = element(rest);
+    &rest[h..h.saturating_add(l)]
+}
+
+/// An RSA key for this run (the operator's tokens are `RS256` only).
+pub struct RsaTestKey {
+    pub kid: String,
+    encoding: EncodingKey,
+    pub jwk: Value,
+}
+
+impl RsaTestKey {
+    pub fn new(kid: &str) -> Self {
+        use aws_lc_rs::encoding::AsDer;
+        let pair = aws_lc_rs::rsa::KeyPair::generate(aws_lc_rs::rsa::KeySize::Rsa2048).unwrap();
+        let pkcs8 = pair.as_der().unwrap();
+        let public = pair.public_key();
+        let n = URL_SAFE_NO_PAD.encode(public.modulus().big_endian_without_leading_zero());
+        let e = URL_SAFE_NO_PAD.encode(public.exponent().big_endian_without_leading_zero());
+        Self {
+            kid: kid.into(),
+            encoding: EncodingKey::from_rsa_der(pkcs1_of(pkcs8.as_ref())),
+            jwk: json!({ "kty": "RSA", "n": n, "e": e, "kid": kid, "alg": "RS256", "use": "sig" }),
+        }
+    }
+
+    pub fn jwks(&self) -> JwkSet {
+        serde_json::from_value(json!({ "keys": [self.jwk.clone()] })).unwrap()
+    }
+
+    pub fn sign(&self, claims: &Value) -> String {
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some(self.kid.clone());
+        encode(&header, claims, &self.encoding).unwrap()
+    }
+}
+
 pub fn access_claims(sub: &str) -> Value {
     json!({
         "iss": ISSUER, "aud": "kura-cli", "sub": sub, "sid": "session-1",

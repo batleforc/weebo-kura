@@ -62,6 +62,12 @@ skip = [
     { name = "rand_core", version = "0.9" },
     { name = "getrandom", version = "0.3" },
     { name = "r-efi", version = "5" },
+    # Build tools of envtest (rust2go: bindgen, cbindgen), the test-only
+    # control plane of kura-operator-testkit (RFC 0009); never in a binary.
+    { name = "heck", version = "0.4" },
+    { name = "itertools", version = "0.13" },
+    { name = "itertools", version = "0.14" },
+    { name = "shlex", version = "1" },
 ]
 # Workspace crates depend on each other through versionless paths.
 wildcards = "allow"
@@ -97,4 +103,4 @@ unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # weebo-operator-kit, pinned by tag in Cargo.toml (RFC 0001 §4.1, decision 49).
-allow-git = ["https://github.com/batleforc/weebo-operator-kit"]
+allow-git = ["https://github.com/weebo-si-operator/weebo-operator-kit"]

@@ -13,6 +13,20 @@
       "references": [],
       "produces": []
     },
+    "KuraInstance": {
+      "references": [
+        {
+          "path": "spec.tls.caSecretRef",
+          "to": [
+            {
+              "group": "",
+              "kind": "Secret"
+            }
+          ]
+        }
+      ],
+      "produces": []
+    },
     "KuraTenant": {
       "references": [],
       "produces": []

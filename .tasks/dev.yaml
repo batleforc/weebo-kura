@@ -256,4 +256,4 @@ tasks:
       - task: dev:up
       - task: dev:vault
       - task: dev:s3
-      - cargo test --workspace
+      - cargo test --workspace --exclude kura-operator-testkit

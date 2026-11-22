@@ -1,5 +1,19 @@
 {
   "kinds": {
+    "KuraInstance": {
+      "produces": [],
+      "references": [
+        {
+          "path": "spec.tls.caSecretRef",
+          "to": [
+            {
+              "group": "",
+              "kind": "Secret"
+            }
+          ]
+        }
+      ]
+    },
     "KuraTenant": {
       "produces": [],
       "references": []

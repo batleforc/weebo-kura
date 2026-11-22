@@ -1,5 +1,5 @@
-//! Per-object status in the kit's shape (§4.3): `observedGeneration` (in file
-//! mode a hash of the document) and conditions, `Ready` first, with reasons
+//! Per-object status in the kit's shape (§4.3): `observedGeneration` (the
+//! pushed `metadata.generation`, else a hash of the document) and conditions, `Ready` first, with reasons
 //! from Kura's catalogue.
 
 use kura_api::ReasonCode;
@@ -45,8 +45,13 @@ impl StoredStatus {
     }
 }
 
-/// A hash of the document as parsed, positive, stable for equal documents.
-fn observed_generation<T: Serialize>(doc: &T) -> Option<i64> {
+/// The document's `metadata.generation` when kura-operator sent it (RFC 0009
+/// §4.2), else a hash of the document as parsed, positive, stable for equal
+/// documents.
+fn observed_generation<S: Serialize>(doc: &kura_api::Document<S>) -> Option<i64> {
+    if let Some(generation) = doc.metadata.generation {
+        return Some(generation);
+    }
     let bytes = serde_json::to_vec(doc).ok()?;
     let digest: [u8; 32] = Sha256::digest(&bytes).into();
     let mut first = [0u8; 8];

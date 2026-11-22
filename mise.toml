@@ -41,6 +41,8 @@ codex = "latest"
 updatecli = "latest"
 # task sast
 semgrep = "latest"
+# task operator:test: envtest's build-time Go bindings (kura-operator-testkit)
+go = "latest"
 
 [env]
 # Nightly only for `cargo fuzz`, pinned by date so a fuzz run is reproducible.

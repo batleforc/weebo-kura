@@ -27,7 +27,10 @@ pub struct Discovery {
     #[serde(default)]
     issuer: Option<String>,
     jwks_uri: String,
-    userinfo_endpoint: String,
+    /// Absent from a Kubernetes issuer's discovery (RFC 0009): such a source
+    /// only verifies, it never asks userinfo.
+    #[serde(default)]
+    userinfo_endpoint: Option<String>,
 }
 
 /// An endpoint the server may send tokens to: https, or http on loopback
@@ -49,6 +52,10 @@ pub enum KeySource {
         issuer: String,
         /// The `iss` the discovery document must name (`oidc.issuer`).
         expected: Option<String>,
+        /// A token file sent as bearer to the discovery and JWKS endpoints,
+        /// re-read on each fetch (a Kubernetes issuer serves them to
+        /// authenticated ServiceAccounts only).
+        bearer: Option<std::path::PathBuf>,
         discovery: tokio::sync::OnceCell<Discovery>,
     },
     /// A fixed key set and userinfo answer, for tests.
@@ -60,15 +67,28 @@ pub enum KeySource {
 
 impl KeySource {
     pub fn http(issuer: &str) -> Result<Self, AuthError> {
+        Self::cluster(issuer, &[], None)
+    }
+
+    /// An issuer reached with extra trust roots (`ca`) and, when `bearer` is
+    /// set, that file's token: the cluster's service-account issuer (RFC 0009
+    /// §6.2). No redirect is followed, as for Authentik.
+    pub fn cluster(
+        issuer: &str,
+        ca: &[reqwest::Certificate],
+        bearer: Option<std::path::PathBuf>,
+    ) -> Result<Self, AuthError> {
         let client = reqwest::Client::builder()
             .timeout(PROVIDER_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
+            .tls_certs_merge(ca.iter().cloned())
             .build()
             .map_err(|e| AuthError::Provider(e.to_string()))?;
         Ok(Self::Http {
             client,
             issuer: issuer.to_owned(),
             expected: None,
+            bearer,
             discovery: tokio::sync::OnceCell::new(),
         })
     }
@@ -193,12 +213,33 @@ impl Keys {
         Ok(self.cache.lock().await.keys.get(kid).cloned())
     }
 
+    /// A GET to the provider, with the source's bearer when it has one.
+    async fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T, AuthError> {
+        let KeySource::Http { client, bearer, .. } = &self.source else {
+            return Err(AuthError::Invalid("no discovery"));
+        };
+        let mut request = client.get(url);
+        if let Some(path) = bearer {
+            let token = tokio::fs::read_to_string(path).await.map_err(provider)?;
+            request = request.bearer_auth(token.trim());
+        }
+        request
+            .send()
+            .await
+            .map_err(provider)?
+            .error_for_status()
+            .map_err(provider)?
+            .json::<T>()
+            .await
+            .map_err(provider)
+    }
+
     async fn discovery(&self) -> Result<Option<&Discovery>, AuthError> {
         let KeySource::Http {
-            client,
             issuer,
             expected,
             discovery,
+            ..
         } = &self.source
         else {
             return Ok(None);
@@ -209,33 +250,23 @@ impl Keys {
         );
         discovery
             .get_or_try_init(|| async {
-                client
-                    .get(&url)
-                    .send()
-                    .await
-                    .map_err(provider)?
-                    .error_for_status()
-                    .map_err(provider)?
-                    .json::<Discovery>()
-                    .await
-                    .map_err(provider)
-                    .and_then(|d| {
-                        let same =
-                            |a: &str, b: &str| a.trim_end_matches('/') == b.trim_end_matches('/');
-                        if let Some(want) = expected
-                            && !d.issuer.as_deref().is_some_and(|got| same(got, want))
-                        {
-                            return Err(AuthError::Provider(
-                                "discovery names another issuer".into(),
-                            ));
-                        }
-                        if !safe_endpoint(&d.jwks_uri) || !safe_endpoint(&d.userinfo_endpoint) {
-                            return Err(AuthError::Provider(
-                                "discovery endpoints must be https".into(),
-                            ));
-                        }
-                        Ok(d)
-                    })
+                self.get_json::<Discovery>(&url).await.and_then(|d| {
+                    let same =
+                        |a: &str, b: &str| a.trim_end_matches('/') == b.trim_end_matches('/');
+                    if let Some(want) = expected
+                        && !d.issuer.as_deref().is_some_and(|got| same(got, want))
+                    {
+                        return Err(AuthError::Provider("discovery names another issuer".into()));
+                    }
+                    if !safe_endpoint(&d.jwks_uri)
+                        || !d.userinfo_endpoint.as_deref().is_none_or(safe_endpoint)
+                    {
+                        return Err(AuthError::Provider(
+                            "discovery endpoints must be https".into(),
+                        ));
+                    }
+                    Ok(d)
+                })
             })
             .await
             .map(Some)
@@ -250,20 +281,11 @@ impl Keys {
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
             )
             .map_err(provider)?,
-            KeySource::Http { client, .. } => {
+            KeySource::Http { .. } => {
                 let Some(d) = self.discovery().await? else {
                     return Err(AuthError::Invalid("no discovery"));
                 };
-                client
-                    .get(&d.jwks_uri)
-                    .send()
-                    .await
-                    .map_err(provider)?
-                    .error_for_status()
-                    .map_err(provider)?
-                    .json()
-                    .await
-                    .map_err(provider)?
+                self.get_json(&d.jwks_uri).await?
             }
         };
         let set: JwkSet = serde_json::from_value(raw.clone()).map_err(provider)?;
@@ -276,11 +298,15 @@ impl Keys {
         match &self.source {
             KeySource::Fixed { userinfo, .. } => Ok(userinfo.clone()),
             KeySource::Http { client, .. } => {
-                let Some(d) = self.discovery().await? else {
-                    return Err(AuthError::Invalid("no discovery"));
+                let Some(endpoint) = self
+                    .discovery()
+                    .await?
+                    .and_then(|d| d.userinfo_endpoint.as_ref())
+                else {
+                    return Err(AuthError::Provider("no userinfo endpoint".into()));
                 };
                 client
-                    .get(&d.userinfo_endpoint)
+                    .get(endpoint)
                     .bearer_auth(token)
                     .send()
                     .await

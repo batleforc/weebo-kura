@@ -366,7 +366,7 @@ async fn the_server_becomes_ready_once_a_configuration_is_stored() {
     ));
     assert!(!state.is_ready());
     let token = tokio_util::sync::CancellationToken::new();
-    let tasks: Vec<_> = kura_server::background(&state, dir, &token)
+    let tasks: Vec<_> = kura_server::background(&state, Some(dir), &token)
         .into_iter()
         .map(tokio::spawn)
         .collect();

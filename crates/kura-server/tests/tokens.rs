@@ -1338,9 +1338,13 @@ async fn only_writer_routes_accept_tokens() {
             INSIDE,
         )
         .await;
+        // RFC 0009 §7.2: in files mode the documents route answers 409
+        // before reading any token; nothing is written either way.
         let refused = st == StatusCode::UNAUTHORIZED
             || (st == StatusCode::FORBIDDEN
-                && json_of(&b)["detail"] == "scoped tokens are read only");
+                && json_of(&b)["detail"] == "scoped tokens are read only")
+            || (st == StatusCode::CONFLICT
+                && json_of(&b)["type"] == "/v1/problems/documents_source_files");
         if !refused {
             open.push(format!("{method} {route}"));
         }

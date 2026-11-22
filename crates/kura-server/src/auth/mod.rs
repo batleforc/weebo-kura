@@ -5,6 +5,7 @@
 //! at most once a minute, and persisted in PostgreSQL.
 
 pub mod keys;
+pub mod operator;
 pub mod principal;
 
 use std::collections::HashMap;
@@ -17,6 +18,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::{self, OidcConfig};
 pub use keys::{KeySource, Keys};
+pub use operator::{OperatorCaller, OperatorError, OperatorVerifier};
 pub use principal::{BearerToken, Principal};
 
 /// A bearer longer than this is refused before any parsing.

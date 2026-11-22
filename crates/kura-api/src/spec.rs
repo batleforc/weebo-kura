@@ -28,6 +28,10 @@ pub struct Metadata {
     pub labels: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub annotations: BTreeMap<String, String>,
+    /// Kubernetes' `metadata.generation`, sent by kura-operator and reported
+    /// back as `observedGeneration` (RFC 0009 §4.2); files leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<i64>,
 }
 
 impl Metadata {

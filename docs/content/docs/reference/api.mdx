@@ -139,6 +139,7 @@ sometimes, a `detail`. Match on `type`. The full list is in
 | `POST .../blobs/batch`, `POST .../chunks/batch` (up to 1,000 hashes) | 128 KiB |
 | `PUT .../chunks/{hash}` | 4 MiB |
 | `POST .../chunks/upload` (up to 1,000 records) | 4 MiB of chunks plus a header per record |
+| `PUT /v1/admin/documents` (up to 2,000 documents) | 4 MiB |
 
 A `chunks/batch` answer carries at most 4 MiB of chunks; the client asks
 again for the rest. `chunks/missing` takes up to 1,000 hashes. A larger body is `413 payload_too_large`.
@@ -172,6 +173,7 @@ Platform administration.
 
 | Method | Path | Auth | Summary |
 | --- | --- | --- | --- |
+| `PUT` | `/v1/admin/documents` | `bearer_token` | Replace the whole set of documents. |
 | `GET` | `/v1/admin/status` | `bearer_token` | Status of the reconciled configuration. |
 
 ### devices

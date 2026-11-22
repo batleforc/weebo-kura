@@ -1,0 +1,69 @@
+---
+title: KuraInstance
+description: The Kura server the operator pushes KuraTenant and KuraVault to.
+full: true
+---
+
+- **API version:** `kura.weebo.io/v1alpha1`
+- **Scope:** Cluster
+- **Short names:** none
+- **Guide:** [Operator](/docs/guides/operator)
+
+The Kura server the operator pushes `KuraTenant` and `KuraVault` to.
+Cluster-scoped: one server serves the cluster. `Ready` tells whether the
+server answers and accepts the operator's identity.
+
+## Example
+
+```yaml
+apiVersion: kura.weebo.io/v1alpha1
+kind: KuraInstance
+metadata:
+  name: my-instance
+spec:
+  url: http://kura.kura.svc:8080
+  auth:
+    serviceAccountToken:
+      audience: kura
+```
+
+## Spec fields
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| [`auth`](#spec.auth) | `object` | yes |  | How the operator proves who it is to the server. Required: the server accepts the documents from one configured identity only. |
+| [`tls`](#spec.tls) | `object` | no |  | How the operator verifies the server's TLS certificate (`https` only). |
+| `url` | `string` | yes |  | Base URL of the Kura server's API, such as `http://kura.kura.svc:8080`. Use `https` for anything that leaves the node.<br /><br />Constraints: `pattern: ^https?://[^/?#\s]+(/[^?#\s]*)?$` |
+
+### `spec.auth` [#spec.auth]
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| [`serviceAccountToken`](#spec.auth.serviceAccountToken) | `object` | yes |  | A projected ServiceAccount token, rotated by the kubelet, that the server verifies against the cluster's OIDC issuer. No secret at rest. |
+
+### `spec.auth.serviceAccountToken` [#spec.auth.serviceAccountToken]
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `audience` | `string` | yes |  | The token's audience, equal to the server's `documents.operator.audience`.<br /><br />Constraints: `minLength: 1`, `maxLength: 253` |
+
+### `spec.tls` [#spec.tls]
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| [`caSecretRef`](#spec.tls.caSecretRef) | `object` | no |  | Optional custom CA certificate to verify the instance's TLS with, read from a Kubernetes `Secret` (the referenced `key` must hold a PEM bundle). Use this to trust a private CA without mounting it into the operator pod — the operator reads the Secret via the API and hands the PEM to its HTTP client. It is added *on top of* the platform trust store, so publicly-signed endpoints keep working. When unset, only the platform trust store (plus the usual `SSL_CERT_FILE`/`SSL_CERT_DIR` env vars) is used. |
+| `insecureSkipVerify` | `boolean` | no | `false` | Skip certificate verification entirely — insecure, intended only for throwaway/self-signed instances. Prefer `caSecretRef` below, which trusts a private CA without turning verification off. |
+
+### `spec.tls.caSecretRef` [#spec.tls.caSecretRef]
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `key` | `string` | yes |  |  |
+| `name` | `string` | yes |  |  |
+| `namespace` | `string` | yes |  |  |
+
+## Build a manifest
+
+Answer the questions and fill in the fields: the YAML preview updates as you type, ready to copy or download and `kubectl apply`.
+
+<CrdForm kind="KuraInstance" />

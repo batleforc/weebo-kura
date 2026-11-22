@@ -300,4 +300,96 @@ pub mod tokens {
             )
         }
     }
+
+    /// The cluster's service-account issuer and kura-operator's identity
+    /// (RFC 0009), with an RSA key generated for the run.
+    pub const SA_ISSUER: &str = "https://kubernetes.default.svc.cluster.local";
+    pub const OPERATOR: &str = "system:serviceaccount:kura-operator:kura-operator";
+
+    pub struct OperatorKey {
+        encoding: EncodingKey,
+        jwk: Value,
+    }
+
+    /// The `RSAPrivateKey` inside a PKCS#8 `PrivateKeyInfo`: SEQUENCE {
+    /// INTEGER, SEQUENCE (algorithm), OCTET STRING (the key) }.
+    fn pkcs1_of(der: &[u8]) -> &[u8] {
+        fn element(d: &[u8]) -> (usize, usize) {
+            match d[1] {
+                n if n < 0x80 => (2, usize::from(n)),
+                n => {
+                    let bytes = usize::from(n & 0x7f);
+                    let len = d[2..2 + bytes]
+                        .iter()
+                        .fold(0, |a, b| (a << 8) | usize::from(*b));
+                    (2 + bytes, len)
+                }
+            }
+        }
+        let (outer, _) = element(der);
+        let mut rest = &der[outer..];
+        for _ in 0..2 {
+            let (h, l) = element(rest);
+            rest = &rest[h.saturating_add(l)..];
+        }
+        assert_eq!(rest[0], 0x04);
+        let (h, l) = element(rest);
+        &rest[h..h.saturating_add(l)]
+    }
+
+    impl OperatorKey {
+        pub fn new() -> Self {
+            use aws_lc_rs::encoding::AsDer;
+            let pair = aws_lc_rs::rsa::KeyPair::generate(aws_lc_rs::rsa::KeySize::Rsa2048).unwrap();
+            let pkcs8 = pair.as_der().unwrap();
+            let public = pair.public_key();
+            let n = URL_SAFE_NO_PAD.encode(public.modulus().big_endian_without_leading_zero());
+            let e = URL_SAFE_NO_PAD.encode(public.exponent().big_endian_without_leading_zero());
+            Self {
+                encoding: EncodingKey::from_rsa_der(pkcs1_of(pkcs8.as_ref())),
+                jwk: json!({ "kty": "RSA", "n": n, "e": e, "kid": "sa1", "alg": "RS256" }),
+            }
+        }
+
+        /// A projected token of `sub` for `aud`, valid `ttl` seconds (negative: expired).
+        pub fn token(&self, sub: &str, aud: &str, ttl: i64) -> String {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let exp = now.saturating_add_signed(ttl);
+            let claims =
+                json!({ "iss": SA_ISSUER, "aud": [aud], "sub": sub, "exp": exp, "iat": now });
+            let mut header = Header::new(Algorithm::RS256);
+            header.kid = Some("sa1".into());
+            encode(&header, &claims, &self.encoding).unwrap()
+        }
+
+        /// kura-operator's token, as the kubelet projects it.
+        pub fn operator(&self) -> String {
+            self.token(OPERATOR, "kura", 3600)
+        }
+
+        pub fn verifier(&self) -> kura_server::auth::OperatorVerifier {
+            use kura_server::auth::{KeySource, Keys, OperatorVerifier};
+            let identity = kura_server::config::OperatorIdentity {
+                issuer: SA_ISSUER.into(),
+                audience: "kura".into(),
+                subject: OPERATOR.into(),
+                ca_file: None,
+                token_file: None,
+            };
+            let set = serde_json::from_value(json!({ "keys": [self.jwk.clone()] })).unwrap();
+            OperatorVerifier::new(
+                &identity,
+                Keys::new(
+                    KeySource::Fixed {
+                        jwks: std::sync::Mutex::new(set),
+                        userinfo: serde_json::Map::new(),
+                    },
+                    None,
+                ),
+            )
+        }
+    }
 }

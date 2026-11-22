@@ -51,3 +51,9 @@ secretKeyRef: { name: {{ .Values.cnpg.name }}-app, key: uri }
 {{- fail "set migrate.databaseUrlSecret.name, or cnpg.enabled" -}}
 {{- end -}}
 {{- end -}}
+
+{{/* `files` or `operator`: where the documents come from (RFC 0009). */}}
+{{- define "kura.documentsSource" -}}
+{{- $d := default dict .Values.server.documents -}}
+{{- default "files" $d.source -}}
+{{- end -}}

@@ -46,6 +46,11 @@ pub async fn admin_status(
     if !state.verifier.is_platform_admin(&caller.caller.principal) {
         return Err(ApiError::of(ProblemType::InsufficientRole));
     }
+    current(&state).await.map(Json)
+}
+
+/// The status as this replica knows it; also the answer of a push (RFC 0009).
+pub async fn current(state: &SharedState) -> Result<AdminStatus, ApiError> {
     let snapshot = state.snapshot();
     let rejection = state
         .rejection()
@@ -53,7 +58,7 @@ pub async fn admin_status(
         .iter()
         .map(ToString::to_string)
         .collect();
-    Ok(Json(match snapshot {
+    Ok(match snapshot {
         Some(s) => AdminStatus {
             generation: Some(s.generation.iter().map(|b| format!("{b:02x}")).collect()),
             writer_version: Some(s.writer_version.clone()),
@@ -61,7 +66,7 @@ pub async fn admin_status(
                 .written_at
                 .format(&time::format_description::well_known::Rfc3339)
                 .ok(),
-            objects: with_quota_conditions(&state, &s).await?,
+            objects: with_quota_conditions(state, &s).await?,
             rejection,
         },
         None => AdminStatus {
@@ -71,7 +76,7 @@ pub async fn admin_status(
             objects: Vec::new(),
             rejection,
         },
-    }))
+    })
 }
 
 /// Adds the advisory `QuotaBelowUsage` condition to every tenant whose stored

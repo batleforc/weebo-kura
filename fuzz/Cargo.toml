@@ -66,3 +66,9 @@ name = "fuzz_webhook_target"
 path = "fuzz_targets/fuzz_webhook_target.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "fuzz_documents_body"
+path = "fuzz_targets/fuzz_documents_body.rs"
+test = false
+doc = false

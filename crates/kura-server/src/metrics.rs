@@ -18,6 +18,10 @@ pub struct Metrics {
     pub ready: IntGauge,
     /// Configuration changes rejected by validation (§4.3).
     pub config_rejected_total: IntCounter,
+    /// Pushes of `PUT /v1/admin/documents` (RFC 0009 §6.2), by `outcome`:
+    /// `applied`, `unchanged`, `rejected` (invalid set), `refused` (source
+    /// or identity).
+    pub documents_pushes_total: IntCounterVec,
     /// Objects of the stored configuration whose `Ready` is not `True`.
     pub config_warnings: IntGauge,
     /// Authorization denials, by `outcome` (§10.1).
@@ -132,10 +136,18 @@ impl Metrics {
             maintenance_gc_timestamp_seconds,
         ) = maintenance(&registry)?;
         let (index_queue_depth, index_failed, index_round_timestamp_seconds) = index(&registry)?;
+        let documents_pushes_total = reg(
+            &registry,
+            outcome_counter(
+                "documents_pushes_total",
+                "Pushes of the operator's documents",
+            )?,
+        )?;
         Ok(Self {
             registry,
             ready,
             config_rejected_total,
+            documents_pushes_total,
             config_warnings,
             authz_denied_total,
             chunk_corrupt_total,

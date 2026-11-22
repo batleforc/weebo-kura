@@ -17,6 +17,14 @@ includes:
   obsidian: { taskfile: ./.tasks/obsidian.yaml, flatten: true }
   release: { taskfile: ./.tasks/release.yaml, flatten: true }
   docs: { taskfile: ./.tasks/docs.yaml, flatten: true }
+  operator: { taskfile: ./.tasks/operator.yaml, flatten: true }
+  # The kit's chart tasks for kura-operator's chart (RFC 0009 §6.4), pinned
+  # to the kit tag of Cargo.toml and to their sha256.
+  operator-chart:
+    taskfile: https://raw.githubusercontent.com/weebo-si-operator/weebo-operator-kit/v0.32.0/tasks/helm.yaml
+    checksum: c380bc9422c6ccb8ee79be961095605baecd888db59659e603f69baa277c7b20
+    vars:
+      CHART: deploy/charts/kura-operator
 
 tasks:
   init:
@@ -72,10 +80,12 @@ tasks:
       - task: dump-spec
       # The CRDs of KuraTenant and KuraVault, from kura-api's specs.
       - cargo run -q -p kura-crdgen
+      # kura-operator's chart ships them as templates (crds.install, kept).
+      - task: operator-chart:crds
       # Their reference pages and the IDE's schemas in the docs site.
       - task: docs:gen
       # Re-staged by the pre-commit hook only when already staged.
-      - git add docs/api/openapi.json deploy/crd docs/content/docs/crds docs/public/crd-schemas
+      - git add docs/api/openapi.json deploy/crd deploy/charts/kura-operator/templates/crds docs/content/docs/crds docs/public/crd-schemas
 
   lint:
     desc: "Lint the whole project: clippy, rustfmt, fuzz targets compile, the plugin shell, the web console, the Helm chart and its alerts, shell scripts (run by the pre-commit hook)"

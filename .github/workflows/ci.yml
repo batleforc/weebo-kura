@@ -34,6 +34,26 @@ jobs:
       - run: task openapi:check
       # gitleaks, task audit and the image scan: security.yml (also daily).
 
+  # kura-operator's envtest tests (RFC 0009): a real kube-apiserver and etcd,
+  # downloaded by envtest; its bindgen step needs libclang (the kit's checks.yml).
+  operator:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - name: Install libclang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev
+          # libclang-dev is a transitional package on current runners.
+          LIBCLANG_SO="$(find /usr/lib -iname 'libclang.so*' 2>/dev/null | head -n1)"
+          test -n "$LIBCLANG_SO" || { echo "::error::libclang.so not found" >&2; exit 1; }
+          {
+            echo "LIBCLANG_PATH=$(dirname "$LIBCLANG_SO")"
+            echo "BINDGEN_EXTRA_CLANG_ARGS="
+          } >> "$GITHUB_ENV"
+      - run: task operator:test
+
   plugin:
     runs-on: ubuntu-latest
     steps:

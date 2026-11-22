@@ -2,7 +2,7 @@
 //! `kura-api` specs (`CustomResourceExt::crd()`), and `deploy/crd/links.json`,
 //! the reference fields of each kind (`weebo_kit_api::links`) with the kit's
 //! schematic kinds, for the docs' CRD reference and IDE. The kit's operator
-//! template, for the operator a later RFC adds here. Run by `task recu`; the
+//! template's `crdgen`, for kura-operator (RFC 0009). Run by `task recu`; the
 //! result is committed.
 
 use std::collections::BTreeMap;
@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use kube::CustomResourceExt;
-use kura_api::{KuraTenantResource, KuraVaultResource};
+use kura_api::{KuraInstance, KuraTenantResource, KuraVaultResource};
 use schemars::JsonSchema;
 use serde_json::Value;
 use weebo_kit_api::links::{self, GroupKind, KindLinks, Roles, Schematic};
@@ -25,14 +25,15 @@ struct Args {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     fs::create_dir_all(&args.out)?;
-    // Kura has no instance kinds: no field of its CRDs names a role, and the
-    // kit's schematic kinds need one, so the tenant stands for both.
-    let tenant = GroupKind::new("kura.weebo.io", "KuraTenant");
+    // Kura has no `KuraLocalInstance` (RFC 0009 decision 6): the cluster
+    // instance stands for both roles of the kit's schematic kinds.
+    let instance = GroupKind::new("kura.weebo.io", "KuraInstance");
     let roles = Roles {
-        instance: tenant.clone(),
-        local_instance: tenant,
+        instance: instance.clone(),
+        local_instance: instance,
     };
     let mut kinds = BTreeMap::new();
+    write::<KuraInstance>(&args.out, &roles, &mut kinds)?;
     write::<KuraTenantResource>(&args.out, &roles, &mut kinds)?;
     write::<KuraVaultResource>(&args.out, &roles, &mut kinds)?;
     let schematic: BTreeMap<String, Schematic> = weebo_kit_api::schematic::shared(&roles)?;
@@ -87,6 +88,7 @@ mod tests {
     fn committed_crds_match_the_specs() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/crd");
         for (crd, file) in [
+            (KuraInstance::crd(), "kurainstance.yaml"),
             (KuraTenantResource::crd(), "kuratenant.yaml"),
             (KuraVaultResource::crd(), "kuravault.yaml"),
         ] {

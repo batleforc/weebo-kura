@@ -12,6 +12,7 @@
     "guides/authentik",
     "guides/configuration",
     "guides/tenants-and-vaults",
+    "guides/operator",
     "---Using Kura---",
     "guides/obsidian-plugin",
     "guides/cli",

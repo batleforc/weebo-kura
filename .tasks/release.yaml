@@ -31,7 +31,7 @@ tasks:
         done
         # info.version, as `task dump-spec` writes it from the workspace version.
         sed -i '0,/^    "version": ".*"$/s//    "version": "'"$v"'"/' docs/api/openapi.json
-        sed -i 's/^version: .*/version: '"$v"'/; s/^appVersion: .*/appVersion: "'"$v"'"/' deploy/helm/kura/Chart.yaml
+        sed -i 's/^version: .*/version: '"$v"'/; s/^appVersion: .*/appVersion: "'"$v"'"/' deploy/helm/kura/Chart.yaml deploy/charts/kura-operator/Chart.yaml
         # Rewrites the workspace crates' entries in Cargo.lock, offline.
         cargo metadata --format-version 1 --offline >/dev/null
       - task: version:check
@@ -59,6 +59,7 @@ tasks:
         check docs/package.json "$(jq -r .version docs/package.json)"
         check docs/api/openapi.json "$(jq -r .info.version docs/api/openapi.json)"
         check "Chart.yaml version" "$(sed -n 's/^version: //p' deploy/helm/kura/Chart.yaml)"
+        check "kura-operator Chart.yaml version" "$(sed -n 's/^version: //p' deploy/charts/kura-operator/Chart.yaml)"
         check "Chart.yaml appVersion" "$(sed -n 's/^appVersion: "\(.*\)"$/\1/p' deploy/helm/kura/Chart.yaml)"
         [ "$fail" -eq 0 ] || { echo "run 'task version:set VERSION=<x.y.z>'" >&2; exit 1; }
         echo "every version declaration says $cargo_v"

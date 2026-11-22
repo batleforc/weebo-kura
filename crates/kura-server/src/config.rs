@@ -45,6 +45,64 @@ pub struct ServerConfig {
     /// Webhooks (RFC 0003 §4.1); absent: off, rule routes answer 409.
     #[serde(default)]
     pub notifications: NotificationsConfig,
+    /// Where the `KuraTenant` and `KuraVault` documents come from (RFC 0009
+    /// §4.1); absent: the files of `KURA_CONFIG_DIR`.
+    #[serde(default)]
+    pub documents: DocumentsConfig,
+}
+
+/// The one source of the documents: files and the operator never merge.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentsConfig {
+    #[serde(default)]
+    pub source: DocumentsSource,
+    /// The operator's identity; required, and read, only with `source: operator`.
+    #[serde(default)]
+    pub operator: Option<OperatorIdentity>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DocumentsSource {
+    /// The files of `KURA_CONFIG_DIR`; `PUT /v1/admin/documents` answers 409.
+    #[default]
+    Files,
+    /// `PUT /v1/admin/documents` from kura-operator; the files are not read.
+    Operator,
+}
+
+/// The one workload allowed to push the documents: a Kubernetes
+/// ServiceAccount token, verified against the cluster's OIDC issuer.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OperatorIdentity {
+    /// The cluster's service-account issuer, such as
+    /// `https://kubernetes.default.svc.cluster.local`.
+    pub issuer: String,
+    /// The audience of the operator's projected token.
+    pub audience: String,
+    /// The exact `sub`: `system:serviceaccount:<namespace>:<name>`.
+    pub subject: String,
+    /// A PEM bundle trusted for the issuer's discovery and keys, on top of the
+    /// platform's (in a pod: the ServiceAccount's `ca.crt`).
+    #[serde(default)]
+    pub ca_file: Option<std::path::PathBuf>,
+    /// A token sent to read the issuer's discovery and keys, re-read on each
+    /// fetch: Kubernetes serves them to authenticated ServiceAccounts only
+    /// (in a pod: kura-server's own ServiceAccount token).
+    #[serde(default)]
+    pub token_file: Option<std::path::PathBuf>,
+}
+
+impl DocumentsConfig {
+    /// The identity to verify when the operator is the source.
+    pub fn operator(&self) -> Option<&OperatorIdentity> {
+        match self.source {
+            DocumentsSource::Files => None,
+            DocumentsSource::Operator => self.operator.as_ref(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -313,6 +371,46 @@ impl ServerConfig {
                 "0.0.0.0/0 and ::/0 would allow every address".into(),
             ));
         }
+        if config.documents.source == DocumentsSource::Operator {
+            let Some(op) = &config.documents.operator else {
+                return Err(invalid(
+                    "documents.operator",
+                    "required with source: operator (issuer, audience, subject)".into(),
+                ));
+            };
+            let https = op
+                .issuer
+                .parse::<axum::http::Uri>()
+                .is_ok_and(|u| u.scheme_str() == Some("https") && u.host().is_some());
+            if !https {
+                return Err(invalid(
+                    "documents.operator.issuer",
+                    "must be an https:// URL".into(),
+                ));
+            }
+            if op.audience.is_empty() {
+                return Err(invalid(
+                    "documents.operator.audience",
+                    "must not be empty".into(),
+                ));
+            }
+            // No wildcard: the one ServiceAccount, named in full.
+            let named = op
+                .subject
+                .strip_prefix("system:serviceaccount:")
+                .and_then(|rest| rest.split_once(':'))
+                .is_some_and(|(ns, name)| {
+                    kura_api::DnsLabel::try_from(ns.to_owned()).is_ok()
+                        && !name.is_empty()
+                        && !name.contains([':', '*'])
+                });
+            if !named {
+                return Err(invalid(
+                    "documents.operator.subject",
+                    "must be system:serviceaccount:<namespace>:<name>".into(),
+                ));
+            }
+        }
         if let Some(ui) = config.ui.as_ref().filter(|u| u.enabled) {
             if !config.oidc.audiences.contains(&ui.oidc.client_id) {
                 return Err(invalid(
@@ -387,6 +485,50 @@ vault:
         assert_eq!(
             err(&bad),
             "server.yaml oidc.discovery: must be an https:// URL"
+        );
+    }
+
+    #[test]
+    fn documents_default_to_files_and_the_operator_is_named_in_full() {
+        let c = ServerConfig::parse("server.yaml", EXAMPLE).unwrap();
+        assert_eq!(c.documents.source, DocumentsSource::Files);
+        assert_eq!(c.documents.operator(), None);
+        let op = |body: &str| format!("{EXAMPLE}documents:\n  source: operator\n{body}");
+        let identity = |issuer: &str, audience: &str, subject: &str| {
+            op(&format!(
+                "  operator: {{ issuer: '{issuer}', audience: '{audience}', subject: '{subject}' }}\n"
+            ))
+        };
+        let good = "system:serviceaccount:kura-operator:kura-operator";
+        let issuer = "https://kubernetes.default.svc.cluster.local";
+        let c = ServerConfig::parse("server.yaml", &identity(issuer, "kura", good)).unwrap();
+        assert_eq!(
+            c.documents.operator().map(|o| o.subject.as_str()),
+            Some(good)
+        );
+        assert!(err(&op("")).contains("documents.operator: required"));
+        assert!(err(&identity("http://k8s", "kura", good)).contains("documents.operator.issuer"));
+        assert!(err(&identity(issuer, "", good)).contains("documents.operator.audience"));
+        for bad in [
+            "system:serviceaccount:kura-operator:*",
+            "system:serviceaccount:kura-operator",
+            "system:serviceaccounts:kura-operator",
+            "kura-operator",
+            "",
+        ] {
+            assert!(
+                err(&identity(issuer, "kura", bad)).contains("documents.operator.subject"),
+                "{bad}"
+            );
+        }
+        // Read in files mode too, but never used: the closed default stays.
+        let files = format!(
+            "{EXAMPLE}documents:\n  operator: {{ issuer: '{issuer}', audience: kura, subject: '{good}' }}\n"
+        );
+        let c = ServerConfig::parse("server.yaml", &files).unwrap();
+        assert_eq!(c.documents.operator(), None);
+        assert!(
+            err(&format!("{EXAMPLE}documents:\n  source: both\n")).contains("documents.source")
         );
     }
 

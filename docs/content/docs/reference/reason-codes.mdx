@@ -4,8 +4,8 @@ description: Every reason code of a KuraTenant or KuraVault status, what it mean
 ---
 
 Each `KuraTenant` and `KuraVault` document gets a status: an
-`observedGeneration` (for documents read from files, a hash of the
-document) and a list of `conditions`, with `Ready` first. Each condition
+`observedGeneration` (the resource's `metadata.generation` when
+kura-operator pushed it, else a hash of the document) and a list of `conditions`, with `Ready` first. Each condition
 carries a `reason`, one of the PascalCase codes below, from the
 `ReasonCode` catalogue of
 [`crates/kura-api/src/reason.rs`](https://github.com/batleforc/weebo-kura/blob/main/crates/kura-api/src/reason.rs).
@@ -29,6 +29,14 @@ means it is applied, with something to look at.
 | `DeletionScheduled` | advisory | Removed with `deletionPolicy: Delete`; purged after 30 days unless the document comes back. | `Ready: False` on a tenant or vault no longer declared, with the purge date in the message. Also counted in `kura_deletions_scheduled` (alert `KuraDeletionScheduled`). |
 | `AwaitingKeyDestruction` | advisory | A purged tenant's Vault Transit key still exists. | Defined in the catalogue, but the server sets no condition with it today. The fact is reported by the `kura_tenants_awaiting_key_destruction` metric and the `KuraTenantAwaitingKeyDestruction` alert. |
 | `TokenWriteDisabled` | advisory | Write tokens exist while the tenant's `scopedTokens.write` is off: they still read, their writes are refused. | An extra condition (status `True`) on the tenant, computed when `GET /v1/admin/status` is called. |
+| `SetRejected` | blocking | Another document of the pushed set was refused, so the whole set was. | Set by kura-operator on every resource but the offender, whose condition is `InvalidDocument`; the message names the offender. |
+| `SourceIsFiles` | blocking | kura-server reads its documents from files (`documents.source: files`): the operator's pushes are refused with `409`. | Set by kura-operator on every resource while the server is in `files` mode. |
+| `VaultNamespaceNotAllowed` | blocking | A `KuraVault` in a namespace its tenant's `vaultNamespaces` does not list. | Refused at admission by kura-operator's webhook, before anything reaches the server. |
+| `TenantNotFound` | blocking | A `KuraVault` whose `tenantRef` names no `KuraTenant`. | Refused at admission by kura-operator's webhook; also set on every vault while no `KuraTenant` exists at all (nothing is pushed then). |
+| `VaultManagedByApi` | blocking | A `KuraVault` naming a vault created through the API: a resource never takes it over. | In the catalogue; the server's refusal reaches the resource as `InvalidDocument`, its message saying the vault is managed through the API. |
+| `InstanceNotFound` | blocking | No `KuraInstance` names the server, or several do. | Set by kura-operator on every resource; nothing is pushed. |
+| `InstanceUnreachable` | blocking | The Kura server did not answer (network error, timeout, 5xx). | Set by kura-operator on the `KuraInstance` and on the resources it could not push. |
+| `InstanceUnauthorized` | blocking | The Kura server refused the operator's identity (401 or 403). | Set by kura-operator, as above. |
 | `RestrictedBindingWidened` | advisory | A viewer binding lists folders, but its claim value is also mapped to `owner` or `admin` for the tenant, which opens the whole vault: the widest grant wins. | An extra condition (status `True`) on the vault, set at each reconcile; the message names the claim values. |
 
 ## An example

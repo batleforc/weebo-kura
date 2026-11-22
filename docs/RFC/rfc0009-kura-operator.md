@@ -2,14 +2,14 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted (2026-11-21) |
+| Status | Implemented (accepted 2026-11-21, implemented 2026-11-22; §6.P not run on a cluster, see §18) |
 | Short | Kura operator |
 | Settles | How tenants and vaults are declared as Kubernetes custom resources and reach Kura through an operator built on `weebo-operator-kit`, and what replaces the file loader |
 | Author | Maxime (batleforc) |
 | Co-author | Claude Opus 5.5 |
 | Created | 2026-11-21 |
 | Supersedes | — (amends RFC 0001 decision 49 and §14 "Toward the operator": the file loader is kept as the other, exclusive, source; settles decision 51's tenant API) |
-| Touches | new `crates/operator/*` (generated from the kit's `templates/operator`), `crates/kura-api` (`crd` feature: `KuraInstance`, status, reason codes), `crates/kura-crdgen`, `crates/kura-server` (`config.rs`, `auth/`, new `app/documents.rs`, `reconcile/`, `metrics.rs`, `limits.rs`), new `deploy/charts/kura-operator` (the template's chart), `deploy/helm/kura` (NetworkPolicy, values), the template's `Containerfile.operator`, `.github/workflows/` (the kit's reusable `checks.yml` and `publish.yml`), `.tasks/kit.yaml`, `Cargo.toml` (kit source and tag), `docs/` (site guides), `docs/api/openapi.json` |
+| Touches | new `crates/operator/{domain,application,adapters-outbound,adapters-inbound,operator,testkit}` (the kit template's layers), `crates/kura-api` (`crd` feature: `KuraInstance`, status, reason codes; `Metadata.generation`, `pushed_name`), `crates/kura-crdgen`, `crates/kura-server` (`config.rs`, `auth/keys.rs`, new `auth/operator.rs`, new `app/documents.rs`, `app/admin.rs`, `reconcile/`, `metrics.rs`, `limits.rs`, `problem.rs`, `main.rs`, `lib.rs`), new `deploy/charts/kura-operator`, `deploy/helm/kura` (documents source, NetworkPolicy, `extraEnv`), `deploy/crd/`, new `Containerfile.operator`, `.github/workflows/` (`ci.yml`, `security.yml`, `release.yml`), `.tasks/` (new `operator.yaml`, `deploy.yaml`, `release.yaml`, the `--workspace` tasks), `Taskfile.yaml` (the kit's `helm.yaml` as `operator-chart:`), `Cargo.toml` (kit source and tag), `deny.toml`, `mise.toml` (`go`), `fuzz/`, `tests/heavy/operator.sh`, `docs/` (site guides and reference), `docs/api/openapi.json` |
 | Risk | high |
 
 > **Reference material**, about 7,400 words. For the decision, read §1, §3,
@@ -837,3 +837,135 @@ the write surface before its control.
 | R12 | `deploy/helm/kura/templates/networkpolicy.yaml:15-17` (only the ingress namespace on 8080) | `a6cd96d` | §6.4, §7.1 T3 |
 | R13 | `Cargo.toml` workspace dependencies (`jsonwebtoken` with `aws_lc_rs`, `kube` with `derive`) | working tree on `a6cd96d` | §7.4, §8 |
 | R14 | weebo-operator-kit `templates/operator/cargo-generate.toml` (generation command, placeholders), `templates/kit.yaml` (`kit:sync`, `kit:cog`), `templates/pin-kit.sh`, `templates/operator/.github/workflows/publish.yml:29` and `ci.yml:15` (the reusable `publish.yml` and `checks.yml`) | `867d287` (v0.32.0 plus RFC docs), read 2026-11-21 | §3, §6.3, §8, §16 |
+
+---
+
+## 18. Revision against the tree (2026-11-22)
+
+What shipped, on branch `feat/rfc0009-operator` (PR #19), and every point
+where it differs from the text above. The earlier sections are left as
+accepted; the [implementation plan](rfc0009-implementation-plan.md) holds
+the step-by-step record, its divergences D1 to D22 with their reasons.
+
+### What shipped
+
+- **Server** (`kura-server`): `server.yaml` `documents` (default `files`);
+  `PUT /v1/admin/documents` (`app/documents.rs`) checked in the order of
+  §7.2 — source (`409 documents_source_files`, before the token), identity
+  (`auth/operator.rs`, `RS256`, `iss`/`aud` exact, `sub` byte-equal, keys of
+  their own, never persisted), 30 a minute per subject, 4 MiB and 2,000
+  documents — then the reconciler that applies files (`ConfigFiles::new`,
+  `reconcile()`). One audit line per push, `kura_documents_pushes_total
+  {outcome}`, `metadata.generation` as `observedGeneration`.
+- **Operator**: six crates in the template's layers; one push loop over the
+  kit's shared watches (1 s debounce, caches synced first, resync 300 s,
+  retry 30 s), statuses through the kit's `status::publish` only when they
+  change; the admission webhook on the kit's `/validate`; Lease, telemetry,
+  metrics and webhook server from `weebo-kit-runtime`.
+- **Deploy**: `deploy/charts/kura-operator` on the kit's library chart,
+  `deploy/helm/kura`'s operator mode, `Containerfile.operator`, the image
+  and chart in `release.yml`, `crds.yaml` on each release.
+- **Docs**: the "Operator" guide; `server.yaml`, Helm values, API, problem
+  types, rate limits, metrics and reason codes pages.
+
+### Where it differs from the text
+
+| Section | Shipped | Plan |
+| --- | --- | --- |
+| §4.1, §6.4 (projected token volume) | The operator mints its token through the TokenRequest API, audience from `KuraInstance.spec.auth`, renewed 10 min before its hour ends; `create` on its own `serviceaccounts/token` only | D18 |
+| §4.1, §6.2 (`issuer`, `audience`, `subject`) | Also `caFile` and `tokenFile`: Kubernetes serves its issuer's discovery and keys to authenticated ServiceAccounts only | D6 |
+| §13 (rollout) | In operator mode the server is ready before the first push, else a fresh install could never receive one | D7 |
+| §4.4, §7.2 (`GET /admin/status` for the operator) | Not opened: every push answers with the full status | D3 |
+| §7.1 T6 ("refused by the generation guard") | `kura_config_begin` refuses an older server version; a stale operator leader of the same version can push once, the next push corrects it | D8 |
+| §5.3, §6.3 (one kit `Controller` per kind) | One push loop over the kit's shared watches | D10 |
+| §6.3 (operator reason codes in their own catalogue) | One catalogue, `kura_api::ReasonCode`, `InstanceNotFound` added | D11 |
+| §4.3 (`VaultManagedByApi` on the resource) | `InvalidDocument` with the server's message | D12 |
+| §4.3 (webhook "from its cache") | The tenant read live; a second instance refused with `InvalidDocument` | D13 |
+| §7.2 ("cannot read Secrets") | `tls.caSecretRef` is read, by name, in the release namespace only (`caSecrets`) | D15 |
+| §8 (the kit's `publish.yml` and `checks.yml`) | Kura's own release and CI jobs carry the operator | D19 |
+| §6.3 (`task kit:sync`) | Not wired; the kit's `helm.yaml` only | D20 |
+| §6.1, §13 (no spec change, one migration) | `Metadata.generation` (optional); no migration | D5 |
+| §10.1 (`weebo_kura_*` metrics) | `kura_operator_*`, the template's prefix | D14 |
+| §6.4 | `extraEnv` in the `kura` chart | D22 |
+
+### What the proof observed
+
+`tests/heavy/operator.sh` (§6.P on kind, `task operator:proof`) is written
+and lint-clean but **has not run**: on the maintainer's machine kube-proxy
+exits with "too many open files" (`fs.inotify.max_user_instances` 128; kind
+asks for 512, which needs root). The maintainer chose on 2026-11-22 to land
+without it (D21). What was observed instead, per observation:
+
+1. Resources become statuses: envtest `a_push_becomes_every_resources_status`
+   (real kube-apiserver 1.36.2, in-memory Kura): `Ready`, `observedGeneration`,
+   the bound instance, Kubernetes' fields not sent. The documents reaching
+   PostgreSQL: `tests/documents.rs` `a_push_applies_like_files`.
+2. The webhook's refusal: envtest `webhook_refuses_unlisted_namespace`
+   (``VaultNamespaceNotAllowed: namespace `team-b` is not in vaultNamespaces of
+   tenant `family` ``, the text of §4.5). Not observed through `kubectl apply`.
+3. Other identities refused: `documents_refuses_other_identities` (a
+   platform admin's Authentik token 401, another ServiceAccount 403, another
+   audience and an expired token 401, generation unchanged).
+4. Files mode: `files_mode_refuses_every_push` (409, counted `refused`); the
+   operator's `SourceIsFiles` in `push.rs`'s unit test.
+5. Removal reversible: `a_push_applies_like_files` (`Orphaned`, then back
+   `Reconciled`).
+6. Operator down: not observed (needs a cluster).
+
+Measured: one push of 2,000 documents (457 KB) applied in 0.68 s, the same
+set `unchanged` in 24 ms (release build, dev PostgreSQL). The operator's
+release binary against envtest (`task operator:perf`, the kit's
+`Budget::small_cluster`): idle RSS 19.2 MiB, peak 20.7 MiB, startup 0.1 s,
+about 2 API requests and 0.3 ms of CPU per object, 100 vaults converged in
+1.5 s, idle RSS growth 7.6 % across a create-edit-delete cycle of 100 new
+vaults (limit 10 %). A first run without warm-up measured 28 % (the caches
+sizing); a residual growth of about 1.5 MiB per 100 objects never seen
+before remains, small but not explained: worth a look before large
+clusters.
+
+### §7.1, row by row
+
+| # | Shipped proof |
+| --- | --- |
+| T1 | `documents_refuses_other_identities`; unit `only_the_configured_service_account_passes`, `audience_issuer_expiry_and_algorithm_are_checked` (`HS256`, `alg: none`, oversized) |
+| T2 | envtest `webhook_refuses_unlisted_namespace` |
+| T3 | `task helm:lint`: the operator's namespace on 8080 in operator mode only, no documents ConfigMap |
+| T4 | `server_rejects_what_the_webhook_would` |
+| T5 | `documents_body_and_count_limits` (4 MiB, 2,000 documents, the 31st call 429); the `LIMITS` gate test |
+| T6 | `older_writer_refused` (the version guard; see D8 for what it does not cover) |
+| T7 | `tests/documents_audit.rs` `every_push_is_an_audit_line` (subject, removals, no token in logs) |
+| T8 | Holds as written: the answer carries the stored status only |
+| T9 | `keys_come_from_the_cluster_issuer_with_a_bearer_and_no_redirect` |
+| T10 | `empty_set_refused`; envtest: no push without a tenant |
+| — | `fuzz_documents_body`: 2,310,464 runs in 61 s, no finding |
+
+### §8, as shipped
+
+weebo-operator-kit v0.32.0 (`8284bb9f`, `weebo-si-operator`), `kube` 4.2.0
+with `client` and `runtime` (operator crates only), `reqwest` 0.13 (already
+linked), envtest 0.3 (test-only, behind `task operator:test`), the
+distroless `cc-debian13` digest of `Containerfile`. `cargo deny check`:
+advisories, bans, licences, sources ok (the kit's git source allowed, four
+duplicates of envtest's build tools skipped); `cargo audit` clean with the
+two existing dated exceptions; Trivy on the operator image: no fixable
+HIGH or CRITICAL.
+
+### §4.5, against what shipped
+
+The printer columns are as drawn. The `InvalidDocument` message reads
+`KuraVault/family/recipes spec.chunking: …; the last valid configuration
+stays in force` (the mock: `KuraVault family/recipes spec.chunking: …`), the
+other resources `SetRejected` with `the set was refused:
+KuraVault/family/recipes was refused; …`. The webhook and `SourceIsFiles`
+texts are the mocks' word for word. None of it was seen through a real
+`kubectl` (D21).
+
+### Sources added
+
+| # | Source | Pinned at | Supports |
+| --- | --- | --- | --- |
+| R15 | Branch `feat/rfc0009-operator`: `67c3145` (plan), `32da4a6` (phase 0), `9a2e79c` (phase 1), `98f50fb` (phase 2), `e88fc2b` (phase 3), and the commit landing this section | 2026-11-22 | §18 |
+| R16 | `gh api repos/weebo-si-operator/weebo-operator-kit/tags`: v0.32.0 = `8284bb9f`, published 2026-11-14 | read 2026-11-22 | §18, §8 |
+| R17 | kind v0.31.0 with the podman provider, kube-proxy log "too many open files", `fs.inotify.max_user_instances = 128` | observed 2026-11-22 | §18 (D21) |
+| R18 | weebo-operator-kit `charts/weebo-operator-lib/templates/_deployment.tpl` (fixed volumes), `.github/workflows/publish.yml` `github-release` job (`gh release edit --notes-file`) | v0.32.0 | §18 (D18, D19) |
+

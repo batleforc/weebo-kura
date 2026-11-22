@@ -1,9 +1,23 @@
 # Started from .example/Cargo.toml (small target/, deps declared once) with the
-# lint table of weebo-operator-kit v0.31.0 (weebo-good-practice).
+# lint table of weebo-operator-kit v0.32.0 (weebo-good-practice).
 
 [workspace]
 resolver = "3"
-members = ["crates/kura-api", "crates/kura-core", "crates/kura-server", "crates/kura-cli", "crates/kura-wasm", "crates/kura-crdgen"]
+members = [
+    "crates/kura-api",
+    "crates/kura-core",
+    "crates/kura-server",
+    "crates/kura-cli",
+    "crates/kura-wasm",
+    "crates/kura-crdgen",
+    # kura-operator (RFC 0009), the kit's operator template in its layers.
+    "crates/operator/domain",
+    "crates/operator/application",
+    "crates/operator/adapters-outbound",
+    "crates/operator/adapters-inbound",
+    "crates/operator/operator",
+    "crates/operator/testkit",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -17,8 +31,21 @@ kura-api = { path = "crates/kura-api" }
 kura-core = { path = "crates/kura-core" }
 kura-cli = { path = "crates/kura-cli" }
 # weebo-operator-kit, pinned by tag (RFC 0001 §4.1, decision 49; plan P1).
-weebo-kit-api = { git = "https://github.com/batleforc/weebo-operator-kit", tag = "v0.31.0" }
-weebo-kit-domain = { git = "https://github.com/batleforc/weebo-operator-kit", tag = "v0.31.0" }
+weebo-kit-api = { git = "https://github.com/weebo-si-operator/weebo-operator-kit", tag = "v0.32.0" }
+weebo-kit-domain = { git = "https://github.com/weebo-si-operator/weebo-operator-kit", tag = "v0.32.0" }
+weebo-kit-adapters = { git = "https://github.com/weebo-si-operator/weebo-operator-kit", tag = "v0.32.0" }
+weebo-kit-runtime = { git = "https://github.com/weebo-si-operator/weebo-operator-kit", tag = "v0.32.0" }
+weebo-kit-testkit = { git = "https://github.com/weebo-si-operator/weebo-operator-kit", tag = "v0.32.0" }
+weebo-kit-perf = { git = "https://github.com/weebo-si-operator/weebo-operator-kit", tag = "v0.32.0" }
+kura-operator-domain = { path = "crates/operator/domain" }
+kura-operator-application = { path = "crates/operator/application" }
+kura-operator-adapters-outbound = { path = "crates/operator/adapters-outbound" }
+kura-operator-adapters-inbound = { path = "crates/operator/adapters-inbound" }
+# The operator's: async ports used as `dyn`, the watch streams, rustls' provider
+# (kube's ring and reqwest's aws-lc-rs are both linked; the kit's choice).
+async-trait = "0.1"
+futures = "0.3"
+rustls = { version = "0.23", features = ["ring"] }
 # The kit's version, with the Kubernetes version it leaves to the application (plan P2).
 k8s-openapi = { version = "0.28", features = ["v1_36"] }
 # The CRDs of KuraTenant and KuraVault (kura-api's `crd` feature, kura-crdgen),

@@ -1,0 +1,43 @@
+# kura-operator (RFC 0009), from the weebo-containerfile template like the
+# server's Containerfile: same pinned bases, cargo-chef, distroless runtime.
+# Keep its FROM lines in step with Containerfile (updatecli moves all three).
+# ── Build stage ───────────────────────────────────────────────────────────────
+FROM docker.io/library/rust:1.100-slim-trixie@sha256:e9d95b74296f7126a83ae3d041aeaba1ff4c478f13abc5cc034fcf7c131c3d4a AS chef
+
+RUN cargo install --locked cargo-chef@0.1.78
+
+WORKDIR /build
+
+# ── Planner: workspace manifests → recipe.json ────────────────────────────────
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+COPY patches/ patches/
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ── Builder: dependencies (cached while recipe.json is unchanged), then sources ─
+# Only kura-operator: kura-operator-testkit (envtest, Go) is never built here.
+FROM chef AS builder
+COPY --from=planner /build/recipe.json recipe.json
+COPY patches/ patches/
+RUN cargo chef cook --locked --release -p kura-operator --recipe-path recipe.json
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+RUN cargo build --locked --release -p kura-operator
+
+# ── Runtime image ─────────────────────────────────────────────────────────────
+# Writes nothing to disk but the kit's /tmp (an emptyDir in the chart).
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2 AS runtime
+
+COPY --from=builder /build/target/release/kura-operator /usr/local/bin/kura-operator
+
+# Numeric non-root UID, the one the chart's securityContext pins.
+USER 65532:65532
+
+LABEL org.opencontainers.image.title="kura-operator" \
+      org.opencontainers.image.description="Hands KuraTenant and KuraVault custom resources to kura-server" \
+      org.opencontainers.image.source="https://github.com/batleforc/weebo-kura" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+ENTRYPOINT ["/usr/local/bin/kura-operator"]

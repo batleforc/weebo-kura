@@ -66,6 +66,102 @@
         }
       }
     },
+    "/v1/admin/documents": {
+      "put": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Replace the whole set of documents.",
+        "operationId": "put_documents",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Applied, unchanged or refused as a whole; the status of every object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentsResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A document that names no kind or no valid name",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not a token of the cluster's issuer for this audience",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token of another workload than the configured operator",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "documents.source is files",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Over 4 MiB or 2,000 documents",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over 30 a minute",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/v1/admin/status": {
       "get": {
         "tags": [
@@ -3789,6 +3885,54 @@
             "format": "uuid"
           }
         }
+      },
+      "DocumentsBody": {
+        "type": "object",
+        "required": [
+          "documents"
+        ],
+        "properties": {
+          "documents": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Every `KuraTenant` and `KuraVault`: `apiVersion`, `kind`, `metadata`\n(`name`, `namespace`, `labels`, `annotations`, `generation`) and `spec`."
+          }
+        }
+      },
+      "DocumentsResult": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AdminStatus",
+            "description": "The stored configuration after this push: the last valid one when refused."
+          },
+          {
+            "type": "object",
+            "required": [
+              "applied",
+              "outcome",
+              "errors"
+            ],
+            "properties": {
+              "applied": {
+                "type": "boolean",
+                "description": "Whether this push changed the stored configuration."
+              },
+              "errors": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                },
+                "description": "Why the set was refused, each with the document it names\n(`location.file` is `KuraTenant/<name>` or `KuraVault/<namespace>/<name>`)."
+              },
+              "outcome": {
+                "type": "string",
+                "description": "`applied`, `unchanged` or `rejected`."
+              }
+            }
+          }
+        ]
       },
       "EntryId": {
         "type": "string",

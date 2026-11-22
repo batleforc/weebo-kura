@@ -32,6 +32,8 @@ pub const LIMITS: &[(&str, &str, u32)] = &[
     ("PUT", "/v1/vaults/{v}/bindings/{b}", 10),
     ("DELETE", "/v1/vaults/{v}/bindings/{b}", 10),
     ("GET", "/v1/admin/status", 60),
+    // RFC 0009: per operator subject; the operator coalesces its events (1 s).
+    ("PUT", "/v1/admin/documents", 30),
     ("POST", "/v1/vaults/{v}/chunks/missing", 600),
     // §4.4 sets a body limit, not a rate, on chunk and blob uploads; reads are 600.
     ("PUT", "/v1/vaults/{v}/chunks/{hash}", 600),

@@ -175,11 +175,29 @@ notification rule routes answer `409`. See
 With notifications off, the server logs a warning at start if rules are still
 stored.
 
+## `documents`
+
+Where the `KuraTenant` and `KuraVault` documents come from: the files of
+`KURA_CONFIG_DIR` (the default), or kura-operator, which pushes them from the
+custom resources (RFC 0009). Never both: switching is a restart.
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `documents.source` | `files` or `operator` | `files` | `files`: the directory is read and `PUT /v1/admin/documents` answers `409`. `operator`: the directory is not read and the route accepts the identity below only. |
+| `documents.operator.issuer` | https URL | none | The cluster's service-account issuer, such as `https://kubernetes.default.svc.cluster.local`. Required with `source: operator`. |
+| `documents.operator.audience` | string | none | The audience of the operator's projected token, the `KuraInstance`'s `auth.serviceAccountToken.audience`. Required with `source: operator`. |
+| `documents.operator.subject` | string | none | Exactly `system:serviceaccount:<namespace>:<name>`; no wildcard. Required with `source: operator`. |
+| `documents.operator.caFile` | path | none | A PEM bundle trusted for the issuer, on top of the platform's. In a pod: `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`. |
+| `documents.operator.tokenFile` | path | none | A token sent to read the issuer's discovery and keys, which Kubernetes serves to authenticated ServiceAccounts only. In a pod: `/var/run/secrets/kubernetes.io/serviceaccount/token`. |
+
+With `source: operator` the server is ready before the first push, so the
+operator can reach it through its Service.
+
 ## Environment variables
 
 | Variable | Read by | Value |
 | --- | --- | --- |
-| `KURA_CONFIG_DIR` | serve (required) | The directory of tenant and vault documents. |
+| `KURA_CONFIG_DIR` | serve (required with `documents.source: files`) | The directory of tenant and vault documents; ignored, with a warning, when the operator is the source. |
 | `KURA_DATABASE_URL` | migrate, reset-epochs, check-chunks (required); serve, maintain, backup (optional) | A PostgreSQL URL. `migrate` and `reset-epochs` always use it, as the database owner. `check-chunks` needs the owner's URL here. For the other commands it overrides the URL read from Vault, which is meant for local runs. |
 | `KURA_VAULT_TOKEN` | every command that reads `vault` | A Vault token used instead of Kubernetes auth. For local runs. |
 | `KURA_BACKUP_ENDPOINT`, `KURA_BACKUP_BUCKET`, `KURA_BACKUP_ACCESS_KEY_ID`, `KURA_BACKUP_SECRET_ACCESS_KEY` | backup (required) | The second bucket the backup copies to. |

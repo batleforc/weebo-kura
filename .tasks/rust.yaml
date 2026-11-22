@@ -5,17 +5,17 @@ tasks:
   build:
     desc: Build the entire workspace
     cmds:
-      - cargo build --workspace
+      - cargo build --workspace --exclude kura-operator-testkit
 
   check:
     desc: Type-check the entire workspace without building
     cmds:
-      - cargo check --workspace --all-targets
+      - cargo check --workspace --all-targets --exclude kura-operator-testkit
 
   rust:lint:
     desc: Run clippy (warnings are errors) and the format check across the workspace
     cmds:
-      - cargo clippy --workspace --all-targets -- -D warnings
+      - cargo clippy --workspace --all-targets --exclude kura-operator-testkit -- -D warnings
       # kura-core also runs in WASM inside Obsidian (§6.8): it must build there.
       - cargo clippy -p kura-core --target wasm32-unknown-unknown -- -D warnings
       - cargo fmt --all --check

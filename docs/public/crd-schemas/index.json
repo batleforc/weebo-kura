@@ -1,5 +1,14 @@
 [
   {
+    "kind": "KuraInstance",
+    "singular": "kurainstance",
+    "scope": "Cluster",
+    "apiVersion": "kura.weebo.io/v1alpha1",
+    "served": [
+      "v1alpha1"
+    ]
+  },
+  {
     "kind": "KuraTenant",
     "singular": "kuratenant",
     "scope": "Cluster",

@@ -15,6 +15,13 @@ spec:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressNamespace }} }
       ports: [{ port: 8080 }]
+    {{- if eq (include "kura.documentsSource" .) "operator" }}
+    # kura-operator pushes the documents (RFC 0009 §6.4).
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.operatorNamespace }} }
+      ports: [{ port: 8080 }]
+    {{- end }}
     - from:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace }} }

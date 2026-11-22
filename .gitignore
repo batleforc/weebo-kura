@@ -69,3 +69,6 @@ perf/results/
 # SARIF reports of task sast / audit:image
 semgrep.sarif
 trivy.sarif
+
+# The kit's library chart, fetched by `task operator-chart:deps` (Chart.lock pins it)
+deploy/charts/*/charts/
