@@ -139,6 +139,8 @@ export class FakeServer {
     }
   }
   calls: string[] = [];
+  /** Every committed operation, as `<op> <path>`. */
+  ops: string[] = [];
   /** An older server, without the batch routes of RFC 0002: 405. */
   older = false;
 
@@ -225,6 +227,7 @@ export class FakeServer {
     if (method === "POST" && path === "/commits") {
       const req = await body();
       const ops = typeof req === "object" && req !== null && "operations" in req && Array.isArray(req.operations) ? req.operations : [];
+      this.ops.push(...ops.map((op: Record<string, unknown>) => `${String(op.op)} ${String(op.path)}`));
       const results = ops.map((op: Record<string, unknown>) => {
         const entry = String(op.entry);
         const head: Entry = {
@@ -233,8 +236,9 @@ export class FakeServer {
           seq: ++this.seq,
           path: typeof op.path === "string" ? op.path : (this.entries.get(entry)?.path ?? ""),
           deleted: op.op === "delete",
-          blob: op.op === "delete" ? null : String(op.blob),
-          size: op.op === "delete" ? 0 : Number(op.size),
+          // A folder (RFC 0007) has no blob, as a deletion.
+          blob: op.op === "delete" || op.op === "folder" ? null : String(op.blob),
+          size: op.op === "delete" || op.op === "folder" ? 0 : Number(op.size),
         };
         this.entries.set(entry, head);
         return { outcome: "accepted", head };
