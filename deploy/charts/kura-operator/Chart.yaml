@@ -2,8 +2,8 @@ apiVersion: v2
 name: kura-operator
 description: kura-operator, which hands KuraTenant and KuraVault custom resources to kura-server (RFC 0009).
 type: application
-version: 0.2.1
-appVersion: "0.2.1"
+version: 0.3.0
+appVersion: "0.3.0"
 # Native `preStop: sleep` and the admission/policy APIs used here.
 kubeVersion: ">=1.30.0-0"
 home: https://github.com/batleforc/weebo-kura

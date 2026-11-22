@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.3.0](https://github.com/batleforc/weebo-kura/compare/665d867df22e7d0ceefdf97bff3f64288c6a66da..v0.3.0) - 2026-11-22
+#### Features
+- (**chart**) hostAliases, extra volumes, Argo CD sync waves, PostgreSQL without CloudNativePG - ([a0125fc](https://github.com/batleforc/weebo-kura/commit/a0125fc278db40e7b6d3c1c2c8ec24757e38222d)) - Max Batleforc, Claude Opus 5.5
+#### Miscellaneous Chores
+- (**version**) merge v0.2.1 - ([665d867](https://github.com/batleforc/weebo-kura/commit/665d867df22e7d0ceefdf97bff3f64288c6a66da)) - Maxime
+
+- - -
+
 ## [v0.2.1](https://github.com/batleforc/weebo-kura/compare/a77de5da6123cc4cc87edf530060868c9662b66d..v0.2.1) - 2026-11-22
 #### Bug Fixes
 - (**cli**) kura watch no longer drops an edit made while it syncs - ([a77de5d](https://github.com/batleforc/weebo-kura/commit/a77de5da6123cc4cc87edf530060868c9662b66d)) - Max Batleforc, Claude Opus 5.5
