@@ -2353,6 +2353,8 @@ dependencies = [
  "kura-operator-adapters-outbound",
  "kura-operator-application",
  "kura-operator-domain",
+ "rcgen",
+ "reqwest",
  "rustls",
  "serde",
  "serde_json",

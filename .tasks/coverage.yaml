@@ -3,8 +3,8 @@ version: "3"
 vars:
   # main.rs is process wiring only; everything it calls lives in lib.rs and is tested there.
   # kura-wasm is JS glue, run by the plugin's vitest engine test, not by cargo.
-  # kura-operator (RFC 0009) is proved by its envtest suite (task operator:test),
-  # which this measure leaves out: its crates are outside these gates.
+  # kura-operator (RFC 0009) has its own 86% gate in task operator:test, measured
+  # over its envtest suite and its binary: its crates are outside these gates.
   COVERAGE_EXCLUDE: 'crates/kura-(server|cli)/src/main\.rs|crates/kura-wasm/|crates/operator/'
 
 tasks:
@@ -23,11 +23,11 @@ tasks:
       - cargo llvm-cov report --ignore-filename-regex '{{.COVERAGE_EXCLUDE}}' --lcov --output-path lcov.info
 
   coverage-check:
-    desc: Fail when the line coverage of kura-api, kura-core, kura-server or kura-cli is under 80% (export KURA_TEST_DATABASE_URL first)
+    desc: Fail when the line coverage of kura-api, kura-core, kura-server or kura-cli is under 86% (export KURA_TEST_DATABASE_URL first)
     # One gate per crate (plan PR 1.10).
     cmds:
       - task: cov:collect
-      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(server|core|cli|wasm)/|crates/operator/' --fail-under-lines 80
-      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(server|api|cli|wasm)/|crates/operator/' --fail-under-lines 80
-      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(api|core|cli)/|{{.COVERAGE_EXCLUDE}}' --fail-under-lines 80
-      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(api|core|server)/|{{.COVERAGE_EXCLUDE}}' --fail-under-lines 80
+      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(server|core|cli|wasm)/|crates/operator/' --fail-under-lines 86
+      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(server|api|cli|wasm)/|crates/operator/' --fail-under-lines 86
+      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(api|core|cli)/|{{.COVERAGE_EXCLUDE}}' --fail-under-lines 86
+      - cargo llvm-cov report --ignore-filename-regex 'crates/kura-(api|core|server)/|{{.COVERAGE_EXCLUDE}}' --fail-under-lines 86

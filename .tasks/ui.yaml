@@ -22,7 +22,7 @@ tasks:
       - pnpm run lint
 
   ui:test:
-    desc: Run the console's tests with coverage (80% line gate)
+    desc: Run the console's tests with coverage (86% line gate)
     dir: ui
     cmds:
       - pnpm run test

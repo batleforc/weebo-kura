@@ -810,6 +810,45 @@ pub mod oidc {
 mod tests {
     use super::*;
 
+    /// A server that answers once, then closes: one canned reply per connection.
+    async fn replies(answers: Vec<&'static str>) -> String {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let Ok(l) = tokio::net::TcpListener::bind("127.0.0.1:0").await else {
+            return String::new();
+        };
+        let url = l
+            .local_addr()
+            .map(|a| format!("http://{a}/"))
+            .unwrap_or_default();
+        tokio::spawn(async move {
+            for answer in answers {
+                let Ok((mut s, _)) = l.accept().await else {
+                    return;
+                };
+                let mut buf = [0u8; 4096];
+                drop(s.read(&mut buf).await);
+                drop(s.write_all(answer.as_bytes()).await);
+            }
+        });
+        url
+    }
+
+    /// `429` and `503` wait for `Retry-After` (1 s when absent) and retry.
+    #[tokio::test]
+    async fn busy_answers_are_retried_after_their_delay() {
+        let url = replies(vec![
+            "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]",
+        ])
+        .await;
+        let Ok(client) = http() else {
+            panic!("an HTTP client");
+        };
+        let answer = exchange(client.get(&url)).await;
+        assert_eq!(answer.map(|r| r.status().as_u16()).ok(), Some(200));
+    }
+
     /// RFC 0002 decision 2: a `405` (an older server's answer to the batch
     /// routes) means "read one by one"; a problem `404` is still an error.
     #[tokio::test]

@@ -24,7 +24,14 @@ struct Args {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    fs::create_dir_all(&args.out)?;
+    generate(&args.out)?;
+    println!("wrote CRDs and links.json to {}", args.out.display());
+    Ok(())
+}
+
+/// Every CRD and `links.json` into `out`.
+fn generate(out: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(out)?;
     // Kura has no `KuraLocalInstance` (RFC 0009 decision 6): the cluster
     // instance stands for both roles of the kit's schematic kinds.
     let instance = GroupKind::new("kura.weebo.io", "KuraInstance");
@@ -33,16 +40,15 @@ fn main() -> anyhow::Result<()> {
         local_instance: instance,
     };
     let mut kinds = BTreeMap::new();
-    write::<KuraInstance>(&args.out, &roles, &mut kinds)?;
-    write::<KuraTenantResource>(&args.out, &roles, &mut kinds)?;
-    write::<KuraVaultResource>(&args.out, &roles, &mut kinds)?;
+    write::<KuraInstance>(out, &roles, &mut kinds)?;
+    write::<KuraTenantResource>(out, &roles, &mut kinds)?;
+    write::<KuraVaultResource>(out, &roles, &mut kinds)?;
     let schematic: BTreeMap<String, Schematic> = weebo_kit_api::schematic::shared(&roles)?;
     let links = serde_json::json!({ "version": 1, "kinds": kinds, "schematic": schematic });
     fs::write(
-        args.out.join("links.json"),
+        out.join("links.json"),
         serde_json::to_string_pretty(&links)? + "\n",
     )?;
-    println!("wrote CRDs and links.json to {}", args.out.display());
     Ok(())
 }
 
@@ -83,21 +89,24 @@ fn open_objects(v: &mut Value) {
 mod tests {
     use super::*;
 
-    /// The committed CRDs are what the specs give: `task recu` was run.
+    /// The committed CRDs and `links.json` are what the specs give: `task recu` was run.
     #[test]
     fn committed_crds_match_the_specs() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/crd");
-        for (crd, file) in [
-            (KuraInstance::crd(), "kurainstance.yaml"),
-            (KuraTenantResource::crd(), "kuratenant.yaml"),
-            (KuraVaultResource::crd(), "kuravault.yaml"),
+        let out = std::env::temp_dir().join(format!("kura-crdgen-{}", std::process::id()));
+        generate(&out).unwrap();
+        for file in [
+            "kurainstance.yaml",
+            "kuratenant.yaml",
+            "kuravault.yaml",
+            "links.json",
         ] {
-            let mut want = serde_json::to_value(&crd).unwrap();
-            open_objects(&mut want);
-            let text = fs::read_to_string(dir.join(file)).unwrap();
-            let got: Value = serde_norway::from_str(&text).unwrap();
-            assert_eq!(got, want, "{file} is stale: run `task recu`");
+            let read = |d: &Path| -> Value {
+                serde_norway::from_str(&fs::read_to_string(d.join(file)).unwrap()).unwrap()
+            };
+            assert_eq!(read(&dir), read(&out), "{file} is stale: run `task recu`");
         }
+        drop(fs::remove_dir_all(&out));
     }
 
     #[test]

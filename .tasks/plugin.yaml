@@ -35,7 +35,7 @@ tasks:
       - pnpm run build
 
   plugin:test:
-    desc: Run the plugin shell's tests with coverage (80% gate)
+    desc: Run the plugin shell's tests with coverage (86% gate)
     deps: [wasm:build]
     dir: plugin
     cmds:
