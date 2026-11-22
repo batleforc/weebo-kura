@@ -25,7 +25,7 @@ interface Reading {
 }
 
 function read(s: Situation): Reading {
-  if (!s.signedIn || s.error?.kind === "invalid_token" || s.error?.kind === "device_revoked") return { word: t("word.signIn"), tone: "error" };
+  if (!s.signedIn || s.error?.kind === "invalid_token" || s.error?.kind === "device_revoked" || s.error?.kind === "device_unknown") return { word: t("word.signIn"), tone: "error" };
   if (s.error?.kind === "client_too_old") return { word: t("word.update"), tone: "error" };
   if (s.error?.kind === "history_rewound" || s.error?.kind === "cursor_expired") return { word: t("word.resyncing"), tone: "busy" };
   if (s.error?.kind === "too_many_deletions") return { word: t("word.confirm"), tone: "warn" };

@@ -45,6 +45,19 @@ function retryAfter(r: Response): number {
   return Math.min(60, Math.max(1, Number.isFinite(s) ? s : 1));
 }
 
+/** `call`, with a device this server does not know (another server's, or
+ * one purged) registered again once by `register`, as the console's
+ * `withDevice`. A revoked device is not: it must sign in again. */
+export async function withDevice<T>(call: () => Promise<T>, register: () => Promise<void>): Promise<T> {
+  try {
+    return await call();
+  } catch (e) {
+    if (!isProblem(e) || e.kind !== "device_unknown") throw e;
+    await register();
+    return call();
+  }
+}
+
 export class Api {
   constructor(private readonly o: ApiOptions) {}
 

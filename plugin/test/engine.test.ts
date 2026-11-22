@@ -22,8 +22,8 @@ function device(server: FakeServer, id: string, open: string[] = []) {
     random: () => crypto.getRandomValues(new Uint8Array(16)),
   });
   const api = new Api({ server: "https://kura.test", token: () => Promise.resolve("t"), device: () => id, fetch: server.fetch, sleep: () => Promise.resolve() });
-  const run = async (dryRun = false, allowDeletions = false) => {
-    const options = JSON.stringify({ device: id, vault: VAULT, min: 64, avg: 256, max: 1024, maxFileSize: 1 << 20, dryRun, allowDeletions });
+  const run = async (dryRun = false, allowDeletions = false, folders = false) => {
+    const options = JSON.stringify({ device: id, vault: VAULT, min: 64, avg: 256, max: 1024, maxFileSize: 1 << 20, dryRun, allowDeletions, folders });
     return parseOutcome(await core.sync(host, api.remote(VAULT), await host.loadState(), options));
   };
   return { adapter, run };
@@ -131,5 +131,14 @@ describe("the WASM core through the plugin's host and remote", () => {
     await expect(core.sync(host, api.remote(VAULT), "", "{")).rejects.toMatch(/options/);
     expect(core.pathProblem("notes/ok.md")).toBeUndefined();
     expect(core.pathProblem("../x.md")).toMatch(/not allowed/);
+  });
+
+  it("pushes every folder of the first sync, an empty one included (RFC 0007)", async () => {
+    const server = new FakeServer();
+    const a = device(server, "0193a9f0-0000-7000-8000-0000000000af");
+    a.adapter.put("JDR/Le monde d'Eldran/Golem.md", "golem\n");
+    await a.adapter.mkdir("JDR/Vide");
+    await a.run(false, false, true);
+    expect(server.ops.filter((o) => o.startsWith("folder ")).sort()).toEqual(["folder JDR", "folder JDR/Le monde d'Eldran", "folder JDR/Vide"]);
   });
 });

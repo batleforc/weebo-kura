@@ -132,6 +132,7 @@ describe("a vault's page", () => {
     expect(w.findAll("[data-test=vault-tabs] a").map((a) => a.text())).toEqual([
       "Overview",
       "Notes",
+      "Configuration",
       "Access",
       "Keys",
       "Notifications",
@@ -146,6 +147,7 @@ describe("a vault's page", () => {
     expect(w.findAll("[data-test=vault-tabs] a").map((a) => a.text())).toEqual([
       "Overview",
       "Notes",
+      "Configuration",
     ]);
     expect(w.find("[data-test=who]").exists()).toBe(false);
     expect(w.findAll("[data-test=recent] li").map((l) => l.text())).toEqual([
@@ -224,6 +226,6 @@ describe("a vault's page", () => {
 
   it("counts a tenant admin as a manager of the tenant's vaults", async () => {
     const w = await open("viewer", "admin");
-    expect(w.findAll("[data-test=vault-tabs] a")).toHaveLength(5);
+    expect(w.findAll("[data-test=vault-tabs] a")).toHaveLength(6);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Api, CLIENT } from "../src/remote";
+import { Api, CLIENT, withDevice } from "../src/remote";
 import type { Fetch } from "../src/remote";
 
 function api(fetch: Fetch, device: string | null = "dev-1") {
@@ -120,5 +120,26 @@ describe("the API client", () => {
     await expect(gone.getChunkRecords(["h1"])).rejects.toMatchObject({ status: 404 });
     const odd = api(() => Promise.resolve(json(200, { nope: 1 }))).a.remote("v1");
     await expect(odd.getBlobs(["b"])).rejects.toThrow(/manifests/);
+  });
+
+  it("registers a device the server does not know once, never a revoked one", async () => {
+    let device = "from-another-server";
+    let registered = 0;
+    const problem = (kind: string) => json(401, { type: `/v1/problems/${kind}` });
+    // The server knows only "fresh".
+    const b = new Api({
+      server: "https://kura.test/", token: () => Promise.resolve("tok"), device: () => device, sleep: () => Promise.resolve(),
+      fetch: (_, init) => Promise.resolve(new Headers(init.headers).get("x-kura-device") === "fresh" ? json(200, []) : problem("device_unknown")),
+    });
+    const register = (id: string) => () => { registered++; device = id; return Promise.resolve(); };
+    expect(await withDevice(() => b.vaults(), register("fresh"))).toEqual([]);
+    expect(registered).toBe(1);
+    // Still unknown after its one registration: the problem, not a loop.
+    device = "stale";
+    await expect(withDevice(() => b.vaults(), register("unknown-too"))).rejects.toMatchObject({ kind: "device_unknown" });
+    expect(registered).toBe(2);
+    const revoked = api(() => Promise.resolve(problem("device_revoked")));
+    await expect(withDevice(() => revoked.a.vaults(), register("fresh"))).rejects.toMatchObject({ kind: "device_revoked" });
+    expect(registered).toBe(2);
   });
 });

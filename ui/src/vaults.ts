@@ -50,9 +50,9 @@ export function sectionsOf(
   return [
     { name: "vault", to: base, label: "vault.overview" },
     { name: "vault-notes", to: `${base}/notes`, label: "vault.notes" },
-    // RFC 0008: every member's own settings, when the vault syncs them; a
-    // restricted viewer's scope never holds them.
-    ...(v.configSync.length > 0 && !v.paths
+    // RFC 0008: every member's own settings; the page says when the vault
+    // syncs none. A restricted viewer's scope never holds them.
+    ...(!v.paths
       ? [{ name: "vault-config", to: `${base}/config`, label: "vault.config" }]
       : []),
     ...(manages

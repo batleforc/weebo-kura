@@ -570,7 +570,7 @@
     "unreadable": "This file could not be read.",
     "lastEdited": "Last edited {date}",
     "lastEditedBy": "Last edited {date} by {who}",
-    "notSynced": "This vault does not sync Obsidian settings.",
+    "notSynced": "This vault does not sync Obsidian settings yet. Its managers turn it on with configSync in the vault's KuraVault document.",
     "notForYou": "This page is not available to you."
   }
 }
