@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.2.1](https://github.com/batleforc/weebo-kura/compare/a77de5da6123cc4cc87edf530060868c9662b66d..v0.2.1) - 2026-11-22
+#### Bug Fixes
+- (**cli**) kura watch no longer drops an edit made while it syncs - ([a77de5d](https://github.com/batleforc/weebo-kura/commit/a77de5da6123cc4cc87edf530060868c9662b66d)) - Max Batleforc, Claude Opus 5.5
+#### Miscellaneous Chores
+- (**version**) merge v0.2.0 - ([667a89f](https://github.com/batleforc/weebo-kura/commit/667a89f599a2a1af9e64e96c401e993b30a8e7a5)) - Maxime
+
+- - -
+
 ## [v0.2.0](https://github.com/batleforc/weebo-kura/compare/d758347b349fabefd86586cd93cb46d2a6af5418..v0.2.0) - 2026-11-22
 #### Features
 - (**api**) KuraInstance and the operator's reason codes (RFC 0009 phase 0) - ([32da4a6](https://github.com/batleforc/weebo-kura/commit/32da4a679d3db4508d1da311b0c3ef2b9655737a)) - Max Batleforc, Claude Opus 5.5
