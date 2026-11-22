@@ -2,5 +2,5 @@ apiVersion: v2
 name: kura
 description: weebo-kura, the self-hosted sync backend for Obsidian vaults (RFC 0001)
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"
