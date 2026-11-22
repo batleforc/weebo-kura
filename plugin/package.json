@@ -1,6 +1,6 @@
 {
   "name": "weebo-kura",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Kura Sync: Obsidian vaults synced with a self-hosted kura server (RFC 0001)",
   "private": true,
   "license": "Apache-2.0",
