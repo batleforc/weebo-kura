@@ -75,6 +75,7 @@ the pods (checksum annotation). The keys the default values set:
 | `server.notifications.enabled` | `false` | Turn webhooks on. |
 | `server.notifications.webhook.allowedCidrs` | `[]` | Private ranges webhooks may reach (a hub inside the cluster); never `0.0.0.0/0`. |
 | `server.documents.source` | `files` | `files`: the `documents` below. `operator`: kura-operator pushes them (see [Operator](/docs/guides/operator)); the documents ConfigMap, its mount and `KURA_CONFIG_DIR` are not rendered. |
+| `extraEnv` | `[]` | Extra environment variables of the server container, such as `KURA_DATABASE_URL` from a Secret when `server.vault` is not used. |
 | `server.documents.operator` | none | With `source: operator`: `issuer`, `audience` and `subject` of kura-operator's token. The chart adds `caFile` and `tokenFile`, the ServiceAccount's own, unless set. |
 
 ## webhookCa

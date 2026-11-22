@@ -30,9 +30,14 @@ spec:
           image: {{ include "kura.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: [--config, /etc/kura/server/server.yaml]
-          {{- if eq (include "kura.documentsSource" .) "files" }}
+          {{- if or (eq (include "kura.documentsSource" .) "files") .Values.extraEnv }}
           env:
+            {{- if eq (include "kura.documentsSource" .) "files" }}
             - { name: KURA_CONFIG_DIR, value: /etc/kura/config }
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           ports:
             - { name: api, containerPort: 8080 }

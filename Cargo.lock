@@ -2358,6 +2358,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "weebo-kit-api",
+ "weebo-kit-perf",
  "weebo-kit-runtime",
  "weebo-kit-testkit",
 ]
@@ -5054,6 +5055,21 @@ dependencies = [
 name = "weebo-kit-domain"
 version = "0.32.0"
 source = "git+https://github.com/weebo-si-operator/weebo-operator-kit?tag=v0.32.0#8284bb9f1440e9b1844b4bb53325695e34c1d1db"
+
+[[package]]
+name = "weebo-kit-perf"
+version = "0.32.0"
+source = "git+https://github.com/weebo-si-operator/weebo-operator-kit?tag=v0.32.0#8284bb9f1440e9b1844b4bb53325695e34c1d1db"
+dependencies = [
+ "http",
+ "k8s-openapi",
+ "kube",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "weebo-kit-testkit",
+]
 
 [[package]]
 name = "weebo-kit-runtime"

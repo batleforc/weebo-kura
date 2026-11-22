@@ -36,6 +36,7 @@ weebo-kit-domain = { git = "https://github.com/weebo-si-operator/weebo-operator-
 weebo-kit-adapters = { git = "https://github.com/weebo-si-operator/weebo-operator-kit", tag = "v0.32.0" }
 weebo-kit-runtime = { git = "https://github.com/weebo-si-operator/weebo-operator-kit", tag = "v0.32.0" }
 weebo-kit-testkit = { git = "https://github.com/weebo-si-operator/weebo-operator-kit", tag = "v0.32.0" }
+weebo-kit-perf = { git = "https://github.com/weebo-si-operator/weebo-operator-kit", tag = "v0.32.0" }
 kura-operator-domain = { path = "crates/operator/domain" }
 kura-operator-application = { path = "crates/operator/application" }
 kura-operator-adapters-outbound = { path = "crates/operator/adapters-outbound" }

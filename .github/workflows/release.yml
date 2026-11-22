@@ -23,6 +23,8 @@ env:
   REGISTRY: ghcr.io
   # The repository deploy/helm/kura/values.yaml pulls.
   IMAGE: ghcr.io/${{ github.repository_owner }}/kura-server
+  # kura-operator (RFC 0009), the repository its chart pulls.
+  OPERATOR_IMAGE: ghcr.io/${{ github.repository_owner }}/kura-operator
   CHART_NAMESPACE: oci://ghcr.io/${{ github.repository }}/charts
   # mise.toml's exact pin.
   RUST_TOOLCHAIN: "1.100.0"
@@ -60,6 +62,7 @@ jobs:
           ### What's in the box
           - **Container image**: \`${IMAGE}:${VERSION}\` (linux/amd64), signed
           - **Helm chart**: \`helm install kura ${CHART_NAMESPACE}/kura --version ${VERSION}\`
+          - **kura-operator** (RFC 0009): image \`${OPERATOR_IMAGE}:${VERSION}\`, chart \`${CHART_NAMESPACE}/kura-operator\`, and \`crds.yaml\` for installs with \`crds.install=false\`
           - **CLI \`kura\`**: Linux (amd64/arm64), Windows (amd64), macOS (arm64); \`mise use github:${REPO}\`
           - **Obsidian plugin**: \`main.js\`, \`manifest.json\`, \`styles.css\` (BRAT, or the console's Help page)
           - **SBOMs** (CycloneDX), attested; **\`checksums.txt\`** with a Sigstore bundle covering every asset
@@ -199,9 +202,18 @@ jobs:
         run: gh release upload "${{ needs.draft.outputs.tag }}" plugin/main.js plugin/manifest.json plugin/styles.css --repo "$GITHUB_REPOSITORY" --clobber
 
   image:
-    name: Container image
+    name: Container image (${{ matrix.name }})
     runs-on: ubuntu-latest
     needs: draft
+    # The server's and kura-operator's: same build, signature, SBOM and gate.
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { name: kura-server, file: ./Containerfile, sbom: sbom-image.cdx.json }
+          - { name: kura-operator, file: ./Containerfile.operator, sbom: sbom-operator-image.cdx.json }
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
     permissions:
       contents: write
       packages: write
@@ -222,7 +234,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          file: ./Containerfile
+          file: ${{ matrix.file }}
           push: true
           platforms: linux/amd64
           tags: ${{ env.IMAGE }}:${{ needs.draft.outputs.version }}
@@ -232,8 +244,8 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=Apache-2.0
           provenance: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
       # By digest: a tag is a mutable pointer.
       - name: Sign
         run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
@@ -242,14 +254,14 @@ jobs:
         with:
           image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
           format: cyclonedx-json
-          output-file: sbom-image.cdx.json
+          output-file: ${{ matrix.sbom }}
           upload-artifact: false
           upload-release-assets: false
       - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.build.outputs.digest }}
-          sbom-path: sbom-image.cdx.json
+          sbom-path: ${{ matrix.sbom }}
           push-to-registry: true
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -260,7 +272,10 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ needs.draft.outputs.tag }}" sbom-image.cdx.json --repo "$GITHUB_REPOSITORY" --clobber
+        run: gh release upload "${{ needs.draft.outputs.tag }}" "${{ matrix.sbom }}" --repo "$GITHUB_REPOSITORY" --clobber
+      # The image starts without a cluster (kura-operator only: the server needs its config).
+      - if: matrix.name == 'kura-operator'
+        run: docker run --rm "${IMAGE}@${{ steps.build.outputs.digest }}" --version
       # The gate: fixable HIGH/CRITICAL fail the release, with the house ignore file.
       - run: task audit:image IMAGE="${IMAGE}@${{ steps.build.outputs.digest }}"
 
@@ -269,7 +284,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: draft
     permissions:
-      contents: read
+      contents: write # the CRD bundle
       packages: write
       id-token: write # keyless signing
     steps:
@@ -290,11 +305,25 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          helm package deploy/helm/kura --destination dist --version "$VERSION" --app-version "$VERSION"
-          helm push "dist/kura-${VERSION}.tgz" "${CHART_NAMESPACE}" 2>&1 | tee push.log
-          digest=$(grep -oE 'sha256:[0-9a-f]{64}' push.log | head -n1)
-          [ -n "$digest" ] || { echo "helm push printed no digest: refusing to sign a tag" >&2; exit 1; }
-          cosign sign --yes "${CHART_NAMESPACE#oci://}/kura@${digest}"
+          # kura-operator's chart is built on the kit's library chart (OCI, Chart.lock).
+          helm dependency build --skip-refresh deploy/charts/kura-operator
+          for chart in deploy/helm/kura deploy/charts/kura-operator; do
+            name=$(basename "$chart")
+            helm package "$chart" --destination dist --version "$VERSION" --app-version "$VERSION"
+            helm push "dist/${name}-${VERSION}.tgz" "${CHART_NAMESPACE}" 2>&1 | tee push.log
+            digest=$(grep -oE 'sha256:[0-9a-f]{64}' push.log | head -n1)
+            [ -n "$digest" ] || { echo "helm push printed no digest: refusing to sign a tag" >&2; exit 1; }
+            cosign sign --yes "${CHART_NAMESPACE#oci://}/${name}@${digest}"
+          done
+      # For installs that manage the CRDs themselves (crds.install=false).
+      - name: Attach the CRD bundle
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for f in deploy/crd/*.yaml; do echo '---'; cat "$f"; done > crds.yaml
+          gh release upload "${{ needs.draft.outputs.tag }}" crds.yaml --repo "$GITHUB_REPOSITORY" --clobber
 
   sign:
     name: Checksums and detached signature

@@ -24,6 +24,22 @@ tasks:
       - PATH="{{.GO_BIN}}:$PATH" cargo clippy -p kura-operator-testkit --all-targets -- -D warnings
       - PATH="{{.GO_BIN}}:$PATH" cargo test -p kura-operator-testkit
 
+  operator:perf:
+    desc: "Measure kura-operator's release binary against envtest and the kit's small-cluster budget (report in target/perf/kura-operator.md)"
+    vars:
+      GO_BIN:
+        sh: dirname "$(mise which go)"
+    cmds:
+      - cargo build --release -p kura-operator
+      - PATH="{{.GO_BIN}}:$PATH" cargo test --release -p kura-operator-testkit --test perf -- --ignored --nocapture
+
+  operator:proof:
+    desc: "RFC 0009 §6.P on kind: build both images with podman, then tests/heavy/operator.sh (KEEP=1 leaves the cluster up)"
+    cmds:
+      - podman build -f Containerfile -t localhost/kura-server:proof .
+      - podman build -f Containerfile.operator -t localhost/kura-operator:proof .
+      - tests/heavy/operator.sh
+
   operator:run:
     desc: "Run kura-operator against the current kubeconfig's cluster (POD_NAMESPACE and KURA_SERVICE_ACCOUNT name the ServiceAccount it mints tokens for; the webhook needs WEBHOOK_TLS_CERT_FILE and WEBHOOK_TLS_KEY_FILE)"
     cmds:

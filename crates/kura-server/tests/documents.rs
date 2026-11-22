@@ -336,3 +336,36 @@ async fn documents_body_and_count_limits() {
     let (s, _) = push(&e, &token, base()).await;
     assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
 }
+
+/// RFC 0009 §10.3, the capacity probe: one push at the cap, 2,000 documents
+/// (1,000 tenants with one vault each), then the same set again. Run on
+/// purpose: `cargo test --release -p kura-server --test documents -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore = "a measurement, not a check: run it on purpose"]
+async fn capacity_at_two_thousand_documents() {
+    let key = OperatorKey::new();
+    let Some(e) = operator_env(module_path!(), &key).await else {
+        return;
+    };
+    let mut set = base();
+    for i in 0..998 {
+        let t = format!("t{i:04}");
+        set.push(tenant(&t));
+        set.push(vault(&t, "notes", 1));
+    }
+    assert_eq!(set.len(), 2_000);
+    let body = json!({ "documents": set }).to_string();
+    println!("body: {} bytes", body.len());
+    let started = std::time::Instant::now();
+    let (s, b) = push(&e, &key.operator(), set.clone()).await;
+    let applied = started.elapsed();
+    assert_eq!(
+        (s, b["outcome"].as_str()),
+        (StatusCode::OK, Some("applied"))
+    );
+    let started = std::time::Instant::now();
+    let (_, b) = push(&e, &key.operator(), set).await;
+    let unchanged = started.elapsed();
+    assert_eq!(b["outcome"], "unchanged");
+    println!("2,000 documents: applied in {applied:?}, unchanged in {unchanged:?}");
+}

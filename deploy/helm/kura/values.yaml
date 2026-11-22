@@ -73,6 +73,10 @@ documents: {}
   #   kind: KuraTenant
   #   ...
 
+# Extra environment variables of the server container, such as
+# KURA_DATABASE_URL from a Secret when `server.vault` is not used.
+extraEnv: []
+
 serviceAccount:
   # The Kubernetes auth role `kura` in Vault binds this account.
   name: kura
