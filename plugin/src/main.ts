@@ -13,7 +13,7 @@ import type { Core } from "./core";
 import { ObsidianHost } from "./host";
 import { Notifier } from "./notifier";
 import type { SocketLike } from "./notifier";
-import { Api } from "./remote";
+import { Api, withDevice } from "./remote";
 import type { VaultView } from "./remote";
 import { KuraSettingTab } from "./settings";
 import type { Situation } from "./status";
@@ -384,7 +384,8 @@ export default class KuraPlugin extends Plugin {
       random: random16,
     });
     try {
-      this.vaults = await api.vaults();
+      // A device this server forgot is registered again before any sync.
+      this.vaults = await withDevice(() => api.vaults(), this.registrar(session));
     } catch {
       // Offline: the controller reports it.
     }
@@ -514,13 +515,11 @@ export default class KuraPlugin extends Plugin {
       const id = secretId(s.server, s.vault === "" ? "pending" : s.vault);
       const session = new Session(http, s.issuer, s.clientId, this.app.secretStorage, id, () => Date.now());
       session.adopt(tokens);
-      const api = new Api({ server: s.server, token: () => session.token(), device: () => null, fetch: (u, i) => fetch(u, i), sleep });
-      if (s.device === "") {
-        const kind = Platform.isMobile ? "mobile" : "desktop";
-        s.deviceName = s.deviceName === "" ? kind : s.deviceName;
-        s.device = await api.register(s.deviceName, kind);
-      }
-      this.vaults = await new Api({ server: s.server, token: () => session.token(), device: () => s.device, fetch: (u, i) => fetch(u, i), sleep }).vaults();
+      const register = this.registrar(session);
+      if (s.device === "") await register();
+      // A device another server registered (a stale data.json) is replaced.
+      const api = new Api({ server: s.server, token: () => session.token(), device: () => s.device, fetch: (u, i) => fetch(u, i), sleep });
+      this.vaults = await withDevice(() => api.vaults(), register);
       await this.saveSettings();
       // `display` is deprecated from 1.13; the plugin supports 1.11.4 (§6.8).
       // eslint-disable-next-line @typescript-eslint/no-deprecated
@@ -577,6 +576,27 @@ export default class KuraPlugin extends Plugin {
     await this.saveSettings();
     await this.start();
     return true;
+  }
+
+  /** Registers this device on the configured server and keeps its id. */
+  private registrar(session: Session): () => Promise<void> {
+    return async () => {
+      const s = this.config;
+      const kind = Platform.isMobile ? "mobile" : "desktop";
+      s.deviceName = s.deviceName === "" ? kind : s.deviceName;
+      const api = new Api({ server: s.server, token: () => session.token(), device: () => null, fetch: (u, i) => fetch(u, i), sleep });
+      s.device = await api.register(s.deviceName, kind);
+      await this.saveSettings();
+    };
+  }
+
+  /** A device belongs to one server: another server forgets it, and stops
+   * the sync with the old one, so the next sign-in registers one there. */
+  forgetDevice(): void {
+    this.notifier?.stop();
+    this.notifier = null;
+    this.controller = null;
+    this.config.device = "";
   }
 
   signOut(): void {

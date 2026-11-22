@@ -56,6 +56,8 @@ export class KuraSettingTab extends PluginSettingTab {
     manual.createEl("summary", { text: t("s.manual") });
     new Setting(manual).setName(t("s.server")).addText((x) =>
       x.setPlaceholder("https://kura.example.org").setValue(c.server).onChange(async (v) => {
+        // A device belongs to one server, as with a setup link.
+        if (v.trim() !== c.server && c.device !== "") p.forgetDevice();
         c.server = v.trim();
         await p.saveSettings();
       }),

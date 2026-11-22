@@ -39,6 +39,12 @@ describe("the state's icon", () => {
     expect(word({ ...base, last: { ...report, failed: [["a", "b"]] } })).toBe("unsyncable");
   });
 
+  it("asks to sign in again when the server no longer knows the device", () => {
+    const unknown = { ...base, error: { status: 401, kind: "device_unknown", detail: "" } };
+    expect(word(unknown)).toBe(word({ ...base, signedIn: false }));
+    expect(tone(unknown)).toBe("error");
+  });
+
   it("announces only the conflicts a run newly found", () => {
     expect(newConflicts(null, { ...report, conflicts: ["a"] })).toEqual(["a"]);
     expect(newConflicts({ ...report, conflicts: ["a"] }, { ...report, conflicts: ["a", "b"] })).toEqual(["b"]);
