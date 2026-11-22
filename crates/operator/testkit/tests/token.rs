@@ -96,3 +96,56 @@ async fn the_token_names_the_operator_and_the_instances_audience() {
     assert_eq!(refused.reason, kura_api::ReasonCode::InstanceUnauthorized);
     server.abort();
 }
+
+/// `tls`: a CA Secret without the named key, or that does not exist, is
+/// `InstanceUnreachable`; `insecureSkipVerify` still builds a gateway.
+#[tokio::test]
+async fn the_ca_secret_must_hold_the_named_key() {
+    drop(rustls::crypto::ring::default_provider().install_default());
+    let cluster = kura_operator_testkit::start().await;
+    let client = cluster.client();
+    let account: ServiceAccount =
+        serde_json::from_value(json!({ "metadata": { "name": "kura-operator" } }))
+            .expect("an account");
+    Api::<ServiceAccount>::namespaced(client.clone(), "default")
+        .create(&PostParams::default(), &account)
+        .await
+        .expect("created");
+    let secret: k8s_openapi::api::core::v1::Secret = serde_json::from_value(
+        json!({ "metadata": { "name": "kura-ca" }, "stringData": { "other": "x" } }),
+    )
+    .expect("a secret");
+    Api::<k8s_openapi::api::core::v1::Secret>::namespaced(client.clone(), "default")
+        .create(&PostParams::default(), &secret)
+        .await
+        .expect("created");
+    let factory = HttpGatewayFactory::new(client, "default".into(), "kura-operator".into());
+    let with_tls = |tls: Value| -> KuraInstance {
+        serde_json::from_value(json!({
+            "apiVersion": "kura.weebo.io/v1alpha1", "kind": "KuraInstance", "metadata": { "name": "kura" },
+            "spec": { "url": "https://kura:8443", "auth": { "serviceAccountToken": { "audience": "kura" } }, "tls": tls }
+        }))
+        .expect("an instance")
+    };
+    for (secret, key) in [("kura-ca", "ca.crt"), ("missing", "ca.crt")] {
+        let refused = factory
+            .gateway_for(&with_tls(
+                json!({ "caSecretRef": { "namespace": "default", "name": secret, "key": key } }),
+            ))
+            .await
+            .err()
+            .expect("refused");
+        assert_eq!(refused.reason, kura_api::ReasonCode::InstanceUnreachable);
+        assert!(
+            refused.message.contains("tls.caSecretRef"),
+            "{}",
+            refused.message
+        );
+    }
+    assert!(
+        factory
+            .gateway_for(&with_tls(json!({ "insecureSkipVerify": true })))
+            .await
+            .is_ok()
+    );
+}

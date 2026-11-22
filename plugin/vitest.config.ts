@@ -8,7 +8,7 @@ export default defineConfig({
       include: ["src/**/*.ts"],
       // Obsidian UI glue only: every decision it makes lives in the tested modules.
       exclude: ["src/wasm/**", "src/main.ts", "src/settings.ts", "src/modals.ts"],
-      thresholds: { lines: 80, functions: 80, branches: 80, statements: 80 },
+      thresholds: { lines: 86, functions: 86, branches: 86, statements: 86 },
     },
   },
 });

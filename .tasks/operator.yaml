@@ -13,16 +13,30 @@ env:
 
 tasks:
   operator:test:
-    desc: "Run kura-operator's envtest tests against a real kube-apiserver and etcd (KUBEBUILDER_ASSETS names their directory; unset, envtest downloads its latest release)"
+    desc: "Run kura-operator's envtest tests, its binary included, against a real kube-apiserver and etcd, and fail under 86% line coverage of the operator's crates (KUBEBUILDER_ASSETS names their directory; unset, envtest downloads its latest release)"
     # envtest's build script runs `go` from its own crate folder, where mise's
     # shim finds no version: the real binary first (Task leaves an existing
     # PATH alone, hence in the command).
     vars:
       GO_BIN:
         sh: dirname "$(mise which go)"
+      # The operator's own code only: kura-api has its own gate, the testkit
+      # and the in-memory Kura are test code.
+      EXCLUDE: 'crates/kura-|crates/operator/testkit/|crates/operator/application/src/test_support\.rs'
     cmds:
       - PATH="{{.GO_BIN}}:$PATH" cargo clippy -p kura-operator-testkit --all-targets -- -D warnings
-      - PATH="{{.GO_BIN}}:$PATH" cargo test -p kura-operator-testkit
+      # show-env instruments plain cargo builds: the binary that tests/binary.rs
+      # spawns is measured too, its profile written on its SIGTERM exit.
+      - |
+        export PATH="{{.GO_BIN}}:$PATH"
+        eval "$(cargo llvm-cov show-env --sh)"
+        cargo llvm-cov clean --workspace
+        KURA_OPERATOR_BIN="$(cargo build -p kura-operator --message-format=json-render-diagnostics \
+          | jq -r 'select(.executable != null and .target.name == "kura-operator") | .executable')"
+        export KURA_OPERATOR_BIN
+        cargo test -p kura-operator-testkit -p kura-operator-domain -p kura-operator-application \
+          -p kura-operator-adapters-inbound -p kura-operator-adapters-outbound
+        cargo llvm-cov report --ignore-filename-regex '{{.EXCLUDE}}' --fail-under-lines 86
 
   operator:perf:
     desc: "Measure kura-operator's release binary against envtest and the kit's small-cluster budget (report in target/perf/kura-operator.md)"

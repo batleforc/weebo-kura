@@ -38,13 +38,18 @@ struct Credentials {
 
 /// The default home: `$KURA_CLI_HOME`, `$XDG_CONFIG_HOME/kura` or `~/.config/kura`.
 pub fn default_home() -> Result<PathBuf, String> {
-    if let Some(h) = std::env::var_os("KURA_CLI_HOME") {
+    home_from(|k| std::env::var_os(k))
+}
+
+/// [`default_home`] from the variables `var` reads.
+fn home_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Result<PathBuf, String> {
+    if let Some(h) = var("KURA_CLI_HOME") {
         return Ok(PathBuf::from(h));
     }
-    if let Some(x) = std::env::var_os("XDG_CONFIG_HOME") {
+    if let Some(x) = var("XDG_CONFIG_HOME") {
         return Ok(PathBuf::from(x).join("kura"));
     }
-    std::env::var_os("HOME")
+    var("HOME")
         .map(|h| PathBuf::from(h).join(".config/kura"))
         .ok_or_else(|| "no home folder: set KURA_CLI_HOME".to_owned())
 }
@@ -103,4 +108,57 @@ pub fn set_refresh_token(home: &Path, token: Option<&str>) -> Result<(), String>
     };
     let bytes = serde_json::to_vec(&c).map_err(|e| e.to_string())?;
     write_private(&home.join("credentials.json"), &bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_home_follows_kura_cli_home_then_xdg_then_home() {
+        let only = |key: &'static str, value: &'static str| {
+            move |k: &str| (k == key).then(|| value.into())
+        };
+        assert_eq!(
+            home_from(only("KURA_CLI_HOME", "/k")),
+            Ok(PathBuf::from("/k"))
+        );
+        assert_eq!(
+            home_from(only("XDG_CONFIG_HOME", "/x")),
+            Ok(PathBuf::from("/x/kura"))
+        );
+        assert_eq!(
+            home_from(only("HOME", "/h")),
+            Ok(PathBuf::from("/h/.config/kura"))
+        );
+        assert!(home_from(|_| None).is_err());
+    }
+
+    #[test]
+    fn config_and_credentials_round_trip_privately() {
+        let home = std::env::temp_dir().join(format!("kura-cli-config-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&home));
+        assert!(matches!(Config::load(&home), Ok(None)));
+        assert_eq!(refresh_token(&home), Ok(None));
+        let cfg = Config {
+            server: "https://kura.example.org".into(),
+            ..Config::default()
+        };
+        assert!(cfg.save(&home).is_ok());
+        let loaded = Config::load(&home).ok().flatten().map(|c| c.server);
+        assert_eq!(loaded.as_deref(), Some("https://kura.example.org"));
+        assert!(set_refresh_token(&home, Some("r1")).is_ok());
+        assert_eq!(refresh_token(&home), Ok(Some("r1".into())));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(home.join("credentials.json"))
+                .map(|m| m.permissions().mode() & 0o777)
+                .ok();
+            assert_eq!(mode, Some(0o600));
+        }
+        assert!(std::fs::write(home.join("config.json"), b"{").is_ok());
+        assert!(Config::load(&home).is_err(), "a broken config is an error");
+        drop(std::fs::remove_dir_all(&home));
+    }
 }

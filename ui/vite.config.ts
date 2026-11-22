@@ -65,7 +65,7 @@ export default defineConfig({
         "src/**/*.spec.ts",
         "src/test-utils.ts",
       ],
-      thresholds: { lines: 80 },
+      thresholds: { lines: 86 },
     },
   },
 });

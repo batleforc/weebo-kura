@@ -676,6 +676,13 @@ async fn the_cli_issues_lists_and_revokes_scoped_tokens() {
     assert_eq!(code(commands::token(&a, create(vec![])).await), 3);
     // Search is opt-in per tenant (decision 39): refused here, exit 3.
     assert_eq!(code(commands::search(&a, "knowledge", "budget").await), 3);
+    // Enabled, an empty index: "No match.", exit 0.
+    e.apply_config(&common::app::CONFIG.replace(
+        "quota: { storage: 1Mi, maxFileSize: 2Mi }",
+        "quota: { storage: 1Mi, maxFileSize: 2Mi }\n  search: { enabled: true }",
+    ))
+    .await;
+    assert_eq!(code(commands::search(&a, "knowledge", "budget").await), 0);
     assert_eq!(
         code(commands::token(&a, create(vec!["127.0.0.0/8".into()])).await),
         0

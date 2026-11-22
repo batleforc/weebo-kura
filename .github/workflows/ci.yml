@@ -59,7 +59,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
-      # The Obsidian plugin: WASM core, strict TypeScript, tests with the 80% gate, bundle within 3 MB.
+      # The Obsidian plugin: WASM core, strict TypeScript, tests with the 86% gate, bundle within 3 MB.
       - run: task plugin:install
       - run: task plugin:test
       - run: task plugin:build
@@ -69,7 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
-      # The web console: tests with the 80% gate, and the build with its budget checks.
+      # The web console: tests with the 86% gate, and the build with its budget checks.
       - run: task ui:install
       - run: task ui:test
       - run: task ui:build

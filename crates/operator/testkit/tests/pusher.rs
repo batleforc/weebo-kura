@@ -315,3 +315,83 @@ async fn webhook_refuses_unlisted_namespace() {
         "fails closed"
     );
 }
+
+/// No `KuraInstance`, then two: nothing is pushed and every resource names
+/// why (`InstanceNotFound`); a vault being deleted is no longer published.
+#[tokio::test]
+async fn without_exactly_one_instance_nothing_is_pushed() {
+    let cluster = kura_operator_testkit::start().await;
+    let client = cluster.client();
+    let instances: Api<KuraInstance> = Api::all(client.clone());
+    let tenants: Api<KuraTenantResource> = Api::all(client.clone());
+    create(
+        &tenants,
+        json!({ "apiVersion": "kura.weebo.io/v1alpha1", "kind": "KuraTenant", "metadata": { "name": "family" },
+                "spec": { "vaultNamespaces": ["family"] } }),
+    )
+    .await;
+    let gateway = FakeGateway::default();
+    let pusher = start_pusher(&client, gateway.clone());
+
+    let why = ready(&tenants, "family", ("False", ReasonCode::InstanceNotFound)).await;
+    assert_eq!(why, "no KuraInstance names the Kura server");
+
+    let instance = |name: &str| {
+        json!({ "apiVersion": "kura.weebo.io/v1alpha1", "kind": "KuraInstance", "metadata": { "name": name },
+                "spec": { "url": "http://kura:8080", "auth": { "serviceAccountToken": { "audience": "kura" } } } })
+    };
+    create(&instances, instance("kura")).await;
+    ready(&tenants, "family", ("True", ReasonCode::Reconciled)).await;
+    create(&instances, instance("other")).await;
+    let why = ready(&tenants, "family", ("False", ReasonCode::InstanceNotFound)).await;
+    assert_eq!(why, "2 KuraInstances: one server per cluster");
+    assert_eq!(
+        ready(&instances, "other", ("False", ReasonCode::InstanceNotFound)).await,
+        why
+    );
+    assert_eq!(
+        gateway.pushes().len(),
+        1,
+        "only while there was one instance"
+    );
+    pusher.abort();
+}
+
+/// The webhook's other answers: a tenant is always admitted, a vault that
+/// does not parse is `InvalidDocument`, and so is what it cannot decide.
+#[tokio::test]
+async fn webhook_admits_tenants_and_refuses_what_it_cannot_read() {
+    let cluster = kura_operator_testkit::start().await;
+    let admission = KuraAdmission {
+        client: cluster.client(),
+    };
+    let object = |value: serde_json::Value| -> DynamicObject {
+        serde_json::from_value(value).expect("an object")
+    };
+    assert!(
+        admission
+            .admit(
+                "KuraTenant",
+                "",
+                &object(
+                    json!({ "apiVersion": "kura.weebo.io/v1alpha1", "kind": "KuraTenant",
+                                "metadata": { "name": "family" }, "spec": {} })
+                )
+            )
+            .await
+            .is_ok()
+    );
+    let unreadable = admission
+        .admit(
+            "KuraVault",
+            "family",
+            &object(
+                json!({ "apiVersion": "kura.weebo.io/v1alpha1", "kind": "KuraVault",
+                            "metadata": { "name": "recipes" }, "spec": { "tenantRef": 7 } }),
+            ),
+        )
+        .await
+        .expect_err("refused");
+    assert_eq!(unreadable.reason, ReasonCode::InvalidDocument);
+    assert_eq!(admission.undecidable(), ReasonCode::InvalidDocument);
+}

@@ -1383,6 +1383,39 @@ mod tests {
     use super::*;
     use kura_core::{ChunkHash, blob_hash};
 
+    /// `kura watch` names the vault when several are attached, and only an attached one.
+    #[tokio::test]
+    async fn watch_needs_one_attached_vault() {
+        let home = std::env::temp_dir().join(format!("kura-cli-watch-{}", std::process::id()));
+        let attached = |id| Attached {
+            id,
+            path: home.join("notes"),
+            last_sync: None,
+        };
+        let cfg = Config {
+            server: "http://127.0.0.1:9".into(),
+            vaults: [
+                ("a".to_owned(), attached(Uuid::nil())),
+                ("b".to_owned(), attached(Uuid::max())),
+            ]
+            .into(),
+            ..Config::default()
+        };
+        assert!(cfg.save(&home).is_ok());
+        let ctx = Ctx {
+            home: home.clone(),
+            access_token: Some("t".into()),
+        };
+        for vault in [Some("c"), None] {
+            let code = watch(&ctx, vault, std::future::pending())
+                .await
+                .err()
+                .map(|f| f.0);
+            assert_eq!(code, Some(3), "{vault:?}");
+        }
+        drop(std::fs::remove_dir_all(&home));
+    }
+
     #[test]
     fn backoff_stays_between_one_and_sixty_seconds() {
         let mut b = BACKOFF_MIN;
