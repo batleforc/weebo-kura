@@ -2,6 +2,27 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.2.0](https://github.com/batleforc/weebo-kura/compare/d758347b349fabefd86586cd93cb46d2a6af5418..v0.2.0) - 2026-11-22
+#### Features
+- (**api**) KuraInstance and the operator's reason codes (RFC 0009 phase 0) - ([32da4a6](https://github.com/batleforc/weebo-kura/commit/32da4a679d3db4508d1da311b0c3ef2b9655737a)) - Max Batleforc, Claude Opus 5.5
+- (**deploy**) kura-operator's chart and image, the kura chart's operator mode (RFC 0009 phase 3) - ([e88fc2b](https://github.com/batleforc/weebo-kura/commit/e88fc2b8e5d9a678ee5927251f89945755e82ac4)) - Max Batleforc, Claude Opus 5.5
+- (**operator**) release, capacity, perf budget, kind proof script; RFC 0009 implemented - ([9a9776d](https://github.com/batleforc/weebo-kura/commit/9a9776dcb2efdf9fa09c4f0e52084a0c4d5ccad3)) - Max Batleforc, Claude Opus 5.5
+- (**operator**) kura-operator, the push of the whole set (RFC 0009 phase 2) - ([98f50fb](https://github.com/batleforc/weebo-kura/commit/98f50fb557492954290df8fe2a5ea99d192e411e)) - Max Batleforc, Claude Opus 5.5
+- (**server**) PUT /v1/admin/documents, kura-operator's push (RFC 0009 phase 1) - ([9a2e79c](https://github.com/batleforc/weebo-kura/commit/9a2e79c8f51e79c7d1375662b8b3c6eeee1abfbf)) - Max Batleforc, Claude Opus 5.5
+#### Bug Fixes
+- (**deps**) bump url to 2.5.9 for RUSTSEC-2026-0592 - ([27ec94a](https://github.com/batleforc/weebo-kura/commit/27ec94a6c19c38144a01b3c597d9ac70f2900a63)) - Max Batleforc, Claude Opus 5.5
+#### Documentation
+- (**rfc**) the implementation plan of RFC 0009, the Kura operator - ([67c3145](https://github.com/batleforc/weebo-kura/commit/67c3145a6676d7099977d75712fa5124438cd1d2)) - Max Batleforc, Claude Opus 5.5
+#### Tests
+- (**server**) the scoped-token gate knows the documents route's 409 - ([38a3941](https://github.com/batleforc/weebo-kura/commit/38a3941fdd352c453a9b8161042793a353715343)) - Max Batleforc, Claude Opus 5.5
+- 86% line gate on every component, the operator's binary under envtest - ([be175ab](https://github.com/batleforc/weebo-kura/commit/be175ab46b45608d76c224d6c3a49bf7b169196e)) - Max Batleforc, Claude Opus 5.5
+#### Continuous Integration
+- keep the operator's crates out of the per-crate coverage gates - ([af2e1c6](https://github.com/batleforc/weebo-kura/commit/af2e1c6491b3769346c59f60a488cc6e89fe91f4)) - Max Batleforc, Claude Opus 5.5
+#### Miscellaneous Chores
+- (**version**) merge v0.1.0 - ([d758347](https://github.com/batleforc/weebo-kura/commit/d758347b349fabefd86586cd93cb46d2a6af5418)) - Maxime
+
+- - -
+
 ## [v0.1.0](https://github.com/batleforc/weebo-kura/compare/v0.1.0-rc.1..v0.1.0) - 2026-11-21
 #### Documentation
 - (**rfc**) RFC 0009, the Kura operator (Accepted) - ([7abbf6e](https://github.com/batleforc/weebo-kura/commit/7abbf6e9430827755743f8d6e8733ec6020776fa)) - Max Batleforc, Claude Opus 5.5
