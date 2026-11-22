@@ -19,17 +19,29 @@ spec:
           # bucket from Vault.
           serviceAccountName: {{ .Values.serviceAccount.name }}
           securityContext: { fsGroup: 65532 }
+          {{- with .Values.hostAliases }}
+          hostAliases: {{- toYaml . | nindent 12 }}
+          {{- end }}
           containers:
             - name: backup
               image: {{ include "kura.image" . }}
               args: [backup, --config, /etc/kura/server/server.yaml]
               envFrom:
                 - secretRef: { name: {{ .Values.backup.targetSecret }} }
+              {{- with .Values.extraEnv }}
+              env: {{- toYaml . | nindent 16 }}
+              {{- end }}
               resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 256Mi } }
               securityContext: {{- include "kura.securityContext" . | nindent 16 }}
               volumeMounts:
                 - { name: server, mountPath: /etc/kura/server, readOnly: true }
+                {{- with .Values.extraVolumeMounts }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
           volumes:
             - name: server
               configMap: { name: {{ include "kura.name" . }}-server }
+            {{- with .Values.extraVolumes }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
 {{- end }}

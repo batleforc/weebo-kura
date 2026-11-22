@@ -191,6 +191,41 @@ Every key of `server` is described in
 [Server configuration](/docs/guides/configuration); every chart value in
 [Helm values](/docs/reference/helm-values).
 
+#### Without CloudNativePG
+
+Any PostgreSQL 13 or later works (CI runs 18), with the `pg_trgm` and
+`unaccent` extensions available (the official image ships them; both are
+trusted, so the database owner creates them in the first migration). Once,
+as a superuser:
+
+```sql
+CREATE ROLE kura_owner LOGIN PASSWORD '<owner password>';
+CREATE DATABASE kura OWNER kura_owner;
+\c kura
+\i bootstrap-roles.sql   -- creates kura_app and its timeouts
+ALTER ROLE kura_app PASSWORD '<password>';  -- the one in mv/kura/database
+```
+
+Put the owner's URL in a Secret for the migration Job, point the Vault
+database secret at `kura_app` on that host, and turn the cluster off:
+
+```bash
+kubectl -n kura create secret generic kura-db-owner \
+  --from-literal=uri='postgres://kura_owner:<owner password>@<postgres host>:5432/kura'
+```
+
+```yaml title="values.yaml"
+cnpg:
+  enabled: false
+migrate:
+  databaseUrlSecret: { name: kura-db-owner, key: uri }
+```
+
+PostgreSQL's backups are then yours: `backup.enabled` still covers the
+bucket, and the chart no longer asks for `cnpg.backup`. Under Argo CD, keep
+the migration in a Sync wave before the server
+(`migrate.annotations`, see [Helm values](/docs/reference/helm-values#migrate)).
+
 </Step>
 <Step>
 

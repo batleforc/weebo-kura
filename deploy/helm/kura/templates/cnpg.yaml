@@ -4,6 +4,9 @@ kind: ConfigMap
 metadata:
   name: {{ .Values.cnpg.name }}-bootstrap
   labels: {{- include "kura.labels" . | nindent 4 }}
+  {{- with .Values.cnpg.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
 data:
   bootstrap-roles.sql: {{ .Files.Get "files/bootstrap-roles.sql" | quote }}
 ---
@@ -15,6 +18,9 @@ kind: Cluster
 metadata:
   name: {{ .Values.cnpg.name }}
   labels: {{- include "kura.labels" . | nindent 4 }}
+  {{- with .Values.cnpg.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   instances: {{ .Values.cnpg.instances }}
   storage:
@@ -48,6 +54,9 @@ kind: ScheduledBackup
 metadata:
   name: {{ .Values.cnpg.name }}-daily
   labels: {{- include "kura.labels" . | nindent 4 }}
+  {{- with .Values.cnpg.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   schedule: {{ .Values.cnpg.backup.schedule | quote }}
   cluster: { name: {{ .Values.cnpg.name }} }
@@ -61,6 +70,9 @@ kind: NetworkPolicy
 metadata:
   name: {{ .Values.cnpg.name }}
   labels: {{- include "kura.labels" . | nindent 4 }}
+  {{- with .Values.cnpg.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   podSelector:
     matchLabels: { cnpg.io/cluster: {{ .Values.cnpg.name }} }

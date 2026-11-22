@@ -25,6 +25,9 @@ spec:
             matchLabels: {{- include "kura.selector" . | nindent 14 }}
       # Sockets and running commits drain on SIGTERM (§6.11).
       terminationGracePeriodSeconds: 30
+      {{- with .Values.hostAliases }}
+      hostAliases: {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: kura-server
           image: {{ include "kura.image" . }}
@@ -59,6 +62,9 @@ spec:
             {{- if .Values.webhookCa.secretName }}
             - { name: webhook-ca, mountPath: /etc/kura/webhook-ca, readOnly: true }
             {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: server
           configMap: { name: {{ include "kura.name" . }}-server }
@@ -71,4 +77,7 @@ spec:
           secret:
             secretName: {{ .Values.webhookCa.secretName }}
             items: [{ key: {{ .Values.webhookCa.key }}, path: {{ .Values.webhookCa.key }} }]
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
