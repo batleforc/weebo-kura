@@ -2,6 +2,18 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.3.1](https://github.com/batleforc/weebo-kura/compare/3850f007360d5beda35701dd87c6a4fcf06b8373..v0.3.1) - 2026-11-22
+#### Bug Fixes
+- (**plugin**) merge #25, re-register an unknown device; Configuration tab always offered - ([98694fe](https://github.com/batleforc/weebo-kura/commit/98694fefd63da90aefd717abc42c9759dd0210c0)) - Maxime
+- (**plugin**) a device the server does not know is registered again - ([14f8e52](https://github.com/batleforc/weebo-kura/commit/14f8e521242b7f571f20225b9c84c399d9a060c8)) - Max Batleforc, Claude Opus 5.5
+- (**ui**) the Configuration tab is always offered - ([afee557](https://github.com/batleforc/weebo-kura/commit/afee5576efcb47adf2c4b50b9923d61a2b831388)) - Max Batleforc, Claude Opus 5.5
+#### Tests
+- (**plugin**) the first sync pushes every folder, an empty one included - ([382b9d1](https://github.com/batleforc/weebo-kura/commit/382b9d175e4a3b47a9c6533dc1d23173cbcbbd46)) - Max Batleforc, Claude Opus 5.5
+#### Miscellaneous Chores
+- (**version**) merge v0.3.0 - ([3850f00](https://github.com/batleforc/weebo-kura/commit/3850f007360d5beda35701dd87c6a4fcf06b8373)) - Maxime
+
+- - -
+
 ## [v0.3.0](https://github.com/batleforc/weebo-kura/compare/665d867df22e7d0ceefdf97bff3f64288c6a66da..v0.3.0) - 2026-11-22
 #### Features
 - (**chart**) hostAliases, extra volumes, Argo CD sync waves, PostgreSQL without CloudNativePG - ([a0125fc](https://github.com/batleforc/weebo-kura/commit/a0125fc278db40e7b6d3c1c2c8ec24757e38222d)) - Max Batleforc, Claude Opus 5.5
