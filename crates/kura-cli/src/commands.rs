@@ -973,6 +973,8 @@ async fn on_socket(
     let host = FsHost::new(path);
     let mut last_notice = tokio::time::Instant::now();
     let mut scan = tokio::time::interval(QUIET);
+    // A slow scan or sync delays the next tick instead of firing a burst of them.
+    scan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut seen = fingerprint(&host).await;
     let mut changed_at: Option<tokio::time::Instant> = None;
     loop {
@@ -986,28 +988,33 @@ async fn on_socket(
                     last_notice = tokio::time::Instant::now();
                     let kind = serde_json::from_str::<serde_json::Value>(&t).ok().and_then(|v| v.get("type").and_then(|k| k.as_str()).map(str::to_owned));
                     if matches!(kind.as_deref(), Some("change" | "pull")) {
+                        // Scanned before the sync: an edit made while it runs
+                        // still differs from `seen`, and is pushed once quiet.
+                        let before = fingerprint(&host).await;
                         let code = sync_one(ctx, api, cfg, name, false, false).await?;
                         if code == 2 {
                             return Err(Fail(2, "sign in again: run `kura login`".into()));
                         }
-                        seen = fingerprint(&host).await;
+                        seen = before;
                     }
                 }
                 Some(Ok(Message::Close(_)) | Err(_)) | None => return Ok(Socketed::Reconnect),
                 Some(Ok(_)) => last_notice = tokio::time::Instant::now(),
             },
-            _ = scan.tick() => {
+            tick = scan.tick() => {
                 if last_notice.elapsed() > SILENCE {
                     return Ok(Socketed::Reconnect);
                 }
                 let now = fingerprint(&host).await;
+                // Measured between scheduled ticks, not from after the scan:
+                // a slow scan would otherwise push one tick (5 s) later.
                 if now != seen {
                     seen = now;
-                    changed_at = Some(tokio::time::Instant::now());
-                } else if changed_at.is_some_and(|t| t.elapsed() >= QUIET) {
+                    changed_at = Some(tick);
+                } else if changed_at.is_some_and(|t| tick.duration_since(t) >= QUIET) {
+                    // `seen` stays the scan from before this sync, as above.
                     changed_at = None;
                     sync_one(ctx, api, cfg, name, false, false).await?;
-                    seen = fingerprint(&host).await;
                 }
             }
         }
