@@ -73,9 +73,24 @@ documents: {}
   #   kind: KuraTenant
   #   ...
 
-# Extra environment variables of the server container, such as
-# KURA_DATABASE_URL from a Secret when `server.vault` is not used.
+# Extra environment variables of the server and backup containers, such as
+# KURA_DATABASE_URL from a Secret when `server.vault` is not used, or
+# VAULT_CACERT naming a CA mounted through extraVolumes (a Vault behind a
+# private CA).
 extraEnv: []
+
+# Extra volumes and their mounts, on the server and backup pods: a private
+# CA's Secret for Vault, for instance.
+extraVolumes: []
+  # - name: vault-ca
+  #   secret: { secretName: vault-tls, items: [{ key: ca.crt, path: ca.crt }] }
+extraVolumeMounts: []
+  # - { name: vault-ca, mountPath: /etc/kura/vault-ca, readOnly: true }
+
+# hostAliases of the server and backup pods: an issuer whose public address
+# the cluster cannot reach (no hairpin), pointed at the ingress Service.
+hostAliases: []
+  # - { ip: 10.0.0.10, hostnames: [auth.example.org] }
 
 serviceAccount:
   # The Kubernetes auth role `kura` in Vault binds this account.
@@ -96,6 +111,16 @@ resources:
 # then) and before every upgrade, as the database owner (§13). Without cnpg.enabled, name the Secret holding the owner's URL.
 migrate:
   databaseUrlSecret: { name: "", key: uri }
+  # Replaces the Job's Helm hook annotations when set. Under Argo CD, which
+  # runs both post-install and pre-upgrade as PreSync (before the database
+  # exists), order it with sync waves instead, the CloudNativePG resources
+  # first (`cnpg.annotations`), the migration next, everything else after:
+  #   argocd.argoproj.io/hook: Sync
+  #   argocd.argoproj.io/sync-wave: "-1"
+  #   argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+  # Not PostSync: a server refuses to start on an older schema, so the
+  # resources never turn Healthy and a PostSync hook would never run.
+  annotations: {}
 
 podDisruptionBudget:
   minAvailable: 1
@@ -119,6 +144,10 @@ monitoring:
 cnpg:
   enabled: true
   name: kura-db
+  # Annotations of the CloudNativePG resources (its bootstrap ConfigMap,
+  # Cluster, ScheduledBackup and NetworkPolicy); under Argo CD, a sync wave
+  # before the migration's: argocd.argoproj.io/sync-wave: "-2".
+  annotations: {}
   instances: 2
   storage: { size: 10Gi, storageClass: "" }
   # Where the CloudNativePG operator runs: its NetworkPolicy lets it in.

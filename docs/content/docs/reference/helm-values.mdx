@@ -75,7 +75,10 @@ the pods (checksum annotation). The keys the default values set:
 | `server.notifications.enabled` | `false` | Turn webhooks on. |
 | `server.notifications.webhook.allowedCidrs` | `[]` | Private ranges webhooks may reach (a hub inside the cluster); never `0.0.0.0/0`. |
 | `server.documents.source` | `files` | `files`: the `documents` below. `operator`: kura-operator pushes them (see [Operator](/docs/guides/operator)); the documents ConfigMap, its mount and `KURA_CONFIG_DIR` are not rendered. |
-| `extraEnv` | `[]` | Extra environment variables of the server container, such as `KURA_DATABASE_URL` from a Secret when `server.vault` is not used. |
+| `extraEnv` | `[]` | Extra environment variables of the server and backup containers, such as `KURA_DATABASE_URL` from a Secret when `server.vault` is not used, or `VAULT_CACERT` naming a CA mounted through `extraVolumes` (a Vault behind a private CA). |
+| `extraVolumes` | `[]` | Extra volumes of the server and backup pods, such as a private CA's Secret. |
+| `extraVolumeMounts` | `[]` | Their mounts in the server and backup containers. |
+| `hostAliases` | `[]` | `hostAliases` of the server and backup pods: an issuer whose public address the cluster cannot reach (no hairpin), pointed at the ingress Service. |
 | `server.documents.operator` | none | With `source: operator`: `issuer`, `audience` and `subject` of kura-operator's token. The chart adds `caFile` and `tokenFile`, the ServiceAccount's own, unless set. |
 
 ## webhookCa
@@ -139,6 +142,7 @@ install and before every upgrade (Helm hooks `post-install,pre-upgrade`).
 | --- | --- | --- |
 | `migrate.databaseUrlSecret.name` | `""` | A Secret holding the owner's database URL. Required when `cnpg.enabled` is `false`. When empty with `cnpg.enabled`, the Job reads the `uri` key of `<cnpg.name>-app`. |
 | `migrate.databaseUrlSecret.key` | `uri` | The key of the URL in that Secret. |
+| `migrate.annotations` | `{}` | When set, replaces the Job's Helm hook annotations. Under Argo CD, which runs `post-install` and `pre-upgrade` hooks both as PreSync, before the database exists, use a Sync hook in a wave after the CloudNativePG resources: `argocd.argoproj.io/hook: Sync`, `argocd.argoproj.io/sync-wave: "-1"`, `argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded`. Not PostSync: the server refuses to start on an older schema, so the resources never turn Healthy and a PostSync hook would never run. |
 
 ## cnpg
 
@@ -149,6 +153,7 @@ operator.
 | --- | --- | --- |
 | `cnpg.enabled` | `true` | Create the cluster (database `kura`, owner `kura_owner`, and the `kura_app` role from `files/bootstrap-roles.sql`). |
 | `cnpg.name` | `kura-db` | The cluster's name. Its `<name>-app` Secret holds the owner's URL for migrations. |
+| `cnpg.annotations` | `{}` | Annotations of the CloudNativePG resources (bootstrap ConfigMap, Cluster, ScheduledBackup, NetworkPolicy). Under Argo CD, a wave before the migration's: `argocd.argoproj.io/sync-wave: "-2"`. |
 | `cnpg.instances` | `2` | PostgreSQL instances (asynchronous replication). |
 | `cnpg.storage.size` | `10Gi` | Volume size per instance. |
 | `cnpg.storage.storageClass` | `""` | Storage class; empty uses the cluster default. |
