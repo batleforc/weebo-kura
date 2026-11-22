@@ -312,6 +312,7 @@ describe("shell", () => {
     expect(sections[0]?.findAll("a").map((a) => a.text())).toEqual([
       "Overview",
       "Notes",
+      "Configuration",
       "Access",
       "Keys",
       "Notifications",

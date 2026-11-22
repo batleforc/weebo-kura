@@ -192,9 +192,10 @@ describe("the vault menu", () => {
       "vault-notes",
       "vault-config",
     ]);
+    // Still offered when nothing syncs: the page says how to turn it on.
     expect(
       sectionsOf({ ...vault, configSync: [] } as never).map((s) => s.name),
-    ).not.toContain("vault-config");
+    ).toContain("vault-config");
     expect(
       sectionsOf({ ...vault, paths: ["A/"] } as never).map((s) => s.name),
     ).not.toContain("vault-config");

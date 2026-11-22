@@ -570,7 +570,7 @@
     "unreadable": "Ce fichier n'a pas pu être lu.",
     "lastEdited": "Modifié le {date}",
     "lastEditedBy": "Modifié le {date} par {who}",
-    "notSynced": "Ce coffre ne synchronise pas les réglages Obsidian.",
+    "notSynced": "Ce coffre ne synchronise pas encore les réglages Obsidian. Ses gestionnaires l'activent avec configSync dans le document KuraVault du coffre.",
     "notForYou": "Cette page ne vous est pas accessible."
   }
 }
