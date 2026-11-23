@@ -47,7 +47,7 @@ uuid = { workspace = true, features = ["v4", "v7"] }
 # The CLI commands, driven over real HTTP against the app (tests/cli.rs).
 kura-cli = { workspace = true }
 # A WebSocket client for the notification tests, the version axum already links.
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
 tower = { workspace = true }
 # Paused clock for the key-age test.
 tokio = { workspace = true, features = ["test-util"] }
