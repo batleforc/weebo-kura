@@ -90,7 +90,7 @@ diffy = "0.5"
 aws-lc-rs = "1"
 zeroize = "1"
 # Transit returns base64; the version jsonwebtoken and sqlx already link.
-base64 = "0.22"
+base64 = "0.23"
 # Obsidian plugin release zips, read by kura-cli only (RFC 0010 §7.3, §8); deflate only.
 zip = { version = "9.8.1", default-features = false, features = ["deflate"] }
 # Chunk storage on any S3-compatible store (§8), no local filesystem backend.
