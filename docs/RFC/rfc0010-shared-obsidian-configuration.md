@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted (2026-11-23) |
+| Status | Implemented (2026-11-23) |
 | Short | Shared configuration |
 | Settles | How each member chooses, plugin by plugin, what of their `.obsidian` reaches both their desktop and mobile devices; how a vault's managers install plugins that every member's devices receive; and how the plugin and the CLI tell a version different from the server's, the plugin updating itself in one click |
 | Author | Maxime (batleforc) |
@@ -1171,3 +1171,32 @@ vault); a correction reopens it.
 | R30 | Release v0.3.1 assets `checksums.txt` and `checksums.txt.sigstore.json` (keyless cosign) | release published 2026-11-23 | §6.P, §15: the signed checksums |
 | R31 | `plugin/src/main.ts` `secureUrl` checks before sign-in and start | `98694fe` | §7.1 T15: the plugin refuses a non-HTTPS server |
 | R25 | `npm view fflate version license time.modified maintainers`: 0.8.3, MIT, modified 2026-07-20, one maintainer | probe 2026-11-23 | §8: the `fflate` row |
+
+---
+
+## 18. Implementation notes (2026-11-23)
+
+Where the build differs from the text above, the build wins:
+
+- **Install body**: JSON with the three files in base64 (`manifest`, `main`,
+  `styles`), not multipart: the server gains no dependency (§8). Body limit
+  48 MiB; each file still bounded by `maxFileSize`.
+- **Refused paths** answer `422 invalid_path`, the code the server already
+  gives every `invalid_path`, where §4.3 says 400.
+- **Listing**: `changes` and `entries` of a configuration space omit the
+  paths whose home is another space; the cursor still moves past them.
+- **`kura_config_rejected_total`**: an unparseable stored `configSync` is
+  logged at `error` and serves no configuration, but is not counted (no
+  state where it is read; a `shortcut:` comment marks it).
+- **CLI**: `kura config share <vault> <item> on|off|default` (the vault
+  first, as `history` and `search`); sizes print with the CLI's `human()`.
+- **Plugin**: the vault's installed plugins come from `GET
+  …/config/shares`; a member's vault pass refuses uploads locally (the
+  engine has no pull-only mode); the update fetches and verifies
+  everything before the confirmation, so it shows real sizes and the
+  provenance word.
+- **Proof §6.P** (`tests/heavy/config-share.sh` with real Obsidian desktop
+  and Android) is not run yet; the behaviour is covered by
+  `crates/kura-server/tests/shares.rs`, `tests/cli.rs`,
+  `plugin/test/config.test.ts`, `plugin/test/update.test.ts` and the
+  console's vitest suites.

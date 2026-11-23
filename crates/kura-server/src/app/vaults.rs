@@ -43,6 +43,13 @@ pub struct Vault {
     pub updated_at: Option<String>,
     /// The Obsidian configuration categories that sync (§6.8); empty: none.
     pub config_sync: Vec<String>,
+    /// The items shared between your desktop and mobile devices: the
+    /// vault's defaults overridden by your own choices (RFC 0010 §4.4).
+    #[serde(default)]
+    pub config_shared: Vec<String>,
+    /// Whether the vault's managers may install plugins on it (RFC 0010).
+    #[serde(default)]
+    pub vault_plugins: bool,
     /// For a restricted viewer: the folders they read (RFC 0005 §4.2);
     /// absent: the whole vault.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -83,12 +90,9 @@ impl From<&VaultAccess> for Vault {
                 max: a.chunking.max.bytes(),
             },
             epoch: a.epoch,
-            config_sync: a
-                .config
-                .iter()
-                .filter_map(|c| serde_json::to_value(c).ok())
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect(),
+            config_sync: super::space::categories(a),
+            config_shared: Vec::new(),
+            vault_plugins: a.config.vault_plugins,
             head_seq: u64::try_from(a.head_seq).unwrap_or_default(),
             updated_at: None,
             scopes: None,
@@ -180,6 +184,33 @@ fn snapshot(state: &SharedState) -> Result<std::sync::Arc<Snapshot>, ApiError> {
         .ok_or(ApiError::of(ProblemType::Unavailable))
 }
 
+/// The caller's share choices on these vaults, in one query (RFC 0010).
+async fn share_choices(
+    pool: &sqlx::PgPool,
+    tenant: Uuid,
+    sub: &str,
+    accesses: &[VaultAccess],
+) -> Result<Vec<(Uuid, String, bool)>, ApiError> {
+    let ids: Vec<Uuid> = accesses
+        .iter()
+        .filter(|a| !a.config.categories.is_empty())
+        .map(|a| a.vault)
+        .collect();
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut tx = crate::db::begin_tenant(pool, tenant, Some(sub)).await?;
+    let rows = sqlx::query_as(
+        "SELECT vault_id, item, shared FROM config_share WHERE vault_id = ANY($1) AND owner_sub = $2",
+    )
+    .bind(&ids)
+    .bind(sub)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows)
+}
+
 /// The vaults you can read.
 #[utoipa::path(
     get,
@@ -220,6 +251,7 @@ pub async fn list_vaults(
     for &tenant in snap.tenant_ids.values() {
         let accesses = authz::vault_accesses_in(&state.db, &snap, p, tenant, MAX_LISTED).await?;
         let updated = updated_at(&state.db, tenant, &p.sub, &accesses).await?;
+        let choices = share_choices(&state.db, tenant, &p.sub, &accesses).await?;
         for a in accesses {
             let binds = a.role == VaultRole::Manager
                 || a.tenant_role.is_some_and(|r| r >= TenantRole::Admin);
@@ -244,9 +276,20 @@ pub async fn list_vaults(
                         })
                 })
                 .flatten();
+            let mine: Vec<(String, bool)> = choices
+                .iter()
+                .filter(|(v, _, _)| *v == a.vault)
+                .map(|(_, i, s)| (i.clone(), *s))
+                .collect();
+            let config_shared = if a.config.categories.is_empty() {
+                Vec::new()
+            } else {
+                super::space::effective(&a.config.shared_by_default, &mine)
+            };
             out.push(Vault {
                 groups,
                 updated_at: updated.get(&a.vault).cloned(),
+                config_shared,
                 ..Vault::from(&a)
             });
         }

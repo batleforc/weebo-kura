@@ -91,6 +91,8 @@ aws-lc-rs = "1"
 zeroize = "1"
 # Transit returns base64; the version jsonwebtoken and sqlx already link.
 base64 = "0.22"
+# Obsidian plugin release zips, read by kura-cli only (RFC 0010 §7.3, §8); deflate only.
+zip = { version = "9.8.1", default-features = false, features = ["deflate"] }
 # Chunk storage on any S3-compatible store (§8), no local filesystem backend.
 object_store = { version = "0.14", default-features = false, features = ["aws"] }
 bytes = "1"

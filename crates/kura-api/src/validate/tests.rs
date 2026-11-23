@@ -472,3 +472,59 @@ fn binding_paths_are_checked() {
         .contains("1 to 16")
     );
 }
+
+/// RFC 0010 §4.3: shared defaults name well-formed items of a synced
+/// category; vault plugins need the plugins category.
+#[test]
+fn shared_defaults_and_vault_plugins_are_checked() {
+    let ok = VAULT.replace(
+        "configSync: { categories: [plugins, snippets, themes, hotkeys] }",
+        "configSync: { categories: [plugins, snippets], sharedByDefault: [snippets, plugin:dataview], vaultPlugins: true }",
+    );
+    let c = validate(
+        parse(&[("t.yaml", TENANT), ("v.yaml", &ok)]),
+        &PreviousState::default(),
+    )
+    .unwrap();
+    let sync = c
+        .vaults
+        .values()
+        .next()
+        .unwrap()
+        .doc
+        .spec
+        .config_sync
+        .clone()
+        .unwrap();
+    assert_eq!(sync.shared_by_default, ["snippets", "plugin:dataview"]);
+    assert!(sync.vault_plugins);
+    for (spec, needle) in [
+        (
+            "{ categories: [snippets], sharedByDefault: [themes] }",
+            "sharedByDefault[0]",
+        ),
+        (
+            "{ categories: [plugins], sharedByDefault: [plugin:weebo-kura] }",
+            "sharedByDefault[0]",
+        ),
+        (
+            "{ categories: [plugins], sharedByDefault: [plugin:Bad] }",
+            "sharedByDefault[0]",
+        ),
+        (
+            "{ categories: [plugins], sharedByDefault: [plugins] }",
+            "sharedByDefault[0]",
+        ),
+        (
+            "{ categories: [snippets], vaultPlugins: true }",
+            "vaultPlugins",
+        ),
+    ] {
+        let bad = VAULT.replace("{ categories: [plugins, snippets, themes, hotkeys] }", spec);
+        let e = errors(
+            &[("t.yaml", TENANT), ("v.yaml", &bad)],
+            &PreviousState::default(),
+        );
+        assert!(e.iter().any(|m| m.contains(needle)), "{spec}: {e:?}");
+    }
+}

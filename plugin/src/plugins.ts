@@ -4,6 +4,7 @@
 // device only: a pin written through the API by another session enables
 // nothing (phase 8 review). Snippets and themes, which are CSS, need no
 // agreement.
+import type { Adapter } from "./host";
 import { isRecord } from "./types";
 
 /** Obsidian's plugin switchboard, as far as the guard needs it. The guard
@@ -122,10 +123,12 @@ export interface Consent {
   /** Plugins the guard turned off before new code landed: the only ones it
    * turns back on without asking (phase 8 review M1). */
   disabled: string[];
+  /** Vault plugins declined for good here: never written (RFC 0010 decision 11). */
+  never: string[];
 }
 
 export function emptyConsent(): Consent {
-  return { accepted: {}, declined: {}, pending: [], disabled: [] };
+  return { accepted: {}, declined: {}, pending: [], disabled: [], never: [] };
 }
 
 function strings(v: unknown): Record<string, string> {
@@ -143,6 +146,7 @@ export function readConsent(v: unknown): Consent {
     declined: strings(v.declined),
     pending: Array.isArray(v.pending) ? v.pending.filter((x): x is string => typeof x === "string") : [],
     disabled: Array.isArray(v.disabled) ? v.disabled.filter((x): x is string => typeof x === "string") : [],
+    never: Array.isArray(v.never) ? v.never.filter((x): x is string => typeof x === "string") : [],
   };
 }
 
@@ -179,8 +183,9 @@ export class PluginGuard {
     private readonly reg: PluginRegistry,
     private readonly consent: Consent,
     private readonly save: () => Promise<void>,
-    /** Asks the user (§4.5 mock); resolves to true for [Enable]. */
-    private readonly ask: (id: string) => Promise<boolean>,
+    /** Asks the user (§4.5 mock); resolves to true for [Enable], "never"
+     * for a vault plugin declined for good (RFC 0010 decision 11). */
+    private readonly ask: (id: string) => Promise<boolean | "never">,
   ) {}
 
   /** Before a remote file lands under `plugins/<id>/`: the plugin awaits a
@@ -223,9 +228,11 @@ export class PluginGuard {
         if (this.consent.accepted[id] === hash) {
           enable = turnedOff;
         } else if (turnedOff || !(await this.reg.isEnabled(id))) {
-          enable = await this.ask(id);
+          const answer = await this.ask(id);
+          enable = answer === true;
           if (enable) this.consent.accepted[id] = hash;
           else this.consent.declined[id] = hash;
+          if (answer === "never" && !this.consent.never.includes(id)) this.consent.never.push(id);
         }
         if (enable && !(await this.reg.isEnabled(id))) await this.reg.enable(id);
       }
@@ -250,4 +257,139 @@ export function forget(state: string, keep: (path: string) => boolean): string {
     Object.entries(parsed.entries).filter(([, k]) => isRecord(k) && typeof k.path === "string" && keep(k.path)),
   );
   return JSON.stringify({ ...parsed, entries });
+}
+
+/** The three files a vault may carry for a plugin (RFC 0010 §4.2). */
+export const CODE_FILES = ["manifest.json", "main.js", "styles.css"];
+
+/** Where new code of `plugins/<id>/<file>` waits: a dot folder Obsidian does not load. */
+export function pendingOf(path: string): string {
+  const i = path.lastIndexOf("/");
+  return `${path.slice(0, i)}/.kura-pending/${path.slice(i + 1)}`;
+}
+
+/** Decision 10: a vault plugin agreed to here keeps running its version;
+ * the managers' new code waits in `.kura-pending/` and is swapped in only
+ * once the member agrees. The core sees the waiting file in place of the
+ * running one (`place`), so neither is ever taken for a local edit. */
+export class VaultUpdates {
+  private readonly diverted = new Set<string>();
+  private readonly known = new Set<string>();
+
+  constructor(
+    private readonly o: {
+      adapter: Adapter;
+      /** `.obsidian`. */
+      root: string;
+      reg: PluginRegistry;
+      consent: Consent;
+      save: () => Promise<void>;
+      ask: (id: string) => Promise<"use" | "later" | "never">;
+    },
+  ) {}
+
+  /** The vault pass's state: what it holds, and what already waits on disk. */
+  async load(state: string): Promise<void> {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(state);
+    } catch {
+      return;
+    }
+    if (!isRecord(parsed) || !isRecord(parsed.entries)) return;
+    for (const k of Object.values(parsed.entries)) {
+      if (!isRecord(k) || typeof k.path !== "string" || pluginOf(k.path) === null) continue;
+      this.known.add(k.path);
+      if (await this.o.adapter.exists(`${this.o.root}/${pendingOf(k.path)}`)) this.diverted.add(k.path);
+    }
+  }
+
+  /** The path, under the root, where the core's file is. */
+  place(path: string): string {
+    return this.diverted.has(path) ? pendingOf(path) : path;
+  }
+
+  /** Plugins with new code waiting, by id. */
+  waiting(): string[] {
+    return [...new Set([...this.diverted].flatMap((p) => pluginOf(p)?.id ?? []))];
+  }
+
+  /** Before a vault file lands: true when it goes to `.kura-pending/`, new
+   * code of a plugin agreed here whose running file it would replace. */
+  async divert(path: string): Promise<boolean> {
+    const p = pluginOf(path);
+    const name = path.slice(path.lastIndexOf("/") + 1).toLowerCase();
+    if (p === null || !CODE_FILES.includes(name) || this.o.consent.accepted[p.id] === undefined) return false;
+    if (!this.diverted.has(path)) {
+      if (!this.known.has(path) || !(await this.o.adapter.exists(`${this.o.root}/${path}`))) return false;
+      this.diverted.add(path);
+    }
+    if (!this.o.consent.pending.includes(p.id)) this.o.consent.pending.push(p.id);
+    await this.o.save();
+    return true;
+  }
+
+  /** After the vault pass, or from the settings' [Review]: each plugin with
+   * new code waiting is asked about once per code hash. */
+  async review(hashes: Map<string, string>): Promise<void> {
+    const c = this.o.consent;
+    for (const id of this.waiting().filter((x) => c.pending.includes(x))) {
+      const hash = hashes.get(id);
+      if (hash !== undefined && c.accepted[id] === hash) {
+        // The code agreed to already: only its manifest or styles changed.
+        await this.swap(id);
+      } else if (hash !== undefined && c.declined[id] !== hash) {
+        const answer = await this.o.ask(id);
+        if (answer === "use") {
+          c.accepted[id] = hash;
+          await this.swap(id);
+        } else {
+          c.declined[id] = hash;
+          if (answer === "never") {
+            if (!c.never.includes(id)) c.never.push(id);
+            if (await this.o.reg.isEnabled(id)) await this.o.reg.disable(id);
+            await this.drop(id);
+          }
+        }
+      }
+      c.pending = c.pending.filter((x) => x !== id);
+      await this.o.save();
+    }
+  }
+
+  private files(id: string): string[] {
+    return [...this.diverted].filter((p) => pluginOf(p)?.id === id);
+  }
+
+  /** The waiting code in place of the running one, the plugin off meanwhile. */
+  private async swap(id: string): Promise<void> {
+    const a = this.o.adapter;
+    const on = await this.o.reg.isEnabled(id);
+    if (on) await this.o.reg.disable(id);
+    for (const p of this.files(id)) {
+      const live = `${this.o.root}/${p}`;
+      if (await a.exists(live)) await a.remove(live);
+      await a.rename(`${this.o.root}/${pendingOf(p)}`, live);
+      this.diverted.delete(p);
+    }
+    await this.rmdir(id);
+    if (on) await this.o.reg.enable(id);
+  }
+
+  /** The waiting code, declined for good. */
+  private async drop(id: string): Promise<void> {
+    for (const p of this.files(id)) {
+      await this.o.adapter.remove(`${this.o.root}/${pendingOf(p)}`);
+      this.diverted.delete(p);
+    }
+    await this.rmdir(id);
+  }
+
+  private async rmdir(id: string): Promise<void> {
+    try {
+      await this.o.adapter.rmdir(`${this.o.root}/plugins/${id}/.kura-pending`, false);
+    } catch {
+      // Something else in it: left as it is.
+    }
+  }
 }

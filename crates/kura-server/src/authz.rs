@@ -137,8 +137,9 @@ pub struct VaultAccess {
     pub chunking: kura_api::Chunking,
     pub epoch: Uuid,
     pub head_seq: i64,
-    /// The `configSync` categories; empty: `.obsidian` does not sync (§6.8).
-    pub config: Vec<kura_api::spec::ConfigCategory>,
+    /// The vault's `configSync`; no categories: `.obsidian` does not sync
+    /// (§6.8). Shared defaults and vault plugins: RFC 0010.
+    pub config: kura_api::spec::ConfigSync,
     /// The folders a restricted viewer reads, as bound (RFC 0005 §4.2);
     /// `None` is the whole vault, always so above `viewer` (§5.1).
     pub paths: Option<Vec<String>>,
@@ -146,12 +147,28 @@ pub struct VaultAccess {
     pub scope: PathScope,
 }
 
-fn config_of(row: &sqlx::postgres::PgRow) -> Result<Vec<kura_api::spec::ConfigCategory>, ApiError> {
+/// A stored `configSync` this server cannot read (a newer document on an
+/// older replica) serves no configuration, loudly (RFC 0010 §4.3, T10).
+// shortcut: logged only, not counted in kura_config_rejected_total (no state
+// here); count it if the log proves too quiet.
+fn config_of(row: &sqlx::postgres::PgRow) -> Result<kura_api::spec::ConfigSync, ApiError> {
     let raw: Option<serde_json::Value> = row.try_get("config_sync")?;
-    Ok(raw
-        .and_then(|v| serde_json::from_value::<kura_api::spec::ConfigSync>(v).ok())
-        .map(|c| c.categories)
-        .unwrap_or_default())
+    let Some(raw) = raw.filter(|v| !v.is_null()) else {
+        return Ok(no_config());
+    };
+    Ok(serde_json::from_value(raw).unwrap_or_else(|e| {
+        let vault: Option<Uuid> = row.try_get("id").ok();
+        tracing::error!(?vault, error = %e, "stored configSync refused: this vault serves no configuration");
+        no_config()
+    }))
+}
+
+const fn no_config() -> kura_api::spec::ConfigSync {
+    kura_api::spec::ConfigSync {
+        categories: Vec::new(),
+        shared_by_default: Vec::new(),
+        vault_plugins: false,
+    }
 }
 
 pub fn parse_role(s: &str) -> Option<VaultRole> {
@@ -544,7 +561,7 @@ pub async fn key_access(
     };
     let mut tx = db::begin_tenant(pool, tenant, None).await?;
     let row = sqlx::query(
-        "SELECT namespace, name, managed_by, chunking_params, epoch, head_seq, config_sync FROM vault WHERE id = $1 AND disabled_at IS NULL",
+        "SELECT id, namespace, name, managed_by, chunking_params, epoch, head_seq, config_sync FROM vault WHERE id = $1 AND disabled_at IS NULL",
     )
     .bind(vault)
     .fetch_optional(&mut *tx)

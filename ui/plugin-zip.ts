@@ -2,9 +2,12 @@
  * The Obsidian plugin, served by the console (`/app/kura-sync.zip`): the
  * built plugin/ (main.js, manifest.json, styles.css) zipped into the folder
  * Obsidian expects, `<manifest id>/`. `/app/plugin.json` says whether this
- * build carries it, and which version: `task plugin:build` must run before
- * `vite build` for the zip to be there.
+ * build carries it, which version and the SHA-256 of each file; the three
+ * files are also served unzipped under `/app/plugin/` for the plugin's
+ * one-click update (RFC 0010 §6.5). `task plugin:build` must run before
+ * `vite build` for them to be there.
  */
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
@@ -91,12 +94,17 @@ export function pluginZip(
         return v;
       };
       const id = field("id");
-      const files: [string, Uint8Array][] = [
-        "main.js",
-        "manifest.json",
-        "styles.css",
-      ].map((f) => [`${id}/${f}`, readFileSync(join(dir, f))]);
-      const bytes = zip(files);
+      const names = ["main.js", "manifest.json", "styles.css"];
+      const read = names.map((f): [string, Buffer] => [
+        f,
+        readFileSync(join(dir, f)),
+      ]);
+      const sha256: Record<string, string> = {};
+      for (const [f, data] of read) {
+        sha256[f] = createHash("sha256").update(data).digest("hex");
+        this.emitFile({ type: "asset", fileName: `plugin/${f}`, source: data });
+      }
+      const bytes = zip(read.map(([f, data]) => [`${id}/${f}`, data]));
       this.emitFile({
         type: "asset",
         fileName: "kura-sync.zip",
@@ -105,7 +113,7 @@ export function pluginZip(
       this.emitFile({
         type: "asset",
         fileName: "plugin.json",
-        source: `${JSON.stringify({ available: true, id, version: field("version"), file: "kura-sync.zip", bytes: bytes.length })}\n`,
+        source: `${JSON.stringify({ available: true, id, version: field("version"), file: "kura-sync.zip", bytes: bytes.length, sha256 })}\n`,
       });
     },
   };

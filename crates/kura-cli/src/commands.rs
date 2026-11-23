@@ -145,7 +145,52 @@ async fn session(ctx: &Ctx, cfg: &mut Config) -> Result<Api, Fail> {
         Err(e) => return Err(e.into()),
         Ok(_) => {}
     }
+    // A script's token runs without a configuration to remember the day in.
+    if scoped(ctx).is_none() {
+        let now = FsHost::new(PathBuf::new()).now_ms();
+        if let Some(line) = version_notice(
+            env!("CARGO_PKG_VERSION"),
+            api::server_version(),
+            cfg.version_notice,
+            now,
+        ) {
+            eprintln!("{line}");
+            cfg.version_notice = Some(now);
+            cfg.save(&ctx.home).map_err(Fail::local)?;
+        }
+    }
     Ok(api)
+}
+
+/// `major.minor.patch` of `kura-server/<version>` or `<version>`; a
+/// pre-release compares as its release.
+fn release(v: &str) -> Option<(u64, u64, u64)> {
+    let v = v.rsplit('/').next()?;
+    let mut n = v
+        .split(['-', '+'])
+        .next()?
+        .split('.')
+        .map(|n| n.parse().ok());
+    Some((n.next()??, n.next()??, n.next()??))
+}
+
+const DAY_MS: u64 = 86_400_000;
+
+/// The line of RFC 0010 §4.2 when the server's version differs from this
+/// client's, at most once a day (`last`: when it was last shown).
+fn version_notice(cli: &str, server: Option<&str>, last: Option<u64>, now: u64) -> Option<String> {
+    let srv = server?.rsplit('/').next()?;
+    let (c, s) = (release(cli)?, release(srv)?);
+    if c == s || last.is_some_and(|t| now.saturating_sub(t) < DAY_MS) {
+        return None;
+    }
+    Some(if c < s {
+        format!("kura {cli}, server {srv}: update with `mise up kura`")
+    } else {
+        format!(
+            "kura {cli}, server {srv}: the server is older than this client; its operators update it"
+        )
+    })
 }
 
 fn host_name() -> String {
@@ -690,9 +735,12 @@ async fn sync_one(
     Ok(code)
 }
 
-/// The vault's `.obsidian`, desktop profile, when the vault syncs it and the
-/// folder has one (§6.8). Its own state; a path the categories no longer
-/// cover is forgotten here, never deleted on the user's other devices.
+/// The vault's `.obsidian` when the vault syncs it and the folder has one
+/// (§6.8), in three passes (RFC 0010 §6.3): the plugins installed on the
+/// vault (pulled only), the member's shared items, then the desktop
+/// profile's. Each has its own state and only the paths whose home it is; a
+/// path that moved elsewhere is forgotten here, never deleted on the user's
+/// other devices.
 async fn sync_config(
     api: &Api,
     name: &str,
@@ -704,32 +752,73 @@ async fn sync_config(
     if v.config_sync.is_empty() || !a.path.join(".obsidian").is_dir() {
         return Ok(0);
     }
-    let host = FsHost::config(a.path.clone(), v.config_sync.clone());
-    let mut state = LocalState::adopt(host.load_state(), device, a.id);
-    state.entries.retain(|_, k| host.keeps(k.path.as_str()));
-    let opts = Options {
-        params: params(v.chunking)?,
-        max_file_size: MAX_FILE,
-        dry_run: false,
-        allow_deletions: yes,
-        prefer_remote: true,
-        writable: None,
-        // Configuration categories are files only (RFC 0007 §4.3).
-        folders: false,
+    // Which plugins are the vault's decides where their code files live.
+    let vault_plugins = if v.vault_plugins {
+        match api.shares(a.id).await {
+            Ok(s) => s.vault_plugins,
+            Err(e) => {
+                eprintln!("error: {name}: configuration: {e}");
+                return Ok(1);
+            }
+        }
+    } else {
+        Vec::new()
     };
-    match sync(&host, &api.vault_config(a.id), &mut state, &opts).await {
-        Ok(r) => {
-            println!(
+    let mut code = 0u8;
+    for (space, home, state_name) in [
+        ("config-vault", "vault", "config-vault-state.json"),
+        ("config-shared", "shared", "config-shared-state.json"),
+        ("config", "profile", "config-state.json"),
+    ] {
+        if space == "config-vault" && !v.vault_plugins {
+            continue;
+        }
+        let (cats, shared, plugins) = (
+            v.config_sync.clone(),
+            v.config_shared.clone(),
+            vault_plugins.clone(),
+        );
+        let keep = Box::new(move |p: &str| {
+            kura_core::config::home(p, &cats, &shared, &plugins) == Some(home)
+        });
+        let host = FsHost::config(a.path.clone(), state_name, keep);
+        let mut state = LocalState::adopt(host.load_state(), device, a.id);
+        state.entries.retain(|_, k| host.keeps(k.path.as_str()));
+        let opts = Options {
+            params: params(v.chunking)?,
+            max_file_size: MAX_FILE,
+            dry_run: false,
+            allow_deletions: yes,
+            prefer_remote: true,
+            // A device never installs on the vault from a sync (decision 9).
+            writable: (space == "config-vault")
+                .then(|| Box::new(|_: &str| false) as kura_core::sync::Writable),
+            // Configuration categories are files only (RFC 0007 §4.3).
+            folders: false,
+        };
+        match sync(&host, &api.vault_config(a.id, space), &mut state, &opts).await {
+            Ok(r) if space == "config" => println!(
                 "{name}: configuration pushed {}, pulled {}, removed {}.",
                 r.pushed, r.pulled, r.trashed
-            );
-            Ok(0)
-        }
-        Err(e) => {
-            eprintln!("error: {name}: configuration: {e}");
-            Ok(1)
+            ),
+            Ok(r) if space == "config-shared" && (r.pushed, r.pulled, r.trashed) != (0, 0, 0) => {
+                println!(
+                    "{name}: shared configuration pushed {}, pulled {}, removed {}.",
+                    r.pushed, r.pulled, r.trashed
+                );
+            }
+            Ok(r) if (r.pulled, r.trashed) != (0, 0) => println!(
+                "{name}: vault plugins pulled {}, removed {}.",
+                r.pulled, r.trashed
+            ),
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("error: {name}: configuration ({space}): {e}");
+                code = 1;
+            }
         }
     }
+    Ok(code)
 }
 
 pub async fn status(ctx: &Ctx) -> Result<u8, Fail> {
@@ -739,6 +828,10 @@ pub async fn status(ctx: &Ctx) -> Result<u8, Fail> {
         return Ok(0);
     }
     let api = session(ctx, &mut cfg).await?;
+    match api::server_version().and_then(|s| s.rsplit('/').next()) {
+        Some(srv) => println!("kura {}, server {srv}", env!("CARGO_PKG_VERSION")),
+        None => println!("kura {}", env!("CARGO_PKG_VERSION")),
+    }
     let roles: BTreeMap<Uuid, api::VaultView> =
         api.vaults().await?.into_iter().map(|v| (v.id, v)).collect();
     println!(
@@ -1203,6 +1296,113 @@ fn token_scopes(
     Ok(scopes)
 }
 
+/// `on`, `off`, or back to the vault's default.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum ShareState {
+    On,
+    Off,
+    Default,
+}
+
+/// `kura config`: the member's own Obsidian configuration (RFC 0010).
+#[derive(clap::Subcommand)]
+pub enum ConfigAction {
+    /// Share an item between your desktop and mobile devices, or stop:
+    /// `plugin:<id>`, `snippets`, `themes` or `hotkeys`.
+    Share {
+        vault: String,
+        item: String,
+        state: ShareState,
+    },
+}
+
+pub async fn config_cmd(ctx: &Ctx, action: ConfigAction) -> Result<u8, Fail> {
+    let ConfigAction::Share { vault, item, state } = action;
+    // The closed grammar of RFC 0010 §7.3, before it goes into a URL.
+    let ok = match item.strip_prefix("plugin:") {
+        Some(id) => crate::plugin_zip::id_ok(id),
+        None => matches!(item.as_str(), "snippets" | "themes" | "hotkeys"),
+    };
+    if !ok {
+        return Err(Fail(
+            3,
+            format!("{item}: an item is plugin:<id>, snippets, themes or hotkeys"),
+        ));
+    }
+    let mut cfg = config(ctx)?;
+    let api = session(ctx, &mut cfg).await?;
+    let v = vault_named(&api, &vault).await?;
+    let shared = match state {
+        ShareState::On => Some(true),
+        ShareState::Off => Some(false),
+        ShareState::Default => None,
+    };
+    let s = api.share(v, &item, shared).await?;
+    if s.shared.is_empty() {
+        println!("{vault}: nothing is shared between your devices.");
+    } else {
+        println!(
+            "{vault}: shared between your devices: {}",
+            s.shared.join(", ")
+        );
+    }
+    Ok(0)
+}
+
+/// `kura vault`: what a vault's managers do.
+#[derive(clap::Subcommand)]
+pub enum VaultAction {
+    /// Plugins installed on the vault for every member.
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum PluginAction {
+    /// Install a plugin's release zip on the vault (managers only).
+    Install { vault: String, zip: PathBuf },
+}
+
+pub async fn vault_cmd(ctx: &Ctx, action: VaultAction) -> Result<u8, Fail> {
+    use std::io::Read as _;
+    let VaultAction::Plugin {
+        action: PluginAction::Install { vault, zip },
+    } = action;
+    let mut bytes = Vec::new();
+    std::fs::File::open(&zip)
+        .and_then(|f| {
+            f.take(crate::plugin_zip::MAX_TOTAL.saturating_add(1))
+                .read_to_end(&mut bytes)
+        })
+        .map_err(|e| Fail::local(format!("{}: {e}", zip.display())))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > crate::plugin_zip::MAX_TOTAL {
+        return Err(Fail(3, "this zip is refused: larger than 64 MiB".into()));
+    }
+    let p = crate::plugin_zip::read(&bytes).map_err(|e| Fail(3, e.to_string()))?;
+    let mut cfg = config(ctx)?;
+    let api = session(ctx, &mut cfg).await?;
+    let v = vault_named(&api, &vault).await?;
+    let done = match api.install_plugin(v, &p).await {
+        // "this vault does not take plugins": refused, as a 403 is.
+        Err(e) if e.kind() == "invalid_request" => return Err(Fail(3, e.to_string())),
+        other => other?,
+    };
+    let version = done.version.map(|v| format!(" {v}")).unwrap_or_default();
+    println!("{}{version} ({}) installed on {vault}:", done.name, done.id);
+    for f in &done.files {
+        println!(
+            "  {:<13}  {:>9}  sha256 {}…",
+            f.name,
+            human(f.size),
+            f.sha256.get(..4).unwrap_or_default()
+        );
+    }
+    println!("Members' devices receive it disabled.");
+    Ok(0)
+}
+
 async fn vault_named(api: &Api, name: &str) -> Result<Uuid, Fail> {
     api.vaults()
         .await?
@@ -1389,6 +1589,37 @@ pub async fn search(ctx: &Ctx, vault: &str, query: &str) -> Result<u8, Fail> {
 mod tests {
     use super::*;
     use kura_core::{ChunkHash, blob_hash};
+
+    /// RFC 0010 §4.2: one line when the versions differ, at most once a day;
+    /// a pre-release is its release; no header, nothing.
+    #[test]
+    fn the_version_notice_is_daily_and_only_when_different() {
+        let n =
+            |srv: &str, last: Option<u64>| version_notice("0.3.0", Some(srv), last, 10 * DAY_MS);
+        assert_eq!(
+            n("kura-server/0.3.1", None).as_deref(),
+            Some("kura 0.3.0, server 0.3.1: update with `mise up kura`")
+        );
+        assert_eq!(
+            n("kura-server/0.3.1", Some(9 * DAY_MS + 1)),
+            None,
+            "shown today"
+        );
+        assert!(
+            n("kura-server/0.3.1", Some(9 * DAY_MS)).is_some(),
+            "a day later"
+        );
+        let back = n("kura-server/0.2.9", None).unwrap_or_default();
+        assert!(back.contains("server 0.2.9: the server is older"), "{back}");
+        assert_eq!(
+            n("kura-server/0.3.0-rc.2", None),
+            None,
+            "a pre-release is its release"
+        );
+        assert!(version_notice("0.3.1-rc.1", Some("kura-server/0.3.0"), None, 0).is_some());
+        assert_eq!(version_notice("0.3.0", None, None, 0), None, "no header");
+        assert_eq!(n("kura-server/garbage", None), None);
+    }
 
     /// `kura watch` names the vault when several are attached, and only an attached one.
     #[tokio::test]

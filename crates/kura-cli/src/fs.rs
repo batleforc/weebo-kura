@@ -19,9 +19,12 @@ pub struct FsHost {
     /// Where `.kura` (the state, never synced) lives: the vault folder.
     home: PathBuf,
     state_name: &'static str,
-    /// For the configuration (§6.8): the categories that sync; `None` for notes.
-    keep: Option<Vec<String>>,
+    /// For the configuration (§6.8): the paths this space holds; `None` for notes.
+    keep: Option<Keep>,
 }
+
+/// Whether a path under `.obsidian` belongs to a configuration space.
+pub type Keep = Box<dyn Fn(&str) -> bool + Send + Sync>;
 
 fn err(context: &str, e: impl std::fmt::Display) -> HostError {
     HostError(format!("{context}: {e}"))
@@ -45,24 +48,22 @@ impl FsHost {
         }
     }
 
-    /// The vault's `.obsidian`, its synced categories only, with a state of
-    /// its own: one state per space, or each would see the other's entries
-    /// as deleted (§6.8).
-    pub fn config(vault: PathBuf, categories: Vec<String>) -> Self {
+    /// The vault's `.obsidian`, the paths of one configuration space only
+    /// (`keep`), with a state of its own (`state_name`): one state per
+    /// space, or each would see the other's entries as deleted (§6.8).
+    pub fn config(vault: PathBuf, state_name: &'static str, keep: Keep) -> Self {
         Self {
             root: vault.join(".obsidian"),
             home: vault,
-            state_name: "config-state.json",
-            keep: Some(categories),
+            state_name,
+            keep: Some(keep),
         }
     }
 
     /// Whether this host would list `path`: a known entry it would not is
     /// forgotten before a sync, never pushed as a deletion.
     pub fn keeps(&self, path: &str) -> bool {
-        self.keep
-            .as_ref()
-            .is_none_or(|c| kura_core::config::synced(path, c))
+        self.keep.as_ref().is_none_or(|k| k(path))
     }
 
     pub fn state_file(&self) -> PathBuf {

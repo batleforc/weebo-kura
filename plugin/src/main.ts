@@ -13,16 +13,19 @@ import type { Core } from "./core";
 import { ObsidianHost } from "./host";
 import { Notifier } from "./notifier";
 import type { SocketLike } from "./notifier";
-import { Api, withDevice } from "./remote";
-import type { VaultView } from "./remote";
+import { Api, VERSION, withDevice } from "./remote";
+import type { Shares, VaultView } from "./remote";
+import { syncConfig } from "./config";
+import { drift, fetchUpdate, goBack, install, previousVersion, releasePage, sha256 } from "./update";
+import type { Drift, Get } from "./update";
 import { KuraSettingTab } from "./settings";
 import type { Situation } from "./status";
 import { icon, label, newConflicts, tone, word } from "./status";
 import { ago, setLanguage, t } from "./i18n";
 import { consoleUrl, entryOf } from "./links";
-import { CodeModal, ConfirmModal, PluginModal, ProblemsModal, SetupModal, SwitchModal, WelcomeModal } from "./modals";
+import { CodeModal, ConfirmModal, PluginModal, ProblemsModal, SetupModal, SwitchModal, UpdateModal, VaultPluginModal, VaultUpdateModal, WelcomeModal } from "./modals";
 import type { Report } from "./types";
-import { PluginGuard, codeHashes, emptyConsent, forget, obsidianRegistry, readConsent } from "./plugins";
+import { CODE_FILES, emptyConsent, obsidianRegistry, pendingOf, readConsent } from "./plugins";
 import type { Consent, PluginRegistry } from "./plugins";
 
 export interface Settings {
@@ -80,6 +83,12 @@ const http: Http = async (req) => {
     // Not JSON.
   }
   return { status: r.status, json };
+};
+
+/** `requestUrl` for the update: the configured server, then GitHub (§5.4). */
+const get: Get = async (url) => {
+  const r = await requestUrl({ url, method: "GET", throw: false });
+  return { status: r.status, body: r.arrayBuffer };
 };
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -249,6 +258,7 @@ export default class KuraPlugin extends Plugin {
       if (file !== null) m.addItem((i) => i.setTitle(t("menu.openNote")).setIcon("globe").onClick(() => void this.openInConsole(file.path, false)));
       m.addItem((i) => i.setTitle(t("menu.openVault")).setIcon("external-link").onClick(() => window.open(consoleUrl(this.config.server, this.config.vault))));
     }
+    if (this.drift() === "older") m.addItem((i) => i.setTitle(t("menu.update")).setIcon("download").onClick(() => void this.update()));
     m.addSeparator();
     m.addItem((i) => i.setTitle(t("menu.settings")).setIcon("settings").onClick(() => { this.openSettings(); }));
     m.showAtMouseEvent(e);
@@ -403,7 +413,8 @@ export default class KuraPlugin extends Plugin {
         if (vault === null) throw new Error("this vault is not visible to you");
         const c = vault.chunking;
         // The notes sync their folders too (RFC 0007); syncConfig builds its own options.
-        const options = JSON.stringify({ device: s.device, vault: s.vault, ...c, maxFileSize: s.maxFileMiB * 1024 * 1024, dryRun, allowDeletions, folders: true });
+        const base = { device: s.device, vault: s.vault, ...c, maxFileSize: s.maxFileMiB * 1024 * 1024, dryRun, allowDeletions, folders: true };
+        const options = JSON.stringify(base);
         const notes = await core.sync(host, api.remote(s.vault), state, options);
         // RFC 0006 phase 3: the console shows what this run left undone; a
         // failed report never fails the sync.
@@ -413,7 +424,7 @@ export default class KuraPlugin extends Plugin {
         // finds it due, a few seconds early at most.
         if (!dryRun && vault.configSync.length > 0 && Date.now() - this.configSyncedAt >= CONFIG_EVERY_MS) {
           this.configSyncedAt = Date.now();
-          await this.syncConfig(core, api, vault.configSync, options);
+          await this.syncConfig(core, api, vault, base);
         }
         return notes;
       },
@@ -444,46 +455,244 @@ export default class KuraPlugin extends Plugin {
     this.notifier.start();
   }
 
-  /** `.obsidian` for this device's profile (§6.8): its own state, its
-   * synced categories only; received plugins wait for agreement. */
-  private async syncConfig(core: Core, api: Api, categories: string[], options: string): Promise<void> {
+  /** `.obsidian` (§6.8, RFC 0010 §5.2): the vault's plugin code, the
+   * member's shared items and this profile's own, each pass on its own;
+   * received plugins wait for agreement. */
+  private async syncConfig(core: Core, api: Api, vault: VaultView, options: Record<string, unknown>): Promise<void> {
     const plugins = registry(this.app);
     if (plugins === null) return;
     const s = this.config;
-    const guard = new PluginGuard(plugins, s.consent, () => this.saveSettings(), (id) => {
+    const named = (id: string): { name: string; version: string } => {
       const manifests: unknown = Reflect.get(Reflect.get(this.app, "plugins") ?? {}, "manifests");
       const m: unknown = isRecord(manifests) ? manifests[id] : null;
-      const name = isRecord(m) && typeof m.name === "string" ? m.name : id;
-      const version = isRecord(m) && typeof m.version === "string" ? ` ${m.version}` : "";
-      return new PluginModal(this.app, name, version).ask();
-    });
-    // Never this plugin's own folder, whatever it is named (phase 8 review M4).
-    const own = (this.manifest.dir ?? "").slice(this.app.vault.configDir.length + 1).toLowerCase();
-    const keep = (p: string): boolean =>
-      core.configSynced(p, categories) && (own === "" || !p.toLowerCase().startsWith(`${own}/`));
-    const host = new ObsidianHost({
+      return { name: isRecord(m) && typeof m.name === "string" ? m.name : id, version: isRecord(m) && typeof m.version === "string" ? m.version : "" };
+    };
+    const configDir = this.app.vault.configDir;
+    const failures = await syncConfig({
+      core,
+      api,
       adapter: this.app.vault.adapter,
+      reg: plugins,
+      vault,
+      configDir,
       pluginDir: this.pluginDir(),
-      vault: s.vault,
-      isOpen: () => false,
+      // Never this plugin's own folder, whatever it is named (phase 8 review M4).
+      own: (this.manifest.dir ?? "").slice(configDir.length + 1),
+      consent: s.consent,
+      save: () => this.saveSettings(),
+      options,
       now: () => Date.now(),
       random: random16,
-      root: this.app.vault.configDir,
-      keep,
-      stateName: "config-state",
-      beforeWrite: (p) => guard.beforeWrite(p),
+      ask: {
+        plugin: (id) => {
+          const n = named(id);
+          return new PluginModal(this.app, n.name, n.version === "" ? "" : ` ${n.version}`).ask();
+        },
+        vaultPlugin: async (id) => {
+          const m = await this.localManifest(id);
+          return new VaultPluginModal(this.app, m.name, m.version, vault.name, await this.codeLine(`plugins/${id}/main.js`)).choose();
+        },
+        update: async (id) => {
+          const from = await this.localManifest(id);
+          const to = await this.localManifest(id, true);
+          return new VaultUpdateModal(this.app, from.name, from.version, to.version, await this.codeLine(pendingOf(`plugins/${id}/main.js`))).choose();
+        },
+      },
     });
+    for (const f of failures) new Notice(t("n.configFailed", { cause: `${f.space}: ${because(f.error)}` }));
+  }
+
+  /** A plugin's name and version from its manifest on disk, or the waiting one's. */
+  async localManifest(id: string, waiting = false): Promise<{ id: string; name: string; version: string }> {
+    const path = `${this.app.vault.configDir}/${waiting ? pendingOf(`plugins/${id}/manifest.json`) : `plugins/${id}/manifest.json`}`;
     try {
-      // A path the categories no longer cover is forgotten here, never
-      // deleted on the user's other devices.
-      const raw = await host.loadState();
-      const state = forget(raw, keep);
-      // The configuration space syncs files only (RFC 0007 §4.3).
-      await core.sync(host, api.remote(s.vault, "config"), state, options.replace('"folders":true', '"folders":false'));
-      await guard.review(codeHashes(await host.loadState()));
-    } catch (e) {
-      new Notice(t("n.configFailed", { cause: because(e) }));
+      const m: unknown = JSON.parse(await this.app.vault.adapter.read(path));
+      if (isRecord(m)) return { id: typeof m.id === "string" ? m.id : id, name: typeof m.name === "string" ? m.name : id, version: typeof m.version === "string" ? m.version : "" };
+    } catch {
+      // No readable manifest: the folder's name stands in.
     }
+    return { id, name: id, version: "" };
+  }
+
+  /** "main.js 4.1 MB, sha256 3f9a…c2d1", for the consent prompts. */
+  private async codeLine(path: string): Promise<string> {
+    const full = `${this.app.vault.configDir}/${path}`;
+    const stat = await this.app.vault.adapter.stat(full);
+    if (stat === null) return "";
+    const hash = await sha256(new Uint8Array(await this.app.vault.adapter.readBinary(full)));
+    return t("vplugin.code", { size: `${(stat.size / 1024 / 1024).toFixed(1)} MB`, hash: `${hash.slice(0, 4)}…${hash.slice(-4)}` });
+  }
+
+  // ── RFC 0010: synced settings and the vault's plugins, for the settings tab ──
+
+  private vaultView(): VaultView | null {
+    return this.vaults.find((v) => v.id === this.config.vault) ?? null;
+  }
+
+  isManager(): boolean {
+    const v = this.vaultView();
+    return v !== null && v.vaultPlugins && v.role === "manager";
+  }
+
+  async shares(): Promise<Shares> {
+    if (this.api === null) throw new Error("not signed in");
+    return this.api.shares(this.config.vault);
+  }
+
+  /** The member's choice for an item; null goes back to the vault's default. */
+  async setShare(item: string, shared: boolean | null): Promise<Shares> {
+    if (this.api === null) throw new Error("not signed in");
+    const r = shared === null ? await this.api.clearShare(this.config.vault, item) : await this.api.setShare(this.config.vault, item, shared);
+    this.resyncConfig();
+    return r;
+  }
+
+  /** The plugins in `.obsidian/plugins`, this one aside. */
+  async localPlugins(): Promise<{ folder: string; id: string; name: string; version: string }[]> {
+    const dir = `${this.app.vault.configDir}/plugins`;
+    const own = (this.manifest.dir ?? "").split("/").pop()?.toLowerCase();
+    try {
+      const { folders } = await this.app.vault.adapter.list(dir);
+      const ids = folders.map((f) => f.split("/").pop() ?? "").filter((f) => f !== "" && f.toLowerCase() !== own && f.toLowerCase() !== "weebo-kura");
+      return await Promise.all(ids.map(async (folder) => ({ folder, ...(await this.localManifest(folder)) })));
+    } catch {
+      return [];
+    }
+  }
+
+  /** A vault plugin on this device (§4.5 mock). */
+  async vaultPluginState(id: string): Promise<"enabled" | "disabled" | "pending" | "never" | "missing"> {
+    if (this.config.consent.never.includes(id)) return "never";
+    const adapter = this.app.vault.adapter;
+    const dir = `${this.app.vault.configDir}/plugins/${id}`;
+    if (await adapter.exists(`${dir}/.kura-pending`)) return "pending";
+    if (!(await adapter.exists(`${dir}/main.js`))) return "missing";
+    return (await registry(this.app)?.isEnabled(id)) === true ? "enabled" : "disabled";
+  }
+
+  /** The next run reviews `id`'s waiting code again (the [Review] button). */
+  async reviewUpdate(id: string): Promise<void> {
+    const c = this.config.consent;
+    c.declined = Object.fromEntries(Object.entries(c.declined).filter(([k]) => k !== id));
+    if (!c.pending.includes(id)) c.pending.push(id);
+    await this.saveSettings();
+    this.resyncConfig();
+  }
+
+  /** Lifts "never on this device": the vault pass starts over to bring it back. */
+  async allowAgain(id: string): Promise<void> {
+    const c = this.config.consent;
+    c.never = c.never.filter((x) => x !== id);
+    c.declined = Object.fromEntries(Object.entries(c.declined).filter(([k]) => k !== id));
+    await this.saveSettings();
+    const state = `${this.pluginDir()}/config-vault-state-${this.config.vault}.json`;
+    if (await this.app.vault.adapter.exists(state)) await this.app.vault.adapter.remove(state);
+    this.resyncConfig();
+  }
+
+  /** A manager's Install / Update on this vault: the three local code files. */
+  async installOnVault(id: string): Promise<void> {
+    const api = this.api;
+    if (api === null) return;
+    const dir = `${this.app.vault.configDir}/plugins/${id}`;
+    const adapter = this.app.vault.adapter;
+    const read = async (name: string): Promise<Uint8Array | undefined> =>
+      (await adapter.exists(`${dir}/${name}`)) ? new Uint8Array(await adapter.readBinary(`${dir}/${name}`)) : undefined;
+    try {
+      const [manifest, main, styles] = await Promise.all(CODE_FILES.map(read));
+      if (manifest === undefined || main === undefined) throw new Error(`${id} has no manifest.json or main.js`);
+      const m = await this.localManifest(id);
+      await api.installPlugin(this.config.vault, m.id, "vault", { manifest, main, ...(styles === undefined ? {} : { styles }) });
+      new Notice(t("n.installed", { name: m.name }));
+      this.resyncConfig();
+    } catch (e) {
+      new Notice(t("n.vaultFailed", { cause: because(e) }));
+    }
+  }
+
+  /** A manager's Remove from this vault: the code leaves this device (to
+   * `.trash`), and the vault pass deletes it there. */
+  async removeFromVault(id: string): Promise<void> {
+    const adapter = this.app.vault.adapter;
+    const dir = `${this.app.vault.configDir}/plugins/${id}`;
+    const m = await this.localManifest(id);
+    try {
+      await registry(this.app)?.disable(id);
+      for (const name of CODE_FILES) {
+        for (const p of [`${dir}/.kura-pending/${name}`, `${dir}/${name}`]) if (await adapter.exists(p)) await adapter.trashLocal(p);
+      }
+      new Notice(t("n.removed", { name: m.name }));
+      this.resyncConfig();
+    } catch (e) {
+      new Notice(t("n.vaultFailed", { cause: because(e) }));
+    }
+  }
+
+  private resyncConfig(): void {
+    this.configSyncedAt = 0;
+    void this.controller?.sync(true);
+  }
+
+  // ── RFC 0010 §4.2: versions and the one-click update ──
+
+  readonly version = VERSION;
+
+  /** The server's version, from the last answer; null when unknown. */
+  serverVersion(): string | null {
+    const h = this.api?.serverVersion ?? null;
+    return h === null ? null : h.replace(/^[\w.-]+\//, "");
+  }
+
+  drift(): Drift {
+    return drift(VERSION, this.api?.serverVersion ?? null);
+  }
+
+  /** Fetched and checked in memory, confirmed, then written and reloaded.
+   * Resolves to the release page when the server serves no build. */
+  async update(): Promise<string | null> {
+    const server = this.config.server;
+    try {
+      const c = await fetchUpdate(server, VERSION, get);
+      if (c === null) {
+        const url = releasePage(this.serverVersion() ?? "");
+        new Notice(t("s.updateRelease", { url }), 10_000);
+        return url;
+      }
+      if (!(await new UpdateModal(this.app, VERSION, c).choose())) return null;
+      await install(c, this.app.vault.adapter, this.pluginDir());
+      await this.reload(t("n.updated", { v: c.version }), c.version);
+    } catch (e) {
+      new Notice(t("n.updateFailed", { cause: because(e) }), 10_000);
+    }
+    return null;
+  }
+
+  async previous(): Promise<string | null> {
+    return previousVersion(this.app.vault.adapter, this.pluginDir());
+  }
+
+  async goBack(): Promise<void> {
+    try {
+      const v = await goBack(this.app.vault.adapter, this.pluginDir());
+      await this.reload(t("n.wentBack", { v }), v);
+    } catch (e) {
+      new Notice(t("n.updateFailed", { cause: because(e) }), 10_000);
+    }
+  }
+
+  /** Desktop reloads this plugin; mobile offers no way to, so it asks for a restart. */
+  private async reload(done: string, version: string): Promise<void> {
+    const plugins: unknown = Reflect.get(this.app, "plugins");
+    const off: unknown = isRecord(plugins) ? plugins.disablePlugin : null;
+    const on: unknown = isRecord(plugins) ? plugins.enablePlugin : null;
+    if (Platform.isMobile || typeof off !== "function" || typeof on !== "function") {
+      new Notice(`${done} ${t("n.restart", { v: version })}`, 0);
+      return;
+    }
+    new Notice(done);
+    const id = this.manifest.id;
+    await Promise.resolve(Reflect.apply(off, plugins, [id]));
+    await Promise.resolve(Reflect.apply(on, plugins, [id]));
   }
 
   /** A session is held for the chosen vault (the settings offer sign-in otherwise). */

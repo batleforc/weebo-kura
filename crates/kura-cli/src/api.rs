@@ -48,6 +48,13 @@ fn unreachable(e: reqwest::Error) -> RemoteError {
 
 /// A `4xx`/`5xx` as the problem document it carries.
 async fn check(r: reqwest::Response) -> Result<reqwest::Response, RemoteError> {
+    if let Some(v) = r
+        .headers()
+        .get("x-kura-server")
+        .and_then(|v| v.to_str().ok())
+    {
+        drop(SERVER.set(v.to_owned()));
+    }
     let status = r.status();
     if status.is_success() {
         return Ok(r);
@@ -70,6 +77,15 @@ async fn check(r: reqwest::Response) -> Result<reqwest::Response, RemoteError> {
             .to_owned(),
         detail: v.get("detail").and_then(Value::as_str).map(str::to_owned),
     })
+}
+
+/// The server's `x-kura-server` (RFC 0010 §4.2), from its first answer.
+static SERVER: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// `kura-server/<version>` as the server last said it; `None`: an older
+/// server, whose version is unknown.
+pub fn server_version() -> Option<&'static str> {
+    SERVER.get().map(String::as_str)
 }
 
 /// Attempts per request when the server asks to wait (§4.4, §6.3).
@@ -186,12 +202,45 @@ pub struct VaultView {
     /// The `.obsidian` categories that sync (§6.8); empty: none.
     #[serde(default)]
     pub config_sync: Vec<String>,
+    /// The caller's effective shared items (RFC 0010 §4.1).
+    #[serde(default)]
+    pub config_shared: Vec<String>,
+    /// Whether the vault takes plugins installed by its managers.
+    #[serde(default)]
+    pub vault_plugins: bool,
     /// Present when the caller is a scoped token: its own folder rules.
     #[serde(default)]
     pub scopes: Option<Vec<ScopeRule>>,
     /// Present when the caller is a scoped token: its name.
     #[serde(default)]
     pub token_name: Option<String>,
+}
+
+/// A member's configuration shares on a vault (RFC 0010 §4.4).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Shares {
+    pub shared: Vec<String>,
+    /// The plugins installed on the vault.
+    pub vault_plugins: Vec<String>,
+}
+
+/// One file of an installed plugin.
+#[derive(Debug, Clone, Deserialize)]
+pub struct InstalledFile {
+    pub name: String,
+    pub size: u64,
+    pub sha256: String,
+}
+
+/// A plugin as the install route stored it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Installed {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    pub files: Vec<InstalledFile>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -452,13 +501,61 @@ impl Api {
         }
     }
 
-    /// The caller's own Obsidian configuration of the vault (§6.8).
-    pub fn vault_config(&self, vault: Uuid) -> VaultRemote<'_> {
+    /// A configuration space of the vault (§6.8, RFC 0010 §4.2): `config`
+    /// (this profile), `config-shared` or `config-vault`.
+    pub fn vault_config(&self, vault: Uuid, space: &'static str) -> VaultRemote<'_> {
         VaultRemote {
             api: self,
             vault,
-            space: Some("config"),
+            space: Some(space),
         }
+    }
+
+    pub async fn shares(&self, vault: Uuid) -> Result<Shares, RemoteError> {
+        self.json(self.req(
+            reqwest::Method::GET,
+            &format!("/vaults/{vault}/config/shares"),
+        ))
+        .await
+    }
+
+    /// Sets the caller's choice for `item`; `None` goes back to the vault's default.
+    pub async fn share(
+        &self,
+        vault: Uuid,
+        item: &str,
+        shared: Option<bool>,
+    ) -> Result<Shares, RemoteError> {
+        let path = format!("/vaults/{vault}/config/shares/{item}");
+        let r = match shared {
+            Some(b) => self
+                .req(reqwest::Method::PUT, &path)
+                .json(&json!({ "shared": b })),
+            None => self.req(reqwest::Method::DELETE, &path),
+        };
+        self.json(r).await
+    }
+
+    /// Installs a plugin's code files on the vault (RFC 0010 §4.4).
+    pub async fn install_plugin(
+        &self,
+        vault: Uuid,
+        p: &crate::plugin_zip::Plugin,
+    ) -> Result<Installed, RemoteError> {
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let mut body = json!({ "manifest": b64.encode(&p.manifest), "main": b64.encode(&p.main) });
+        if let (Some(s), Some(o)) = (&p.styles, body.as_object_mut()) {
+            o.insert("styles".into(), json!(b64.encode(s)));
+        }
+        let r = self
+            .req(
+                reqwest::Method::PUT,
+                &format!("/vaults/{vault}/config/plugins/{}", p.id),
+            )
+            .query(&[("target", "vault")])
+            .json(&body);
+        self.json(r).await
     }
 }
 
@@ -466,7 +563,7 @@ impl Api {
 pub struct VaultRemote<'a> {
     api: &'a Api,
     vault: Uuid,
-    /// `config`, or the notes.
+    /// A configuration space, or the notes.
     space: Option<&'static str>,
 }
 

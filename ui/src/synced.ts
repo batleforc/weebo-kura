@@ -33,6 +33,13 @@ export function categoryOf(path: string): Category | null {
   return p === "hotkeys.json" ? "hotkeys" : null;
 }
 
+/** `kura_core::config::item_of`, mirrored for grouping: `plugin:<id>` (lower
+ * case) for a plugin's folder, else the category; `null` when it does not sync. */
+export function itemOf(path: string): string | null {
+  const c = categoryOf(path);
+  return c === "plugins" ? `plugin:${path.split("/")[1]?.toLowerCase()}` : c;
+}
+
 /** Withheld by the server: listed, never read in a browser. */
 export function isHidden(e: EntryState): boolean {
   return !e.deleted && !e.blob;

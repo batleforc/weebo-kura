@@ -161,6 +161,35 @@ here is what they mean in practice.
   `snippets`, `themes`, `hotkeys`. Absent: `.obsidian` does not sync. Each
   person's configuration syncs per device profile (desktop, mobile), never
   between members.
+- **`configSync.sharedByDefault`**: items shared between a member's desktop
+  and mobile devices unless the member turns them off (RFC 0010):
+  `plugin:<id>` for one plugin (its folder name under `.obsidian/plugins/`),
+  or `snippets`, `themes`, `hotkeys` as a whole. Each must belong to a
+  category in `categories`. Absent: nothing is shared until a member shares
+  it. A shared item is still the member's own: it syncs in one copy read by
+  all their Obsidian devices, never by other members. A `plugin:` item
+  raises the advisory `PluginsSharedByDefault`.
+- **`configSync.vaultPlugins`**: when `true`, the vault's managers (and the
+  tenant's admins) may install plugins on the vault from Obsidian (or with
+  `kura vault plugin install`). Only the plugin's code (`manifest.json`,
+  `main.js`, `styles.css`) goes vault-wide; it reaches every member's
+  devices **disabled**, and runs on a device only after its owner agrees to
+  that exact code. Settings (`data.json`) stay personal. Needs `plugins` in
+  `categories`; raises the advisory `VaultPluginsEnabled`. Absent: `false`.
+  Redistributing a plugin falls under that plugin's own licence, and is the
+  managers' responsibility.
+
+```yaml
+spec:
+  configSync:
+    categories: [plugins, snippets, themes, hotkeys]
+    sharedByDefault: [snippets, themes, plugin:dataview]
+    vaultPlugins: true
+```
+
+Roll the server out before a document names `sharedByDefault` or
+`vaultPlugins`: an older replica cannot read them and serves no configuration
+for that vault until it is upgraded (it logs the refusal at `error`).
 
 ## Removing a document
 
@@ -232,6 +261,8 @@ counted in `kura_config_warnings`.
 | `CidrTokensWithoutTrustedProxies` | Scoped tokens bound to address ranges are refused while `trustedProxies` is empty. |
 | `TokenWriteDisabled` | Write tokens exist while `scopedTokens.write` is off: they read, their writes are refused. |
 | `RestrictedBindingWidened` | A folder-restricted viewer binding also opens the whole vault through a wider grant. |
+| `VaultPluginsEnabled` | `configSync.vaultPlugins` is on: managers can send plugin code to every member's devices (disabled until each member agrees). |
+| `PluginsSharedByDefault` | `configSync.sharedByDefault` names a plugin: its code crosses each member's profiles by default. |
 
 See [Reason codes](/docs/reference/reason-codes).
 

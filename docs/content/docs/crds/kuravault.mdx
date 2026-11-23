@@ -72,6 +72,8 @@ spec:
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `categories` | `string[]` | no | `[]` | The parts of `.obsidian` that sync: `plugins`, `snippets`, `themes`, `hotkeys`.<br /><br />Values: `"plugins"`, `"snippets"`, `"themes"`, `"hotkeys"` |
+| `sharedByDefault` | `string[]` | no |  | Items shared between a member's desktop and mobile devices unless the member says no (RFC 0010 §4.1): `plugin:<id>` for one plugin, or `snippets`, `themes`, `hotkeys` as a whole. Absent: nothing. |
+| `vaultPlugins` | `boolean` | no |  | Whether the vault's managers may install plugins on the vault, whose code then reaches every member's devices, disabled (RFC 0010 §4.2). |
 
 ### `spec.tenantRef` [#spec.tenantRef]
 

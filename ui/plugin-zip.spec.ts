@@ -1,7 +1,11 @@
+import { createHash } from "node:crypto";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { crc32, inflateRawSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 
-import { zip } from "./plugin-zip";
+import { pluginZip, zip } from "./plugin-zip";
 
 /** The entries of a zip, read back from its central directory. */
 function read(z: Buffer): Record<string, string> {
@@ -38,5 +42,37 @@ describe("the plugin zip", () => {
       "weebo-kura/main.js": "console.log('kura');".repeat(50),
       "weebo-kura/manifest.json": '{"id":"weebo-kura"}',
     });
+  });
+});
+
+describe("plugin.json", () => {
+  it("names the SHA-256 of each file emitted under plugin/", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kura-plugin-"));
+    writeFileSync(join(dir, "main.js"), "console.log(1);");
+    writeFileSync(
+      join(dir, "manifest.json"),
+      '{"id":"weebo-kura","version":"0.3.0"}',
+    );
+    writeFileSync(join(dir, "styles.css"), ".a{}");
+    const out = new Map<string, string | Uint8Array>();
+    const ctx = {
+      emitFile: (f: { fileName: string; source: string | Uint8Array }) =>
+        out.set(f.fileName, f.source),
+    };
+    const hook = pluginZip(dir).generateBundle;
+    const run = typeof hook === "function" ? hook : hook?.handler;
+    run?.call(ctx as never, {} as never, {}, true);
+    const json: unknown = JSON.parse(String(out.get("plugin.json")));
+    const sha256 = (json as { sha256: Record<string, string> }).sha256;
+    for (const f of ["main.js", "manifest.json", "styles.css"]) {
+      const file = out.get(`plugin/${f}`);
+      expect(file, f).toBeDefined();
+      expect(sha256[f]).toBe(
+        createHash("sha256")
+          .update(file ?? "")
+          .digest("hex"),
+      );
+    }
+    expect(out.has("kura-sync.zip")).toBe(true);
   });
 });

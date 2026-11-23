@@ -2,18 +2,31 @@
 /**
  * The caller's own synced Obsidian configuration of a vault (RFC 0008), per
  * profile: listed by category, plugins by name, and the text of a file that
- * cannot hold a secret. Nothing here writes, and nothing is applied: a
- * snippet is text, never a stylesheet (T5). The server withholds a plugin's
- * settings and code; this page never asks for them.
+ * cannot hold a secret. Nothing is applied: a snippet is text, never a
+ * stylesheet (T5). The server withholds a plugin's settings and code; this
+ * page never asks for them. RFC 0010: the copy shared by both profiles and
+ * the plugins installed on the vault are two more views; the only writes are
+ * the member's share choices and a plugin installed for themselves.
  */
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute } from "vue-router";
 
 import { withDevice } from "@/api/client";
-import { getEntries, getRevisions } from "@/api/generated/sdk.gen";
-import type { EntryState, RevisionInfo } from "@/api/generated/types.gen";
+import {
+  deleteShare,
+  getEntries,
+  getRevisions,
+  getShares,
+  putShare,
+} from "@/api/generated/sdk.gen";
+import type {
+  EntryState,
+  RevisionInfo,
+  Shares,
+} from "@/api/generated/types.gen";
 import { messageOf, retryable } from "@/api/problem";
+import InstallPlugin from "@/components/InstallPlugin.vue";
 import AsyncState from "@/components/ui/AsyncState.vue";
 import { fileBytes } from "@/reader/content";
 import { day } from "@/reader/time";
@@ -25,6 +38,7 @@ import {
   group,
   hiddenReason,
   isHidden,
+  itemOf,
   MAX_PLUGINS,
   MAX_SHOWN,
   type Manifest,
@@ -39,9 +53,17 @@ const route = useRoute();
 const vaultStore = useVaults();
 const v = computed(() => String(route.params.v));
 const vault = computed(() => vaultStore.list.find((x) => x.id === v.value));
-const profile = computed(() =>
-  route.query.profile === "mobile" ? "mobile" : "desktop",
+type View = "desktop" | "mobile" | "shared" | "vault";
+/** The views offered: Vault plugins only on a vault that takes plugins. */
+const views = computed<View[]>(() =>
+  vault.value?.vaultPlugins
+    ? ["desktop", "mobile", "shared", "vault"]
+    : ["desktop", "mobile", "shared"],
 );
+const profile = computed<View>(() => {
+  const q = route.query.profile;
+  return views.value.find((x) => x === q) ?? "desktop";
+});
 const openPath = computed(() =>
   typeof route.query.file === "string" ? route.query.file : null,
 );
@@ -66,6 +88,96 @@ const notSynced = computed(() =>
   CATEGORIES.filter((c) => !vault.value?.configSync.includes(c)),
 );
 
+/** Every entry of a space; a profile names one of `config`. */
+async function listAll(
+  space: "config" | "config-shared" | "config-vault",
+  profile?: "desktop" | "mobile",
+): Promise<EntryState[]> {
+  const all: EntryState[] = [];
+  let after: string | undefined;
+  for (let page = 0; page < 50; page += 1) {
+    const { data } = await withDevice((headers) =>
+      getEntries({
+        headers,
+        path: { v: v.value },
+        query: {
+          space,
+          ...(profile ? { profile } : {}),
+          ...(after ? { after } : {}),
+        },
+        throwOnError: true,
+      }),
+    );
+    all.push(...data.items);
+    if (!data.next) break;
+    after = data.next;
+  }
+  return all;
+}
+
+// The Shared view: the member's choices, and the items they could share.
+const shares = ref<Shares | null>(null);
+const seen = ref<string[]>([]);
+const changing = ref(false);
+const writing = ref(false);
+const shareError = ref<string | null>(null);
+const offered = computed(() => {
+  const s = shares.value;
+  if (!s) return [];
+  const has = (c: Category) => !!vault.value?.configSync.includes(c);
+  const plugins = has("plugins")
+    ? [...seen.value, ...s.shared, ...s.defaults, ...Object.keys(s.choices)]
+    : [];
+  return [
+    ...(["snippets", "themes", "hotkeys"] as const).filter(has),
+    ...[...new Set(plugins.filter((i) => i.startsWith("plugin:")))].sort(),
+  ];
+});
+const sharedNow = computed(() =>
+  offered.value.filter((i) => shares.value?.shared.includes(i)),
+);
+const notShared = computed(() =>
+  offered.value.filter((i) => !shares.value?.shared.includes(i)),
+);
+const itemLabel = (i: string) =>
+  i.startsWith("plugin:") ? i.slice(7) : t(`config.category.${i}`);
+/** Whether an item follows the vault's default, or the member turned it off. */
+function shareNote(i: string): string {
+  const s = shares.value;
+  if (!s?.defaults.includes(i)) return "";
+  return s.choices[i] === false
+    ? t("config.shared.defaultOff")
+    : t("config.shared.default");
+}
+/** Back to the vault's default when it is that, else the member's own choice. */
+async function setShare(item: string, on: boolean): Promise<void> {
+  if (writing.value) return;
+  writing.value = true;
+  shareError.value = null;
+  try {
+    const back = on === !!shares.value?.defaults.includes(item);
+    const { data } = await withDevice((headers) =>
+      back
+        ? deleteShare({
+            headers,
+            path: { v: v.value, item },
+            throwOnError: true,
+          })
+        : putShare({
+            headers,
+            path: { v: v.value, item },
+            body: { shared: on },
+            throwOnError: true,
+          }),
+    );
+    shares.value = data;
+  } catch (e) {
+    shareError.value = messageOf(e);
+  } finally {
+    writing.value = false;
+  }
+}
+
 /** Only the latest load writes: a late answer for another profile is dropped. */
 let loads = 0;
 async function load(): Promise<void> {
@@ -76,24 +188,28 @@ async function load(): Promise<void> {
   error.value = null;
   manifests.value = new Map();
   try {
-    const all: EntryState[] = [];
-    let after: string | undefined;
-    for (let page = 0; page < 50; page += 1) {
-      const { data } = await withDevice((headers) =>
-        getEntries({
-          headers,
-          path: { v: v.value },
-          query: {
-            space: "config",
-            profile: asked,
-            ...(after ? { after } : {}),
-          },
-          throwOnError: true,
-        }),
+    let all: EntryState[];
+    if (asked === "shared") {
+      const [own, s, desktop, mobile] = await Promise.all([
+        listAll("config-shared"),
+        withDevice((headers) =>
+          getShares({ headers, path: { v: v.value }, throwOnError: true }),
+        ),
+        listAll("config", "desktop"),
+        listAll("config", "mobile"),
+      ]);
+      if (mine !== loads) return;
+      all = own;
+      shares.value = s.data;
+      seen.value = [...own, ...desktop, ...mobile].flatMap((e) => {
+        const i = e.deleted ? null : itemOf(e.path);
+        return i ? [i] : [];
+      });
+    } else {
+      all = await listAll(
+        asked === "vault" ? "config-vault" : "config",
+        asked === "vault" ? undefined : asked,
       );
-      all.push(...data.items);
-      if (!data.next) break;
-      after = data.next;
     }
     if (mine !== loads) return;
     entries.value = all;
@@ -198,6 +314,12 @@ onMounted(() => {
 });
 
 const label = (c: Category) => t(`config.category.${c}`);
+const canInstall = computed(
+  () =>
+    profile.value !== "vault" &&
+    vault.value?.role !== "viewer" &&
+    !!vault.value?.configSync.includes("plugins"),
+);
 </script>
 
 <template>
@@ -210,7 +332,7 @@ const label = (c: Category) => t(`config.category.${c}`);
       <p class="mb-4 text-ink-dim">{{ t("config.intro") }}</p>
       <nav :aria-label="t('config.profiles')" class="mb-2 flex gap-4">
         <RouterLink
-          v-for="p in ['desktop', 'mobile'] as const"
+          v-for="p in views"
           :key="p"
           :to="{ query: { profile: p } }"
           :aria-current="profile === p ? 'page' : undefined"
@@ -220,12 +342,32 @@ const label = (c: Category) => t(`config.category.${c}`);
       </nav>
       <p class="mb-6 text-ink-dim">{{ t("config.syncedHere", { list: synced.map(label).join(", ") }) }}</p>
 
+      <!-- The Shared view: what the member shares, in words, and their toggles -->
+      <section v-if="profile === 'shared' && shares && !loading && !openPath" class="mb-6" data-test="shares">
+        <p>{{ sharedNow.length
+          ? t("config.shared.list", { list: sharedNow.map((i) => itemLabel(i) + (shareNote(i) ? ` (${shareNote(i)})` : "")).join(", ") })
+          : t("config.shared.none") }}</p>
+        <p class="flex flex-wrap items-baseline justify-between gap-2">
+          <span class="text-ink-dim">{{ notShared.length ? t("config.shared.not", { list: notShared.map(itemLabel).join(", ") }) : "" }}</span>
+          <button type="button" class="border border-rule px-3" :aria-expanded="changing" data-test="change" @click="changing = !changing">{{ t("config.shared.change") }}</button>
+        </p>
+        <fieldset v-if="changing" class="mt-2 grid gap-1 border-t border-dashed border-rule-soft pt-2">
+          <legend class="sr-only">{{ t("config.shared.legend") }}</legend>
+          <label v-for="i in offered" :key="i" class="flex flex-wrap items-baseline gap-2">
+            <input type="checkbox" :checked="shares.shared.includes(i)" :disabled="writing" :data-test="`share-${i}`" @change="setShare(i, !shares.shared.includes(i))" />
+            {{ itemLabel(i) }}
+            <span v-if="shareNote(i)" class="text-ink-dim">· {{ shareNote(i) }}</span>
+          </label>
+        </fieldset>
+        <p v-if="shareError" role="alert" class="mt-2 border-l border-rule pl-3">{{ shareError }}</p>
+      </section>
+
       <AsyncState
         :loading="loading"
         :error="error"
         :empty="entries.length === 0"
-        :empty-message="t('config.empty')"
-        :title="t('config.failed')"
+        :empty-message="t(`config.emptyOf.${profile}`)"
+        :title="profile === 'vault' ? t('config.vaultFailed') : t('config.failed')"
         :can-retry="canRetry"
         @retry="load"
       >
@@ -302,6 +444,7 @@ const label = (c: Category) => t(`config.category.${c}`);
           </p>
         </div>
       </AsyncState>
+      <InstallPlugin v-if="canInstall" :vault="v" @installed="load" />
     </template>
   </section>
 </template>

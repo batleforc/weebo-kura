@@ -106,6 +106,44 @@ fn widened(
     })
 }
 
+/// RFC 0010 §4.3: code that may reach devices through configuration.
+fn config_advisories(v: &kura_api::validate::Sourced<kura_api::spec::KuraVault>) -> Vec<Condition> {
+    let Some(c) = &v.doc.spec.config_sync else {
+        return Vec::new();
+    };
+    let advisory = |reason: ReasonCode, message: String| Condition {
+        type_: reason.as_str().into(),
+        status: "True".into(),
+        reason: reason.as_str().into(),
+        message,
+        last_transition_time: None,
+        observed_generation: None,
+    };
+    let mut out = Vec::new();
+    if c.vault_plugins {
+        out.push(advisory(
+            ReasonCode::VaultPluginsEnabled,
+            "the vault's managers can install plugins whose code reaches every member's devices, disabled".into(),
+        ));
+    }
+    let plugins: Vec<&str> = c
+        .shared_by_default
+        .iter()
+        .filter(|i| i.starts_with("plugin:"))
+        .map(String::as_str)
+        .collect();
+    if !plugins.is_empty() {
+        out.push(advisory(
+            ReasonCode::PluginsSharedByDefault,
+            format!(
+                "{} cross a member's profiles by default, code included",
+                plugins.join(", ")
+            ),
+        ));
+    }
+    out
+}
+
 pub fn build(config: &kura_api::Config, removed: &[Removed]) -> StoredStatus {
     let mut objects = Vec::new();
     for (slug, t) in &config.tenants {
@@ -131,6 +169,7 @@ pub fn build(config: &kura_api::Config, removed: &[Removed]) -> StoredStatus {
         if let Some(c) = widened(config, v) {
             conditions.push(c);
         }
+        conditions.extend(config_advisories(v));
         objects.push(ObjectStatus {
             kind: kura_api::spec::KIND_VAULT.into(),
             namespace: Some(key.namespace.to_string()),

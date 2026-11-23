@@ -44,6 +44,12 @@ weebo_kit_domain::reason_codes! {
         InstanceUnreachable,
         /// The Kura server refused the operator's identity (401/403).
         InstanceUnauthorized,
+        /// `configSync.vaultPlugins` is on: the vault's managers can send
+        /// plugin code to every member's devices (RFC 0010 §4.3).
+        VaultPluginsEnabled,
+        /// `configSync.sharedByDefault` holds a plugin: its code crosses a
+        /// member's profiles by default (RFC 0010 §4.3).
+        PluginsSharedByDefault,
     }
 }
 
@@ -72,7 +78,9 @@ impl Reason for ReasonCode {
             | Self::DeletionScheduled
             | Self::AwaitingKeyDestruction
             | Self::TokenWriteDisabled
-            | Self::RestrictedBindingWidened => Severity::Advisory,
+            | Self::RestrictedBindingWidened
+            | Self::VaultPluginsEnabled
+            | Self::PluginsSharedByDefault => Severity::Advisory,
         }
     }
 }
@@ -84,7 +92,7 @@ mod tests {
     #[test]
     fn catalogue_is_pascal_case_and_complete() {
         weebo_kit_domain::reason::assert_pascal_case(ReasonCode::ALL);
-        assert_eq!(ReasonCode::ALL.len(), 17);
+        assert_eq!(ReasonCode::ALL.len(), 19);
         assert_eq!(ReasonCode::SUCCESS.severity(), Severity::Advisory);
         assert_eq!(ReasonCode::InvalidDocument.severity(), Severity::Blocking);
     }

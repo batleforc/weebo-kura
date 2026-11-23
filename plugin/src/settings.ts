@@ -1,12 +1,13 @@
 // The settings panel of §4.5, read top to bottom as a state: where this vault
 // syncs and as whom, then the sync itself, its problems, and what few knobs
 // there are. The raw connection fields fold away once a link has filled them.
-import { PluginSettingTab, Setting } from "obsidian";
+import { Notice, PluginSettingTab, Setting } from "obsidian";
 import type { App } from "obsidian";
 import { ago, roleName, t } from "./i18n";
 import { consoleUrl } from "./links";
 import type KuraPlugin from "./main";
 import { renderProblems } from "./modals";
+import type { Shares } from "./remote";
 import { word } from "./status";
 
 export class KuraSettingTab extends PluginSettingTab {
@@ -37,6 +38,7 @@ export class KuraSettingTab extends PluginSettingTab {
     const c = p.config;
     containerEl.empty();
     this.stateEl = containerEl.createEl("p", { cls: "kura-status kura-state", attr: { role: "status" } });
+    this.versionLine(containerEl);
 
     // ── Connection ──
     new Setting(containerEl).setName(t("s.connection")).setHeading();
@@ -129,6 +131,91 @@ export class KuraSettingTab extends PluginSettingTab {
     });
     const synced = p.vaults.find((v) => v.id === c.vault)?.configSync ?? [];
     new Setting(containerEl).setName(t("s.configSync")).setDesc(t("s.configSyncDesc", { list: synced.length === 0 ? t("s.configSyncNone") : synced.join(", ") }));
+    if (p.connected() && synced.length > 0) void this.syncedSettings(containerEl.createDiv(), synced);
+  }
+
+  /** RFC 0010 §4.5: this build against the server's, the update at hand, and the way back. */
+  private versionLine(el: HTMLElement): void {
+    const p = this.plugin;
+    const server = p.serverVersion();
+    const line = new Setting(el).setName(server === null ? t("s.versionAlone", { client: p.version }) : t("s.version", { client: p.version, server }));
+    const d = p.drift();
+    if (d === "older" && server !== null) {
+      line.setDesc(t("s.updateAvailable"));
+      line.addButton((b) => b.setButtonText(t("s.updateTo", { v: server })).setCta().onClick(async () => {
+        const release = await p.update();
+        // No build on the server (its console is off): its release page instead.
+        if (release !== null) line.setDesc(t("s.updateRelease", { url: release }));
+      }));
+    } else if (d === "newer") {
+      line.setDesc(t("s.serverOlder"));
+    }
+    void p.previous().then((v) => {
+      if (v !== null && v !== p.version) line.addButton((b) => b.setButtonText(t("s.goBack", { v })).onClick(() => void p.goBack()));
+    });
+  }
+
+  /** RFC 0010 §4.5 "Synced settings": the member's toggles, then the vault's plugins. */
+  private async syncedSettings(el: HTMLElement, categories: string[]): Promise<void> {
+    const p = this.plugin;
+    let shares: Shares;
+    try {
+      shares = await p.shares();
+    } catch (e) {
+      el.createEl("p", { text: t("s.sharedFailed", { cause: e instanceof Error ? e.message : String(e) }), cls: "setting-item-description" });
+      return;
+    }
+    const again = (): void => {
+      el.empty();
+      void this.syncedSettings(el, categories);
+    };
+    const manager = p.isManager();
+    const onVault = new Set(shares.vaultPlugins);
+    const local = categories.includes("plugins") ? await p.localPlugins() : [];
+    const items = [
+      ...local.filter((m) => !onVault.has(m.folder.toLowerCase())).map((m) => ({ item: `plugin:${m.folder.toLowerCase()}`, label: `${m.name} ${m.version}`.trim(), folder: m.folder })),
+      ...(["snippets", "themes", "hotkeys"] as const).filter((c) => categories.includes(c)).map((c) => ({ item: c, label: t(`item.${c}`), folder: null })),
+    ];
+    new Setting(el).setDesc(t("s.sharedSet", { list: categories.map((c) => (c === "plugins" || c === "snippets" || c === "themes" || c === "hotkeys" ? t(`item.${c}`) : c)).join(", ") }));
+    if (items.length > 0) new Setting(el).setName(t("s.sharedTitle")).setHeading();
+    for (const { item, label, folder } of items) {
+      const choice = shares.choices[item];
+      const byDefault = shares.defaults.includes(item);
+      const row = new Setting(el)
+        .setName(folder !== null && manager ? `${label} ${t("s.yours")}` : label)
+        .setDesc(choice === undefined ? (byDefault ? t("s.sharedDefault") : "") : byDefault && !choice ? t("s.sharedOff") : "");
+      row.addToggle((tg) => tg.setValue(shares.shared.includes(item)).onChange(async (v) => {
+        try {
+          await p.setShare(item, v);
+        } catch (e) {
+          new Notice(t("s.sharedFailed", { cause: e instanceof Error ? e.message : String(e) }));
+        }
+        again();
+      }));
+      if (choice !== undefined) {
+        row.addExtraButton((b) => b.setIcon("rotate-ccw").setTooltip(t("s.sharedReset")).onClick(async () => {
+          await p.setShare(item, null).catch(() => undefined);
+          again();
+        }));
+      }
+      if (folder !== null && manager) row.addButton((b) => b.setButtonText(t("s.install")).onClick(async () => { await p.installOnVault(folder); again(); }));
+    }
+    // The vault's plugins and the ones declined for good here, with their state on this device.
+    const ids = [...new Set([...shares.vaultPlugins, ...p.config.consent.never])];
+    if (ids.length === 0) return;
+    new Setting(el).setName(t("s.vaultPlugins")).setHeading();
+    const words = { enabled: t("s.vpEnabled"), disabled: t("s.vpDisabled"), pending: t("s.vpPending"), never: t("s.vpNever"), missing: t("s.vpMissing") };
+    for (const id of ids) {
+      const m = await p.localManifest(id);
+      const state = await p.vaultPluginState(id);
+      const row = new Setting(el).setName(`${m.name} ${m.version}`.trim() + (manager ? ` ${t("s.onVault")}` : "")).setDesc(words[state]);
+      if (state === "pending") row.addButton((b) => b.setButtonText(t("s.vpReview")).onClick(() => void p.reviewUpdate(id)));
+      if (state === "never") row.addButton((b) => b.setButtonText(t("s.vpAllow")).onClick(async () => { await p.allowAgain(id); again(); }));
+      if (manager && onVault.has(id)) {
+        if (state !== "missing" && state !== "never") row.addButton((b) => b.setButtonText(t("s.updateVault")).onClick(async () => { await p.installOnVault(id); again(); }));
+        row.addButton((b) => b.setButtonText(t("s.remove")).onClick(async () => { await p.removeFromVault(id); again(); }));
+      }
+    }
   }
 }
 

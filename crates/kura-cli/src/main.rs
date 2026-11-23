@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use kura_cli::commands::{self, Ctx, DeviceAction, Fail, TokenAction};
+use kura_cli::commands::{self, ConfigAction, Ctx, DeviceAction, Fail, TokenAction, VaultAction};
 
 #[derive(Parser)]
 #[command(
@@ -84,6 +84,16 @@ enum Command {
         #[command(subcommand)]
         action: TokenAction,
     },
+    /// Your Obsidian configuration: what your desktop and mobile share.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+    /// A vault's managers: plugins installed for every member.
+    Vault {
+        #[command(subcommand)]
+        action: VaultAction,
+    },
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -142,6 +152,8 @@ async fn main() -> ExitCode {
         Command::Devices { action } => commands::devices(ctx, action).await,
         Command::Token { action } => commands::token(ctx, action).await,
         Command::Search { vault, query } => commands::search(ctx, &vault, &query).await,
+        Command::Config { action } => commands::config_cmd(ctx, action).await,
+        Command::Vault { action } => commands::vault_cmd(ctx, action).await,
     };
     match result {
         Ok(code) => ExitCode::from(code),

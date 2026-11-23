@@ -140,6 +140,7 @@ sometimes, a `detail`. Match on `type`. The full list is in
 | `PUT .../chunks/{hash}` | 4 MiB |
 | `POST .../chunks/upload` (up to 1,000 records) | 4 MiB of chunks plus a header per record |
 | `PUT /v1/admin/documents` (up to 2,000 documents) | 4 MiB |
+| `PUT .../config/plugins/{id}` (three files, base64 in JSON; each at most the tenant's `maxFileSize`) | 48 MiB |
 
 A `chunks/batch` answer carries at most 4 MiB of chunks; the client asks
 again for the rest. `chunks/missing` takes up to 1,000 hashes. A larger body is `413 payload_too_large`.
@@ -250,6 +251,22 @@ Commits and changes.
 | `GET` | `/v1/vaults/{v}/entries` | `bearer_token` | Every live entry, by id: what `kura attach` matches local files against. |
 | `GET` | `/v1/vaults/{v}/events` | `ws_ticket` | The vault's notifications, over a WebSocket opened with a ticket. |
 | `POST` | `/v1/vaults/{v}/events/ticket` | `bearer_token` | A ticket for this device and vault. |
+
+### config
+
+Obsidian configuration: share choices and plugin installs (RFC 0010). The
+`space` parameter of `changes`, `entries` and commits also takes
+`config-shared` (your configuration shared by your desktop and mobile
+devices) and `config-vault` (plugin code installed on the vault; written by
+a manager's Obsidian device only). Every `/v1` answer carries
+`x-kura-server: kura-server/<version>`.
+
+| Method | Path | Auth | Summary |
+| --- | --- | --- | --- |
+| `PUT` | `/v1/vaults/{v}/config/plugins/{id}` | `bearer_token` | Install a plugin's code, written disabled on the devices that receive it: on the vault (a manager, never the console) or in your own configuration (`?target=vault\|shared\|desktop\|mobile`). |
+| `GET` | `/v1/vaults/{v}/config/shares` | `bearer_token` | Your choices of what crosses your desktop and mobile devices on a vault. |
+| `PUT` | `/v1/vaults/{v}/config/shares/{item}` | `bearer_token` | Share an item between your profiles, or keep it per profile, overriding the vault's default for you. |
+| `DELETE` | `/v1/vaults/{v}/config/shares/{item}` | `bearer_token` | Back to the vault's default for this item. |
 
 ### history
 
