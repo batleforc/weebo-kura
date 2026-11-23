@@ -2,6 +2,18 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.4.0](https://github.com/batleforc/weebo-kura/compare/e274211d4d1e3e6f9973d39c210bdd9206656e4f..v0.4.0) - 2026-11-23
+#### Features
+- configuration across profiles, plugins on a vault, client updates (RFC 0010) - ([eb5f873](https://github.com/batleforc/weebo-kura/commit/eb5f873b50e631dde62cf3f729f5a877e597cc1b)) - Max Batleforc, Claude Opus 5.5
+#### Bug Fixes
+- (**docs**) no bare <version> placeholder in the plugin guide (MDX tag) - ([b564c60](https://github.com/batleforc/weebo-kura/commit/b564c60b370c95d2c3a6683aa4c5121d5983cbd5)) - Max Batleforc, Claude Opus 5.5
+#### Documentation
+- (**rfc**) RFC 0010, configuration across profiles, plugins on a vault, client updates (Accepted) - ([dbf536b](https://github.com/batleforc/weebo-kura/commit/dbf536baa255d5cb4600081150661367f8a6db52)) - Max Batleforc, Claude Opus 5.5
+#### Miscellaneous Chores
+- (**version**) merge v0.3.1 - ([e274211](https://github.com/batleforc/weebo-kura/commit/e274211d4d1e3e6f9973d39c210bdd9206656e4f)) - Maxime
+
+- - -
+
 ## [v0.3.1](https://github.com/batleforc/weebo-kura/compare/3850f007360d5beda35701dd87c6a4fcf06b8373..v0.3.1) - 2026-11-22
 #### Bug Fixes
 - (**plugin**) merge #25, re-register an unknown device; Configuration tab always offered - ([98694fe](https://github.com/batleforc/weebo-kura/commit/98694fefd63da90aefd717abc42c9759dd0210c0)) - Maxime
