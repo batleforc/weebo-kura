@@ -2220,7 +2220,7 @@ dependencies = [
 
 [[package]]
 name = "kura-api"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "k8s-openapi",
  "kube",
@@ -2236,7 +2236,7 @@ dependencies = [
 
 [[package]]
 name = "kura-cli"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -2255,7 +2255,7 @@ dependencies = [
 
 [[package]]
 name = "kura-core"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "blake3",
  "caseless",
@@ -2273,7 +2273,7 @@ dependencies = [
 
 [[package]]
 name = "kura-crdgen"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2288,7 +2288,7 @@ dependencies = [
 
 [[package]]
 name = "kura-operator"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -2305,7 +2305,7 @@ dependencies = [
 
 [[package]]
 name = "kura-operator-adapters-inbound"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2325,7 +2325,7 @@ dependencies = [
 
 [[package]]
 name = "kura-operator-adapters-outbound"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2343,7 +2343,7 @@ dependencies = [
 
 [[package]]
 name = "kura-operator-application"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "kura-api",
@@ -2355,7 +2355,7 @@ dependencies = [
 
 [[package]]
 name = "kura-operator-domain"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "k8s-openapi",
  "kube",
@@ -2368,7 +2368,7 @@ dependencies = [
 
 [[package]]
 name = "kura-operator-testkit"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2395,7 +2395,7 @@ dependencies = [
 
 [[package]]
 name = "kura-server"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -2440,7 +2440,7 @@ dependencies = [
 
 [[package]]
 name = "kura-wasm"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "js-sys",
  "kura-core",
