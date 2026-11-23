@@ -102,3 +102,49 @@ async fn two_replicas_creating_one_data_key_keep_one() {
         .get_sample_count();
     assert!(calls >= 3, "{calls}");
 }
+
+/// Without Vault (`localSecrets`): a data key wrapped by the master key is
+/// stored wrapped, bound to its tenant, kept across restarts, refused by
+/// another master key. Opt-in: KURA_TEST_DATABASE_URL only.
+#[tokio::test]
+async fn local_master_key_wraps_data_keys() {
+    let Some(t) = test_db(module_path!()).await else {
+        return;
+    };
+    let tenant = t.tenant("a").await;
+    let id = t.vault(tenant, "a", "notes").await;
+    let master = || kura_server::store::crypto::DataKey::from_bytes(&[7u8; 32]).expect("32 bytes");
+    let k1 = DataKeys::local(master())
+        .get(&t.app, tenant, "a", id)
+        .await
+        .expect("created");
+    let wrapped: String = sqlx::query_scalar("SELECT wrapped_dek FROM vault WHERE id = $1")
+        .bind(id)
+        .fetch_one(&t.owner)
+        .await
+        .expect("row");
+    assert!(wrapped.starts_with(kura_server::store::keys::LOCAL_PREFIX));
+    let data = b"local".to_vec();
+    let h = ChunkHash::of(&data);
+    let sealed = seal(&k1, id, &h, &data).expect("seal");
+    // A restarted server with the same master key opens it.
+    let k2 = DataKeys::local(master())
+        .get(&t.app, tenant, "a", id)
+        .await
+        .expect("unwrapped");
+    assert_eq!(open(&k2, id, &h, &sealed).expect("same key"), data);
+    // Another master key, or the key moved to another tenant's name, does not.
+    let other = kura_server::store::crypto::DataKey::from_bytes(&[8u8; 32]).expect("32 bytes");
+    assert!(
+        DataKeys::local(other)
+            .get(&t.app, tenant, "a", id)
+            .await
+            .is_err()
+    );
+    assert!(
+        DataKeys::local(master())
+            .get(&t.app, tenant, "b", id)
+            .await
+            .is_err()
+    );
+}

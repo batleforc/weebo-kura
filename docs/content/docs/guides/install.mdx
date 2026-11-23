@@ -22,6 +22,12 @@ Obsidian plugin.
 The image is `ghcr.io/batleforc/kura-server` (linux/amd64). It runs as UID
 65532 with a read-only root filesystem.
 
+Without a cluster or without Vault, the server also runs on one host (the
+binary or the image under podman) with
+[`localSecrets`](/docs/guides/configuration#localsecrets): a master key file
+and a bucket file replace Vault, `KURA_DATABASE_URL` gives the database. The
+rest of this page is the Kubernetes install.
+
 ## Install
 
 <Steps>

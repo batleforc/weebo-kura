@@ -4,6 +4,11 @@
 //! back, so two replicas racing keep one key. Plaintext keys are cached at
 //! most 1,000, for 10 minutes: the one deliberate fail-open of a Vault outage
 //! (§10.2).
+//!
+//! Without Vault (`localSecrets`), a master key read from a file wraps each
+//! data key instead of Transit: AES-256-GCM, the tenant's key name as
+//! associated data, stored as `kura-local:v1:<base64>`. A key wrapped in one
+//! mode never opens in the other: switching modes is not supported.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -52,15 +57,85 @@ impl Slot {
     }
 }
 
+/// What wraps the data keys: Vault Transit, or a local master key.
+enum Wrapper {
+    Transit(Arc<Vault>),
+    Local(DataKey),
+}
+
+/// The prefix of a data key wrapped by the local master key.
+pub const LOCAL_PREFIX: &str = "kura-local:v1:";
+
+impl Wrapper {
+    async fn new_data_key(&self, transit: &str) -> Result<String, String> {
+        match self {
+            Self::Transit(v) => v
+                .new_data_key(transit)
+                .await
+                .map(|(_plain, wrapped)| wrapped)
+                .map_err(|e| e.to_string()),
+            Self::Local(master) => {
+                let mut dek = zeroize::Zeroizing::new([0u8; 32]);
+                aws_lc_rs::rand::fill(dek.as_mut_slice())
+                    .map_err(|_| "no randomness".to_owned())?;
+                let sealed = super::crypto::seal_value(master, transit.as_bytes(), dek.as_slice())
+                    .map_err(|e| e.to_string())?;
+                use base64::Engine as _;
+                Ok(format!(
+                    "{LOCAL_PREFIX}{}",
+                    base64::engine::general_purpose::STANDARD.encode(sealed)
+                ))
+            }
+        }
+    }
+
+    async fn unwrap(
+        &self,
+        transit: &str,
+        wrapped: &str,
+    ) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
+        match (self, wrapped.strip_prefix(LOCAL_PREFIX)) {
+            (Self::Transit(_), Some(_)) => {
+                Err("this data key was wrapped by a local master key, not Vault Transit".into())
+            }
+            (Self::Transit(v), None) => v
+                .unwrap_data_key(transit, wrapped)
+                .await
+                .map_err(|e| e.to_string()),
+            (Self::Local(master), Some(b64)) => {
+                use base64::Engine as _;
+                let sealed = base64::engine::general_purpose::STANDARD
+                    .decode(b64)
+                    .map_err(|e| e.to_string())?;
+                super::crypto::open_value(master, transit.as_bytes(), &sealed)
+                    .map_err(|e| e.to_string())
+            }
+            (Self::Local(_), None) => Err(
+                "this data key was wrapped by Vault Transit, but the server runs without Vault"
+                    .into(),
+            ),
+        }
+    }
+}
+
 pub struct DataKeys {
-    vault: Arc<Vault>,
+    wrapper: Wrapper,
     cache: Mutex<Cache>,
 }
 
 impl DataKeys {
     pub fn new(vault: Arc<Vault>) -> Self {
+        Self::with(Wrapper::Transit(vault))
+    }
+
+    /// Without Vault: data keys wrapped by this master key.
+    pub fn local(master: DataKey) -> Self {
+        Self::with(Wrapper::Local(master))
+    }
+
+    fn with(wrapper: Wrapper) -> Self {
         Self {
-            vault,
+            wrapper,
             cache: Mutex::new(HashMap::new()),
         }
     }
@@ -124,7 +199,7 @@ impl DataKeys {
         let (read, write) = slot.queries();
         let vault = id;
         let transit = transit_key_name(tenant_slug);
-        let unavailable = |e: crate::vault::VaultError| ApiError::Unavailable(e.to_string());
+        let unavailable = ApiError::Unavailable;
         let mut tx = db::begin_tenant(pool, tenant, None).await?;
         let stored: Option<String> = sqlx::query_scalar(read)
             .bind(vault)
@@ -134,8 +209,8 @@ impl DataKeys {
         let wrapped = if let Some(w) = stored {
             w
         } else {
-            let (_ours, wrapped) = self
-                .vault
+            let wrapped = self
+                .wrapper
                 .new_data_key(&transit)
                 .await
                 .map_err(unavailable)?;
@@ -154,8 +229,8 @@ impl DataKeys {
         };
         tx.commit().await?;
         let plain = self
-            .vault
-            .unwrap_data_key(&transit, &wrapped)
+            .wrapper
+            .unwrap(&transit, &wrapped)
             .await
             .map_err(unavailable)?;
         let key = Arc::new(

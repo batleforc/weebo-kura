@@ -5,6 +5,8 @@ description: Set up the three backups Kura needs, and restore a deployment from 
 
 A Kura deployment keeps its data in three places, and a restore needs all three: PostgreSQL (metadata and history), the bucket (encrypted content), and Vault or OpenBao (the keys that decrypt the content). This page shows how to back up each one with the Helm chart and how to restore them.
 
+Without Vault ([local mode](/docs/guides/secrets#local-mode)), the third place is the master key file instead: keep an offline copy of it, apart from the other two, and restore it with them. The Vault steps below do not apply.
+
 <Callout type="warn" title="All three are required">
 Without the Vault Transit keys, the chunks in the bucket cannot be decrypted: a database and a bucket restored without them hold nothing readable. Without the bucket, the database points to content that does not exist.
 </Callout>
