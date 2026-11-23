@@ -11,6 +11,7 @@
     "guides/install",
     "guides/authentik",
     "guides/configuration",
+    "guides/secrets",
     "guides/tenants-and-vaults",
     "guides/operator",
     "---Using Kura---",

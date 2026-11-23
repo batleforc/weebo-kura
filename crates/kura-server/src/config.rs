@@ -35,6 +35,11 @@ pub struct ServerConfig {
     /// Helm chart can render one file for every phase.
     #[serde(default)]
     pub vault: Option<VaultConfig>,
+    /// Without Vault nor Kubernetes: the bucket and the master key that
+    /// wraps every data key, read from files. Exclusive with `vault`; the
+    /// database URL then comes from `KURA_DATABASE_URL`.
+    #[serde(default)]
+    pub local_secrets: Option<LocalSecrets>,
     #[serde(default)]
     pub listen: ListenConfig,
     #[serde(default)]
@@ -274,6 +279,17 @@ pub struct VaultKubernetesAuth {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalSecrets {
+    /// 32 random bytes, base64 (`openssl rand -base64 32`). Losing it loses
+    /// every vault's data; keep a copy apart from the database backups.
+    pub master_key_file: std::path::PathBuf,
+    /// The bucket secret as JSON, as in Vault KV: `endpoint`, `bucket`,
+    /// `region` (optional), `accessKeyId`, `secretAccessKey`.
+    pub bucket_file: std::path::PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VaultSecrets {
     pub database: String,
     pub bucket: String,
@@ -336,6 +352,12 @@ impl ServerConfig {
         let de = serde_norway::Deserializer::from_str(content);
         let config: Self = serde_path_to_error::deserialize(de)
             .map_err(|e| invalid(&e.path().to_string(), e.into_inner().to_string()))?;
+        if config.vault.is_some() && config.local_secrets.is_some() {
+            return Err(invalid(
+                "localSecrets",
+                "set vault or localSecrets, not both".into(),
+            ));
+        }
         let issuer: Result<axum::http::Uri, _> = config.oidc.issuer.parse();
         let https = issuer.is_ok_and(|u| u.scheme_str() == Some("https") && u.host().is_some());
         if !https {
@@ -468,6 +490,19 @@ vault:
         assert_eq!(c.cors, CorsConfig::default());
         assert_eq!(c.listen, ListenConfig::default());
         assert_eq!(c.oidc.algorithms, vec![Algorithm::RS256]);
+    }
+
+    #[test]
+    fn local_secrets_replace_vault_never_join_it() {
+        let local = "localSecrets: { masterKeyFile: /etc/kura/master.key, bucketFile: /etc/kura/bucket.json }\n";
+        let without = EXAMPLE.split("vault:\n").next().unwrap().to_owned() + local;
+        let c = ServerConfig::parse("server.yaml", &without).unwrap();
+        assert!(c.vault.is_none());
+        assert_eq!(
+            c.local_secrets.unwrap().master_key_file,
+            std::path::PathBuf::from("/etc/kura/master.key")
+        );
+        assert!(err(&format!("{EXAMPLE}{local}")).contains("not both"));
     }
 
     #[test]

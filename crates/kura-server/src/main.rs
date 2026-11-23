@@ -106,6 +106,11 @@ async fn connect(
             anyhow::bail!("set {DATABASE_URL_ENV}, or configure `vault` in server.yaml")
         }
     };
+    let local = config
+        .local_secrets
+        .as_ref()
+        .map(kura_server::store::local_storage)
+        .transpose()?;
     let pool =
         kura_server::db::connect(&url, 16, Some(metrics.vault_epoch_changes_total.clone())).await?;
     kura_server::db::check_schema(&pool).await?;
@@ -186,6 +191,9 @@ async fn connect(
         state = state.with_storage(std::sync::Arc::new(kura_server::store::Storage::new(
             objects, keys,
         )));
+    }
+    if let Some(storage) = local {
+        state = state.with_storage(std::sync::Arc::new(storage));
     }
     Ok((state, vault, url))
 }

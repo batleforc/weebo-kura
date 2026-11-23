@@ -77,3 +77,28 @@ pub fn s3(bucket: &BucketSecret) -> Result<Arc<dyn ObjectStore>, StorageError> {
         .map_err(|e| StorageError(e.to_string()))?;
     Ok(Arc::new(store))
 }
+
+/// Object storage and data keys without Vault (`localSecrets`): the bucket
+/// secret and the master key read from their files.
+pub fn local_storage(c: &crate::config::LocalSecrets) -> Result<Storage, StorageError> {
+    use base64::Engine as _;
+    let read = |p: &std::path::Path| {
+        std::fs::read_to_string(p)
+            .map(zeroize::Zeroizing::new)
+            .map_err(|e| StorageError(format!("{}: {e}", p.display())))
+    };
+    let bucket: crate::vault::BucketSecret = serde_json::from_str(&read(&c.bucket_file)?)
+        .map_err(|e| StorageError(format!("{}: {e}", c.bucket_file.display())))?;
+    let raw = zeroize::Zeroizing::new(
+        base64::engine::general_purpose::STANDARD
+            .decode(read(&c.master_key_file)?.trim())
+            .map_err(|e| StorageError(format!("{}: {e}", c.master_key_file.display())))?,
+    );
+    let master = crypto::DataKey::from_bytes(&raw).map_err(|_| {
+        StorageError(format!(
+            "{}: expected 32 bytes, base64 (openssl rand -base64 32)",
+            c.master_key_file.display()
+        ))
+    })?;
+    Ok(Storage::new(s3(&bucket)?, keys::DataKeys::local(master)))
+}
