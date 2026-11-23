@@ -50,10 +50,32 @@ pub struct ServerConfig {
     /// Webhooks (RFC 0003 §4.1); absent: off, rule routes answer 409.
     #[serde(default)]
     pub notifications: NotificationsConfig,
+    /// Whether the server asks GitHub once a day for the latest release, to
+    /// tell platform admins in the console when it is behind. Default on;
+    /// off for an air-gapped install.
+    #[serde(default)]
+    pub update_check: UpdateCheckConfig,
     /// Where the `KuraTenant` and `KuraVault` documents come from (RFC 0009
     /// §4.1); absent: the files of `KURA_CONFIG_DIR`.
     #[serde(default)]
     pub documents: DocumentsConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateCheckConfig {
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+impl Default for UpdateCheckConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+const fn yes() -> bool {
+    true
 }
 
 /// The one source of the documents: files and the operator never merge.

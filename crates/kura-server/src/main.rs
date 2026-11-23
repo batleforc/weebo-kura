@@ -293,6 +293,12 @@ fn spawn_background(
     shutdown: &CancellationToken,
 ) -> Vec<kura_server::Background> {
     let mut background = kura_server::background(state, config_dir, shutdown);
+    if config.update_check.enabled {
+        background.push(Box::pin(kura_server::updates::run(
+            state.clone(),
+            shutdown.clone(),
+        )));
+    }
     background.push(Box::pin(kura_server::maintenance::run(
         state.clone(),
         config.maintenance.window,

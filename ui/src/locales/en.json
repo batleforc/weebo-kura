@@ -613,5 +613,9 @@
         "noMain": "This zip holds a manifest.json but no main.js."
       }
     }
+  },
+  "update": {
+    "available": "Kura {latest} is available; this server runs {current}. Its operators update it.",
+    "notes": "Release notes"
   }
 }

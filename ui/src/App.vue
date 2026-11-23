@@ -3,7 +3,8 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
-import { ensureDevice, signOut } from "@/api/client";
+import { ensureDevice, signOut, withDevice } from "@/api/client";
+import { adminStatus } from "@/api/generated/sdk.gen";
 import { problemType } from "@/api/problem";
 import { useSession } from "@/auth/session";
 import PrefsMenu from "@/components/PrefsMenu.vue";
@@ -50,6 +51,22 @@ const wide = ref(
 const shell = computed(() => route.meta.access === "member");
 /** Signed in, but in no tenant: registering a device is refused (§4.5). */
 const noTenant = ref(false);
+/** For a platform admin: a newer release than this server, from `GET /v1/admin/status`. */
+const update = ref<{ current: string; latest: string } | null>(null);
+async function checkUpdate(): Promise<void> {
+  try {
+    const s = await withDevice(
+      async (headers) =>
+        (await adminStatus({ headers, throwOnError: true })).data,
+    );
+    update.value =
+      s.updateAvailable && s.latestVersion
+        ? { current: s.serverVersion, latest: s.latestVersion }
+        : null;
+  } catch {
+    // The notice is a courtesy: no word when the status cannot be read.
+  }
+}
 
 watch(
   () => shell.value && session.authenticated,
@@ -61,6 +78,7 @@ watch(
       if (!noTenant.value) {
         await ensureDevice();
         await vaultStore.load().catch(() => undefined);
+        if (me.platformAdmin) void checkUpdate();
       }
     } catch (error) {
       noTenant.value = problemType(error) === "insufficient_role";
@@ -144,6 +162,10 @@ async function leave(): Promise<void> {
         </div>
       </aside>
       <main id="main" tabindex="-1" class="min-w-0 flex-[999_1_560px] px-4 py-8 outline-none sm:px-8 md:px-12 md:py-10">
+        <p v-if="update" role="status" class="mb-6 border border-rule px-3 py-2" data-test="update-available">
+          {{ t("update.available", update) }}
+          <a :href="`https://github.com/batleforc/weebo-kura/releases/tag/v${update.latest}`" target="_blank" rel="noopener noreferrer" class="underline">{{ t("update.notes") }}</a>
+        </p>
         <div v-if="noTenant" role="alert" data-test="no-tenant">
           <p>{{ t("noTenant.text", { name: meStore.me?.name ?? meStore.me?.subject ?? "" }) }}</p>
           <p>{{ t("noTenant.hint") }}</p>

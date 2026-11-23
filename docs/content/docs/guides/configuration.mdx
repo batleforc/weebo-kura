@@ -193,6 +193,21 @@ answers `404`. See [Web console](/docs/guides/web-console).
 
 `ui.oidc` is required as soon as `ui` appears, even with `enabled: false`.
 
+## `updateCheck`
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `updateCheck.enabled` | bool | `true` | Once a day (and at start), the server reads the latest published release from `https://api.github.com/repos/batleforc/weebo-kura/releases/latest`. When it is newer than the server, the console tells platform admins, and `GET /v1/admin/status` says so (`serverVersion`, `latestVersion`, `updateAvailable`). Set `false` on an air-gapped install. |
+
+The request carries nothing of the instance but `kura-server/<version>` as
+its User-Agent. A failure is logged at `debug` and retried the next day;
+each replica checks on its own.
+
+```yaml
+updateCheck:
+  enabled: false
+```
+
 ## `notifications`
 
 Webhooks. Absent, or `enabled: false`: no delivery worker runs, and the
