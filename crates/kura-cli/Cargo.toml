@@ -25,7 +25,7 @@ uuid = { workspace = true, features = ["v4"] }
 base64 = { workspace = true }
 zip = { workspace = true }
 # `kura watch` (§6.3); the version axum links, TLS through rustls and the OS roots.
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 futures-util = "0.3"
 
 [lints]
