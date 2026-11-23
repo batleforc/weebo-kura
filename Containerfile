@@ -2,7 +2,7 @@
 # Keep Containerfile.hardened in step with this file.
 # ── Build stage ───────────────────────────────────────────────────────────────
 # Pin every base by tag AND digest; updatecli moves both. Same Rust as mise.toml.
-FROM docker.io/library/rust:1.100-slim-trixie@sha256:e9d95b74296f7126a83ae3d041aeaba1ff4c478f13abc5cc034fcf7c131c3d4a AS chef
+FROM docker.io/library/rust:1.100-slim-trixie@sha256:6f14b2b4b278ec0d50aa1d69541c304ce0f95e0f6268487aa9924af1c2e9aebe AS chef
 
 # cargo-chef builds the dependency layer from a recipe. Pinned like the bases.
 RUN cargo install --locked cargo-chef@0.1.78
@@ -51,7 +51,7 @@ RUN cargo build --locked -p kura-wasm --profile wasm --target wasm32-unknown-unk
  && /opt/binaryen-version_133/bin/wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int \
       --enable-sign-ext --enable-mutable-globals -o /build/wasm/kura_bg.wasm /build/wasm/kura_bg.wasm
 
-FROM docker.io/library/node:24-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0 AS plugin-builder
+FROM docker.io/library/node:26-trixie-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc AS plugin-builder
 WORKDIR /src/plugin
 RUN npm install -g --ignore-scripts pnpm@12.21.0
 COPY plugin/package.json plugin/pnpm-lock.yaml plugin/pnpm-workspace.yaml ./
@@ -65,7 +65,7 @@ RUN pnpm run build
 # Not from the built binary, as batlehub does: `task openapi:check` already
 # holds docs/api/openapi.json equal to the handlers, and this stage then does
 # not wait for the Rust build (the template's TD-0003 §4). Same Node as mise.toml.
-FROM docker.io/library/node:24-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0 AS ui-builder
+FROM docker.io/library/node:26-trixie-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc AS ui-builder
 WORKDIR /src/ui
 # Keep in step with `packageManager` in ui/package.json; no install scripts.
 RUN npm install -g --ignore-scripts pnpm@12.21.0
@@ -81,7 +81,7 @@ RUN KURA_PLUGIN_REQUIRED=1 pnpm run build
 # ── Runtime image ─────────────────────────────────────────────────────────────
 # The process writes nothing to disk, so the chart runs it with a read-only root
 # filesystem and no writable directory is pre-created.
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2 AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:532c7a94f9e96ba9db75eb9388f4227751131c7cb0a411d1a8521af4096135de AS runtime
 
 COPY --from=builder /build/target/release/kura-server /usr/local/bin/kura-server
 # The console, served under /app when `ui.enabled` (its default `ui.dir`).

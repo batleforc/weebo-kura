@@ -2,7 +2,7 @@
 # server's Containerfile: same pinned bases, cargo-chef, distroless runtime.
 # Keep its FROM lines in step with Containerfile (updatecli moves all three).
 # ── Build stage ───────────────────────────────────────────────────────────────
-FROM docker.io/library/rust:1.100-slim-trixie@sha256:e9d95b74296f7126a83ae3d041aeaba1ff4c478f13abc5cc034fcf7c131c3d4a AS chef
+FROM docker.io/library/rust:1.100-slim-trixie@sha256:6f14b2b4b278ec0d50aa1d69541c304ce0f95e0f6268487aa9924af1c2e9aebe AS chef
 
 RUN cargo install --locked cargo-chef@0.1.78
 
@@ -28,7 +28,7 @@ RUN cargo build --locked --release -p kura-operator
 
 # ── Runtime image ─────────────────────────────────────────────────────────────
 # Writes nothing to disk but the kit's /tmp (an emptyDir in the chart).
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2 AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:532c7a94f9e96ba9db75eb9388f4227751131c7cb0a411d1a8521af4096135de AS runtime
 
 COPY --from=builder /build/target/release/kura-operator /usr/local/bin/kura-operator
 
