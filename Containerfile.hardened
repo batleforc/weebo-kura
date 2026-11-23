@@ -2,7 +2,7 @@
 # Twin of Containerfile on Red Hat Hardened Images, not built in CI; keep the two in step.
 # ── Build stage ───────────────────────────────────────────────────────────────
 # Pin every base by tag AND digest; updatecli moves both. The hardened builder tracks its own latest Rust.
-FROM registry.access.redhat.com/hi/rust:latest-builder@sha256:04303ce3a60df5fdb8d3f0effdc2b2f1946d8eb85e0ea58075a89c31c96757f3 AS chef
+FROM registry.access.redhat.com/hi/rust:latest-builder@sha256:4e14f4e5a7e6fa8a75b1495dfd9d63776e90af780fd7078a67b03aca9e1225b7 AS chef
 
 RUN dnf install -y gcc && dnf clean all
 
@@ -53,7 +53,7 @@ RUN cargo build --locked -p kura-wasm --profile wasm --target wasm32-unknown-unk
  && /opt/binaryen-version_133/bin/wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int \
       --enable-sign-ext --enable-mutable-globals -o /build/wasm/kura_bg.wasm /build/wasm/kura_bg.wasm
 
-FROM registry.access.redhat.com/hi/nodejs:24-builder@sha256:0d0b51223986aafa26289d4f7c02aeb13558f104c9fac4813a74e00a92eb12c8 AS plugin-builder
+FROM registry.access.redhat.com/hi/nodejs:26-builder@sha256:9f201933d6f2eba8eb4684b20ef3bc9293cdb22657dbf7aa96b24935e55bc2c1 AS plugin-builder
 # The hardened builder runs as a non-root user; the global pnpm install needs root.
 USER root
 WORKDIR /src/plugin
@@ -66,7 +66,7 @@ COPY --from=wasm-builder /build/wasm/ src/wasm/
 RUN pnpm run build
 
 # ── UI: the web console (RFC 0003 §6.1), built from the committed spec ────────
-FROM registry.access.redhat.com/hi/nodejs:24-builder@sha256:0d0b51223986aafa26289d4f7c02aeb13558f104c9fac4813a74e00a92eb12c8 AS ui-builder
+FROM registry.access.redhat.com/hi/nodejs:26-builder@sha256:9f201933d6f2eba8eb4684b20ef3bc9293cdb22657dbf7aa96b24935e55bc2c1 AS ui-builder
 # The hardened builder runs as a non-root user; the global pnpm install needs root.
 USER root
 WORKDIR /src/ui
@@ -82,7 +82,7 @@ RUN KURA_PLUGIN_REQUIRED=1 pnpm run build
 # ── Runtime image ─────────────────────────────────────────────────────────────
 # The process writes nothing to disk, so the chart runs it with a read-only root
 # filesystem and no writable directory is pre-created.
-FROM registry.access.redhat.com/hi/core-runtime:latest@sha256:81280d7fd6afa7a3d2a6da2e90e545cf8e5d187c80a69b2a1c875fdcd731aaed AS runtime
+FROM registry.access.redhat.com/hi/core-runtime:latest@sha256:33539044661f70521596967ee6581b12cc49c30c9f93bf5c52b622d2e9aa8b01 AS runtime
 
 COPY --from=builder /build/target/release/kura-server /usr/local/bin/kura-server
 # The console, served under /app when `ui.enabled` (its default `ui.dir`).
