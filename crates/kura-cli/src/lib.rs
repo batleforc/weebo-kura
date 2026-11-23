@@ -5,3 +5,4 @@ pub mod api;
 pub mod commands;
 pub mod config;
 pub mod fs;
+pub mod plugin_zip;

@@ -122,6 +122,19 @@ spec:
                       - hotkeys
                       type: string
                     type: array
+                  sharedByDefault:
+                    description: |-
+                      Items shared between a member's desktop and mobile devices unless the
+                      member says no (RFC 0010 §4.1): `plugin:<id>` for one plugin, or
+                      `snippets`, `themes`, `hotkeys` as a whole. Absent: nothing.
+                    items:
+                      type: string
+                    type: array
+                  vaultPlugins:
+                    description: |-
+                      Whether the vault's managers may install plugins on the vault, whose
+                      code then reaches every member's devices, disabled (RFC 0010 §4.2).
+                    type: boolean
                 type: object
               deletionPolicy:
                 default: Orphan

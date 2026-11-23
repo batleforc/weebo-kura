@@ -19,6 +19,9 @@ pub struct Config {
     pub device_name: String,
     #[serde(default)]
     pub vaults: BTreeMap<String, Attached>,
+    /// When the version notice was last shown, ms (RFC 0010 §4.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_notice: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

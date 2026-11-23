@@ -25,3 +25,4 @@
 .kura-manual > summary { cursor: pointer; color: var(--text-muted); padding: var(--size-4-1) 0; }
 .kura-manual-actions { display: flex; justify-content: flex-end; padding-top: var(--size-4-2); }
 .kura-notice-action { margin-left: var(--size-4-2); }
+.kura-verified { color: var(--text-success); }

@@ -2348,6 +2348,332 @@
         ]
       }
     },
+    "/v1/vaults/{v}/config/plugins/{id}": {
+      "put": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Install a plugin's code, written disabled on the devices that receive it:\non the vault (a manager, from an Obsidian device or the CLI) or in your\nown configuration (the console too).",
+        "operationId": "install_plugin",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The plugin's id, as its manifest names it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "description": "`vault` (a manager's Obsidian device only), `shared`, `desktop` or\n`mobile` (the caller's own configuration).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallPlugin"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Installed, as one commit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Installed"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A manifest not JSON or naming another id, a missing file, a vault without plugins",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "On the vault: not a manager, or the console",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "A file over the tenant's maxFileSize",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/config/shares": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Your choices of what crosses your desktop and mobile devices on a vault.",
+        "operationId": "get_shares",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Defaults, your choices, the effective set, the vault's plugins",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Shares"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A restricted viewer",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such vault",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/vaults/{v}/config/shares/{item}": {
+      "put": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Share an item between your profiles, or keep it per profile, overriding\nthe vault's default for you.",
+        "operationId": "put_share",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "item",
+            "in": "path",
+            "description": "`plugin:<id>`, `snippets`, `themes` or `hotkeys`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutShare"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Your choices now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Shares"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An item not well formed, or more than 200 choices",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A restricted viewer",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Back to the vault's default for this item.",
+        "operationId": "delete_share",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "path",
+            "description": "Vault id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "item",
+            "in": "path",
+            "description": "`plugin:<id>`, `snippets`, `themes` or `hotkeys`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Kura-Device",
+            "in": "header",
+            "description": "This device",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Your choices now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Shares"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An item not well formed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/v1/vaults/{v}/entries": {
       "get": {
         "tags": [
@@ -4013,6 +4339,88 @@
           }
         }
       },
+      "InstallPlugin": {
+        "type": "object",
+        "description": "A plugin's three code files, base64.",
+        "required": [
+          "manifest",
+          "main"
+        ],
+        "properties": {
+          "main": {
+            "type": "string",
+            "description": "`main.js`, base64."
+          },
+          "manifest": {
+            "type": "string",
+            "description": "`manifest.json`, base64."
+          },
+          "styles": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`styles.css`, base64, when the plugin has one."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Installed": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "space",
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstalledFile"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "The manifest's `name`, else the id."
+          },
+          "space": {
+            "type": "string",
+            "description": "`config-vault`, `config-shared` or `config`."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "InstalledFile": {
+        "type": "object",
+        "required": [
+          "name",
+          "size",
+          "sha256"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Hex SHA-256 of the file."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "IssuedToken": {
         "allOf": [
           {
@@ -4318,6 +4726,18 @@
         },
         "additionalProperties": false
       },
+      "PutShare": {
+        "type": "object",
+        "required": [
+          "shared"
+        ],
+        "properties": {
+          "shared": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
       "RegisterDevice": {
         "type": "object",
         "required": [
@@ -4604,6 +5024,48 @@
           }
         }
       },
+      "Shares": {
+        "type": "object",
+        "required": [
+          "defaults",
+          "choices",
+          "shared",
+          "vaultPlugins"
+        ],
+        "properties": {
+          "choices": {
+            "type": "object",
+            "description": "Your own choices, by item; an absent item follows the default.",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "defaults": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The vault's `sharedByDefault`."
+          },
+          "shared": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What is shared for you: the defaults overridden by your choices."
+          },
+          "vaultPlugins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The plugins installed on the vault by its managers."
+          }
+        }
+      },
       "SyncCounts": {
         "type": "object",
         "description": "`PUT /vaults/{v}/sync/report` (RFC 0006 phase 3): what the device's last\nrun left on its side, as counts only, never paths.",
@@ -4812,6 +5274,13 @@
             "$ref": "#/components/schemas/ChunkingView",
             "description": "FastCDC parameters in bytes; clients never use a compiled-in value (§6.4)."
           },
+          "configShared": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The items shared between your desktop and mobile devices: the\nvault's defaults overridden by your own choices (RFC 0010 §4.4)."
+          },
           "configSync": {
             "type": "array",
             "items": {
@@ -4893,6 +5362,10 @@
               "null"
             ],
             "description": "When `headSeq` was written, RFC 3339 (RFC 0005 §4.5, \"updated\");\nabsent before the first commit or once that revision is purged."
+          },
+          "vaultPlugins": {
+            "type": "boolean",
+            "description": "Whether the vault's managers may install plugins on it (RFC 0010)."
           }
         }
       }
@@ -4956,6 +5429,10 @@
     {
       "name": "search",
       "description": "Opt-in full-text search"
+    },
+    {
+      "name": "config",
+      "description": "Obsidian configuration: share choices and plugin installs (RFC 0010)"
     }
   ]
 }

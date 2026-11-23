@@ -3,7 +3,12 @@
 //! and the exit codes. Opt-in: PostgreSQL, Vault (or OpenBao) and S3, as
 //! `tests/chunks.rs`.
 
-#![expect(clippy::unwrap_used, reason = "test helpers fail the test on purpose")]
+#![expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    reason = "test helpers fail the test on purpose; the test zip is a few bytes"
+)]
 
 mod common;
 
@@ -1085,4 +1090,287 @@ async fn folders_sync_between_devices() {
     assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
     assert!(fa.join("JDR/Kept/mine.md").is_file());
     assert!(!fa.join("JDR/Empty").exists());
+}
+
+/// A device of `sub` with `profile`, registered over the API: the CLI only
+/// registers desktops. Returns (token, device id).
+async fn device_of(e: &common::app::Env, sub: &str, profile: &str) -> (String, String) {
+    let tok = e
+        .key
+        .token(sub, &format!("s-{sub}-{profile}"), &["maxime-members"]);
+    let (st, b) = e
+        .call(
+            "POST",
+            "/v1/devices",
+            &tok,
+            None,
+            Some(serde_json::json!({ "name": format!("{sub}-{profile}"), "profile": profile })),
+        )
+        .await;
+    assert!(st.is_success(), "{b}");
+    (tok, b["id"].as_str().unwrap().to_owned())
+}
+
+/// The live paths of a configuration space, as `(tok, device)` sees them.
+async fn space_paths(
+    e: &common::app::Env,
+    v: &str,
+    (tok, dev): &(String, String),
+    space: &str,
+) -> Vec<String> {
+    let (st, b) = e
+        .call(
+            "GET",
+            &format!("/v1/vaults/{v}/changes?since=0&space={space}"),
+            tok,
+            Some(dev),
+            None,
+        )
+        .await;
+    assert!(st.is_success(), "{space}: {b}");
+    let mut p: Vec<String> = b["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["deleted"] != serde_json::json!(true))
+        .map(|i| i["path"].as_str().unwrap().to_owned())
+        .collect();
+    p.sort();
+    p
+}
+
+/// RFC 0010 §6.3, CLI: the default shared items and a plugin shared with
+/// `kura config share` go to config-shared, reach the member's phone and
+/// another desktop, and an edit comes back through `kura sync`.
+#[tokio::test]
+async fn the_cli_syncs_shared_configuration_both_ways() {
+    let Some(st) = storage(module_path!()).await else {
+        return;
+    };
+    let Some(e) = env_with(module_path!(), Some(st)).await else {
+        return;
+    };
+    let docs = common::app::CONFIG.replace(
+        "  tenantRef: { name: maxime }\n  bindings:",
+        "  tenantRef: { name: maxime }\n  configSync: { categories: [plugins, snippets], sharedByDefault: [snippets] }\n  bindings:",
+    );
+    apply_docs(&e, &dir("shared-docs"), &docs).await;
+    let server = serve(&e);
+    let v = common::app::vault_id(&e, "knowledge").await;
+    let ctx = |home: &str, sid: &str| Ctx {
+        home: dir(home),
+        access_token: Some(e.key.token("u1", sid, &["maxime-members"])),
+    };
+    let (a, a2) = (ctx("sh-home-a", "sha"), ctx("sh-home-a2", "sha2"));
+    for (c, n) in [(&a, "desk"), (&a2, "laptop")] {
+        let r = commands::login(
+            c,
+            server.clone(),
+            "https://auth.example.org/application/o/kura/".into(),
+            "kura-cli".into(),
+            Some(n.into()),
+        )
+        .await;
+        assert_eq!(code(r), 0);
+    }
+    let phone = device_of(&e, "u1", "mobile").await;
+    let (fa, fa2) = (dir("sh-a"), dir("sh-a2"));
+    let obs = fa.join(".obsidian");
+    std::fs::create_dir_all(obs.join("plugins/dataview")).unwrap();
+    std::fs::create_dir_all(obs.join("snippets")).unwrap();
+    std::fs::create_dir_all(fa2.join(".obsidian")).unwrap();
+    std::fs::write(obs.join("plugins/dataview/main.js"), "module.exports = {};").unwrap();
+    std::fs::write(obs.join("snippets/wide.css"), ".x{}").unwrap();
+    assert_eq!(
+        code(commands::attach(&a, "knowledge", fa.clone(), true).await),
+        0
+    );
+    assert_eq!(
+        space_paths(&e, &v, &phone, "config-shared").await,
+        ["snippets/wide.css"]
+    );
+    assert!(
+        space_paths(&e, &v, &phone, "config").await.is_empty(),
+        "the phone's own profile"
+    );
+
+    let share = |item: &str, state| commands::ConfigAction::Share {
+        vault: "knowledge".into(),
+        item: item.into(),
+        state,
+    };
+    let on = commands::ShareState::On;
+    assert_eq!(
+        code(commands::config_cmd(&a, share("plugin:dataview", on)).await),
+        0
+    );
+    assert_eq!(
+        code(commands::config_cmd(&a, share("bad/../item", on)).await),
+        3
+    );
+    assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
+    assert_eq!(
+        space_paths(&e, &v, &phone, "config-shared").await,
+        ["plugins/dataview/main.js", "snippets/wide.css"]
+    );
+
+    assert_eq!(
+        code(commands::attach(&a2, "knowledge", fa2.clone(), true).await),
+        0
+    );
+    let read = |f: &Path, p: &str| std::fs::read_to_string(f.join(".obsidian").join(p)).ok();
+    assert_eq!(
+        read(&fa2, "plugins/dataview/main.js").as_deref(),
+        Some("module.exports = {};")
+    );
+    std::fs::write(fa2.join(".obsidian/snippets/wide.css"), ".y{}").unwrap();
+    assert_eq!(code(commands::sync_cmd(&a2, None, false, false).await), 0);
+    assert_eq!(code(commands::sync_cmd(&a, None, false, false).await), 0);
+    assert_eq!(read(&fa, "snippets/wide.css").as_deref(), Some(".y{}"));
+    assert!(fa.join(".kura/config-shared-state.json").exists());
+}
+
+/// A stored (uncompressed) zip of `(name, bytes)`: the test crate has no
+/// zip writer.
+fn stored_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+    fn crc32(data: &[u8]) -> u32 {
+        let mut c = !0u32;
+        for b in data {
+            c ^= u32::from(*b);
+            for _ in 0..8 {
+                c = if c & 1 == 1 {
+                    (c >> 1) ^ 0xEDB8_8320
+                } else {
+                    c >> 1
+                };
+            }
+        }
+        !c
+    }
+    let (mut out, mut central) = (Vec::new(), Vec::new());
+    for (name, data) in files {
+        let (crc, len, nlen) = (crc32(data), data.len() as u32, name.len() as u16);
+        let offset = out.len() as u32;
+        let common = |v: &mut Vec<u8>| {
+            for x in [20u16, 0, 0, 0, 0] {
+                v.extend(x.to_le_bytes());
+            }
+            for x in [crc, len, len] {
+                v.extend(x.to_le_bytes());
+            }
+            v.extend(nlen.to_le_bytes());
+            v.extend(0u16.to_le_bytes());
+        };
+        out.extend(0x0403_4b50u32.to_le_bytes());
+        common(&mut out);
+        out.extend(name.as_bytes());
+        out.extend(*data);
+        central.extend(0x0201_4b50u32.to_le_bytes());
+        central.extend(20u16.to_le_bytes());
+        common(&mut central);
+        for x in [0u16, 0, 0] {
+            central.extend(x.to_le_bytes());
+        }
+        central.extend(0u32.to_le_bytes());
+        central.extend(offset.to_le_bytes());
+        central.extend(name.as_bytes());
+    }
+    let (cd_offset, n) = (out.len() as u32, files.len() as u16);
+    let cd_len = central.len() as u32;
+    out.extend(central);
+    out.extend(0x0605_4b50u32.to_le_bytes());
+    for x in [0u16, 0, n, n] {
+        out.extend(x.to_le_bytes());
+    }
+    out.extend(cd_len.to_le_bytes());
+    out.extend(cd_offset.to_le_bytes());
+    out.extend(0u16.to_le_bytes());
+    out
+}
+
+/// RFC 0010 §4.5: a manager installs a release zip on the vault, a member
+/// is refused (3), a zip without a plugin is refused (3) before anything is
+/// sent, and the member's next sync pulls the vault's plugin.
+#[tokio::test]
+async fn a_manager_installs_a_plugin_zip_on_the_vault() {
+    let Some(st) = storage(module_path!()).await else {
+        return;
+    };
+    let Some(e) = env_with(module_path!(), Some(st)).await else {
+        return;
+    };
+    let docs = common::app::CONFIG.replace(
+        "  tenantRef: { name: maxime }\n  bindings:",
+        "  tenantRef: { name: maxime }\n  configSync: { categories: [plugins], vaultPlugins: true }\n  bindings:",
+    );
+    apply_docs(&e, &dir("install-docs"), &docs).await;
+    let server = serve(&e);
+    let (mgr, member) = (
+        Ctx {
+            home: dir("inst-home-m"),
+            access_token: Some(e.key.token("boss", "ib", &["maxime-owners"])),
+        },
+        Ctx {
+            home: dir("inst-home-u"),
+            access_token: Some(e.key.token("u1", "iu", &["maxime-members"])),
+        },
+    );
+    for (c, n) in [(&mgr, "boss-desk"), (&member, "desk")] {
+        let r = commands::login(
+            c,
+            server.clone(),
+            "https://auth.example.org/application/o/kura/".into(),
+            "kura-cli".into(),
+            Some(n.into()),
+        )
+        .await;
+        assert_eq!(code(r), 0);
+    }
+    let folder = dir("inst-zips");
+    let good = folder.join("ex-1.0.0.zip");
+    std::fs::write(
+        &good,
+        stored_zip(&[
+            (
+                "ex/manifest.json",
+                br#"{"id":"ex","name":"Ex","version":"1.0.0"}"#,
+            ),
+            ("ex/main.js", b"module.exports = {};"),
+            ("ex/styles.css", b".ex{}"),
+            ("ex/README.md", b"ignored"),
+        ]),
+    )
+    .unwrap();
+    let empty = folder.join("empty.zip");
+    std::fs::write(&empty, stored_zip(&[("main.js", b"x")])).unwrap();
+    let install = |zip: &Path| commands::VaultAction::Plugin {
+        action: commands::PluginAction::Install {
+            vault: "knowledge".into(),
+            zip: zip.to_path_buf(),
+        },
+    };
+    assert_eq!(code(commands::vault_cmd(&mgr, install(&empty)).await), 3);
+    assert_eq!(
+        code(commands::vault_cmd(&member, install(&good)).await),
+        3,
+        "not a manager"
+    );
+    assert_eq!(code(commands::vault_cmd(&mgr, install(&good)).await), 0);
+
+    let fu = dir("inst-u");
+    std::fs::create_dir_all(fu.join(".obsidian")).unwrap();
+    assert_eq!(
+        code(commands::attach(&member, "knowledge", fu.clone(), true).await),
+        0
+    );
+    let read = |p: &str| std::fs::read_to_string(fu.join(".obsidian/plugins/ex").join(p)).ok();
+    assert_eq!(read("main.js").as_deref(), Some("module.exports = {};"));
+    assert_eq!(read("styles.css").as_deref(), Some(".ex{}"));
+    assert_eq!(read("README.md"), None);
+    // A local edit of the vault's code is never pushed from a sync.
+    std::fs::write(fu.join(".obsidian/plugins/ex/main.js"), "evil()").unwrap();
+    assert_eq!(
+        code(commands::sync_cmd(&member, None, false, false).await),
+        0
+    );
 }

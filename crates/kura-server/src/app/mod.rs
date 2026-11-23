@@ -41,6 +41,7 @@ use crate::reconcile::snapshot::Snapshot;
         (name = "history", description = "Revisions and restore"),
         (name = "tokens", description = "Scoped tokens for non-interactive readers and writers"),
         (name = "search", description = "Opt-in full-text search"),
+        (name = "config", description = "Obsidian configuration: share choices and plugin installs (RFC 0010)"),
     ),
     components(schemas(Problem)),
     modifiers(&SecurityAddon),
@@ -297,6 +298,8 @@ fn vault_routes() -> OpenApiRouter<SharedState> {
         .routes(routes!(search::search))
         .routes(routes!(events::create_ticket))
         .routes(routes!(events::events))
+        .routes(routes!(shares::get_shares))
+        .routes(routes!(shares::put_share, shares::delete_share))
 }
 
 /// The routes with their own, larger body limit.
@@ -342,6 +345,14 @@ fn large_body_routes() -> OpenApiRouter<SharedState> {
                 .routes(routes!(documents::put_documents))
                 .layer(axum::extract::DefaultBodyLimit::max(
                     documents::MAX_BODY_BYTES,
+                )),
+        )
+        .merge(
+            // RFC 0010: a plugin's three files, base64.
+            OpenApiRouter::new()
+                .routes(routes!(shares::install_plugin))
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    shares::MAX_INSTALL_BODY,
                 )),
         )
         .merge(
@@ -535,11 +546,20 @@ async fn client_version(request: Request, next: Next) -> Response {
         .headers()
         .get(CLIENT_HEADER)
         .is_some_and(|h| h.to_str().map_or(true, client_too_old));
-    if too_old {
-        return ApiError::of(ProblemType::ClientTooOld).into_response();
-    }
-    next.run(request).await
+    let mut response = if too_old {
+        ApiError::of(ProblemType::ClientTooOld).into_response()
+    } else {
+        next.run(request).await
+    };
+    // RFC 0010 §4.2: clients compare their version with the server's.
+    response.headers_mut().insert(
+        SERVER_HEADER,
+        HeaderValue::from_static(concat!("kura-server/", env!("CARGO_PKG_VERSION"))),
+    );
+    response
 }
+
+pub const SERVER_HEADER: &str = "x-kura-server";
 
 pub mod admin;
 pub mod body;
@@ -555,6 +575,7 @@ pub mod me;
 pub mod notifications;
 pub mod reader;
 pub mod search;
+pub mod shares;
 pub mod space;
 pub mod sync_state;
 pub mod tokens;

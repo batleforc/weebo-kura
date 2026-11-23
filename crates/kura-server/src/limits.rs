@@ -55,6 +55,11 @@ pub const LIMITS: &[(&str, &str, u32)] = &[
     ("POST", "/v1/vaults/{v}/tokens", 10),
     ("GET", "/v1/vaults/{v}/tokens", 60),
     ("DELETE", "/v1/vaults/{v}/tokens/{t}", 10),
+    // RFC 0010: a member's share choices, and plugin installs.
+    ("GET", "/v1/vaults/{v}/config/shares", 60),
+    ("PUT", "/v1/vaults/{v}/config/shares/{item}", 30),
+    ("DELETE", "/v1/vaults/{v}/config/shares/{item}", 30),
+    ("PUT", "/v1/vaults/{v}/config/plugins/{id}", 10),
     // A socket is opened with a ticket, not a device: bounded by 4 per device instead.
     ("GET", "/v1/vaults/{v}/events", 60),
 ];

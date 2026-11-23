@@ -1,6 +1,7 @@
 // Fakes shared by the tests: an Obsidian adapter in memory, manual timers,
 // and a kura server in memory behind `fetch`.
 import type { Adapter } from "../src/host";
+import type { Shares } from "../src/remote";
 
 export class MemAdapter implements Adapter {
   files = new Map<string, { data: Uint8Array; mtime: number }>();
@@ -254,5 +255,36 @@ export class FakeServer {
       return json(200, { epoch: this.epoch, headSeq: this.seq, items });
     }
     return json(404, { type: "/v1/problems/not_found" });
+  };
+}
+
+/** A kura server whose configuration spaces (RFC 0010) are apart: commits
+ * and changes go to one `FakeServer` per space (`config` per device, as
+ * each test device is its own profile), the content to one shared store. */
+export class SpacedServer {
+  main = new FakeServer();
+  spaces = new Map<string, FakeServer>();
+  shares: Shares = { defaults: [], choices: {}, shared: [], vaultPlugins: [] };
+
+  space(name: string): FakeServer {
+    let s = this.spaces.get(name);
+    if (s === undefined) {
+      s = new FakeServer();
+      this.spaces.set(name, s);
+    }
+    return s;
+  }
+
+  fetch = async (url: string, init: RequestInit): Promise<Response> => {
+    const u = new URL(url);
+    const headers = new Headers(init.headers);
+    const key = (space: unknown): string => (space === "config" ? `config:${headers.get("x-kura-device") ?? ""}` : typeof space === "string" ? space : "notes");
+    if (u.pathname.endsWith("/config/shares")) return json(200, this.shares);
+    if (u.pathname.endsWith("/changes")) return this.space(key(u.searchParams.get("space"))).fetch(url, init);
+    if (u.pathname.endsWith("/commits")) {
+      const b: unknown = typeof init.body === "string" ? JSON.parse(init.body) : null;
+      return this.space(key(typeof b === "object" && b !== null && "space" in b ? b.space : undefined)).fetch(url, init);
+    }
+    return this.main.fetch(url, init);
   };
 }

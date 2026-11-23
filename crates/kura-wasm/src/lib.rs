@@ -532,3 +532,16 @@ pub fn path_problem(path: &str) -> Option<String> {
 pub fn config_synced(path: &str, categories: Vec<String>) -> bool {
     kura_core::config::synced(path, &categories)
 }
+
+/// Where a path under `.obsidian` lives (RFC 0010 §4.2): `vault`, `shared`,
+/// `profile`, or `null` when it does not sync; the server's rule, so each
+/// configuration pass offers only the paths of its own space.
+#[wasm_bindgen(js_name = configHome)]
+pub fn config_home(
+    path: &str,
+    categories: Vec<String>,
+    shared: Vec<String>,
+    vault_plugins: Vec<String>,
+) -> Option<String> {
+    kura_core::config::home(path, &categories, &shared, &vault_plugins).map(str::to_owned)
+}

@@ -6,6 +6,7 @@ import type { DeviceCode } from "./auth";
 import { t } from "./i18n";
 import type { Setup } from "./setup";
 import type { Report } from "./types";
+import type { Candidate } from "./update";
 
 interface Button {
   text: string;
@@ -111,6 +112,99 @@ export class PluginModal extends Ask {
     this.contentEl.createEl("p", { text: t("plugin.p1", { name: this.name, version: this.version }) });
     this.contentEl.createEl("p", { text: t("plugin.p2") });
     this.buttons({ text: t("plugin.keep") }, { text: t("plugin.enable"), cls: "mod-cta", yes: true });
+  }
+}
+
+/** A question with more than a yes: each button resolves its own answer;
+ * Escape gives the first one, the way out, which is also focused. */
+abstract class Choose<T> extends Modal {
+  private answer: ((v: T) => void) | null = null;
+  protected abstract readonly fallback: T;
+
+  choose(): Promise<T> {
+    return new Promise((resolve) => {
+      this.answer = resolve;
+      this.open();
+    });
+  }
+
+  protected options(list: { text: string; value: T; cls?: string }[]): void {
+    const row = this.contentEl.createDiv({ cls: "modal-button-container" });
+    list.forEach((b, i) => {
+      const el = row.createEl("button", { text: b.text, ...(b.cls === undefined ? {} : { cls: b.cls }) });
+      el.onclick = () => {
+        this.answer?.(b.value);
+        this.answer = null;
+        this.close();
+      };
+      if (i === 0) window.setTimeout(() => { el.focus(); }, 0);
+    });
+  }
+
+  override onClose(): void {
+    this.answer?.(this.fallback);
+    this.answer = null;
+    this.contentEl.empty();
+  }
+}
+
+/** RFC 0010 §4.5: a plugin the vault's managers installed, named with its source. */
+export class VaultPluginModal extends Choose<boolean | "never"> {
+  protected readonly fallback = false;
+  constructor(app: App, private readonly name: string, private readonly version: string, private readonly vault: string, private readonly code: string) {
+    super(app);
+  }
+  override onOpen(): void {
+    this.setTitle(t("vplugin.title"));
+    this.contentEl.createEl("p", { text: t("vplugin.p1", { name: this.name, version: this.version === "" ? "" : ` ${this.version}`, vault: this.vault }) });
+    this.contentEl.createEl("p", { text: t("vplugin.p2") });
+    if (this.code !== "") this.contentEl.createEl("p", { text: this.code, cls: "kura-why" });
+    this.options([
+      { text: t("plugin.keep"), value: false },
+      { text: t("vplugin.never"), value: "never" },
+      { text: t("plugin.enable"), value: true, cls: "mod-cta" },
+    ]);
+  }
+}
+
+/** RFC 0010 decision 10: the agreed version keeps running until the member agrees. */
+export class VaultUpdateModal extends Choose<"use" | "later" | "never"> {
+  protected readonly fallback = "later";
+  constructor(app: App, private readonly name: string, private readonly from: string, private readonly to: string, private readonly code: string) {
+    super(app);
+  }
+  override onOpen(): void {
+    this.setTitle(t("vupdate.title"));
+    this.contentEl.createEl("p", { text: t("vupdate.p1", { name: this.name, from: this.from, to: this.to }) });
+    this.contentEl.createEl("p", { text: t("vupdate.p2", { from: this.from }) });
+    if (this.code !== "") this.contentEl.createEl("p", { text: this.code, cls: "kura-why" });
+    this.options([
+      { text: t("vupdate.later"), value: "later" },
+      { text: t("vplugin.never"), value: "never" },
+      { text: t("vupdate.use", { to: this.to }), value: "use", cls: "mod-cta" },
+    ]);
+  }
+}
+
+/** RFC 0010 §4.5: version, source, sizes, hashes and provenance before anything is written. */
+export class UpdateModal extends Choose<boolean> {
+  protected readonly fallback = false;
+  constructor(app: App, private readonly from: string, private readonly c: Candidate) {
+    super(app);
+  }
+  override onOpen(): void {
+    this.setTitle(t("upd.title"));
+    const c = this.c;
+    this.contentEl.createEl("p", { text: t("upd.p1", { from: this.from, to: c.version, source: c.source }) });
+    const ul = this.contentEl.createEl("ul", { cls: "kura-list" });
+    for (const f of c.files) ul.createEl("li", { text: `${f.name}  ${(f.data.byteLength / 1024).toFixed(1)} KB  sha256 ${f.sha256.slice(0, 4)}…${f.sha256.slice(-4)}` });
+    // Decision 13: in words and colour; still allowed when not verified.
+    this.contentEl.createEl("p", { text: c.verified ? t("upd.verified") : t("upd.unverified"), cls: c.verified ? "kura-verified" : "mod-warning" });
+    this.contentEl.createEl("p", { text: t("upd.kept") });
+    this.options([
+      { text: t("upd.cancel"), value: false },
+      { text: t("upd.go"), value: true, cls: "mod-cta" },
+    ]);
   }
 }
 

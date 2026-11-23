@@ -275,6 +275,41 @@ pub struct ConfigSync {
     /// `hotkeys`.
     #[serde(default)]
     pub categories: Vec<ConfigCategory>,
+    /// Items shared between a member's desktop and mobile devices unless the
+    /// member says no (RFC 0010 §4.1): `plugin:<id>` for one plugin, or
+    /// `snippets`, `themes`, `hotkeys` as a whole. Absent: nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shared_by_default: Vec<String>,
+    /// Whether the vault's managers may install plugins on the vault, whose
+    /// code then reaches every member's devices, disabled (RFC 0010 §4.2).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub vault_plugins: bool,
+}
+
+impl ConfigSync {
+    /// The category an item belongs to, if the item is well formed (RFC 0010
+    /// §4.1): `plugin:<id>` with an Obsidian plugin id of 1 to 64 characters
+    /// of `a-z`, `0-9`, `-`, never `weebo-kura`; or a category but `plugins`.
+    pub fn item_category(item: &str) -> Option<ConfigCategory> {
+        if let Some(id) = item.strip_prefix("plugin:") {
+            return plugin_id_ok(id).then_some(ConfigCategory::Plugins);
+        }
+        match item {
+            "snippets" => Some(ConfigCategory::Snippets),
+            "themes" => Some(ConfigCategory::Themes),
+            "hotkeys" => Some(ConfigCategory::Hotkeys),
+            _ => None,
+        }
+    }
+}
+
+/// An Obsidian plugin id as a folder of `.obsidian/plugins/` (RFC 0010 §4.1).
+pub fn plugin_id_ok(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id != "weebo-kura"
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 /// A part of the `.obsidian` folder.

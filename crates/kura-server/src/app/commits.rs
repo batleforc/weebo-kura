@@ -368,7 +368,8 @@ pub async fn post_commit(
     let a = caller.access(&state, v).await?;
     let req = parse_request(&body)?;
     validate(&req)?;
-    let space = super::space::resolve(
+    let space = super::space::resolve_loaded(
+        &state.db,
         req.space.as_deref(),
         &a,
         // A token has no device, so never the configuration space (§6.8).
@@ -377,7 +378,8 @@ pub async fn post_commit(
             Writer::Key(_) => None,
         },
         super::space::Use::Write,
-    )?;
+    )
+    .await?;
     check_space_operations(&req, &space)?;
     // A token: the paths it names and the content it names, before any merge
     // work. The heads are checked again under the vault lock (RFC 0004 §6.5).
@@ -422,6 +424,9 @@ pub async fn post_commit(
         let retry = attempt < MERGE_ATTEMPTS;
         match decide(&cx, &merges, retry).await? {
             Decided::Done(r) => {
+                if space.namespace == "config:vault" {
+                    audit_vault_plugins(&a, sub, &req);
+                }
                 // RFC 0006: a device's push to the notes; a token records nothing.
                 if let Writer::Device(d) = &caller
                     && !space.is_config()
@@ -463,13 +468,37 @@ fn check_space_operations(
         if let Operation::Put { path, .. } = op
             && !space.allows(path.as_str())
         {
-            return Err(ApiError::with_detail(
-                ProblemType::InvalidPath,
-                format!("operations[{i}]: {path} is not in a synced configuration category"),
-            ));
+            let detail = if space.namespace == "config:vault" {
+                format!(
+                    "operations[{i}]: {path}: only a plugin's manifest.json, main.js and styles.css go on the vault"
+                )
+            } else {
+                format!(
+                    "operations[{i}]: {path} belongs to {}",
+                    space.home_of(path.as_str())
+                )
+            };
+            return Err(ApiError::with_detail(ProblemType::InvalidPath, detail));
         }
     }
     Ok(())
+}
+
+/// RFC 0010 §6.2: who sent what code to every member's devices.
+pub(super) fn audit_vault_plugins(a: &VaultAccess, sub: &str, req: &CommitRequest) {
+    for op in &req.operations {
+        match op {
+            Operation::Put { path, blob, .. } => tracing::info!(
+                target: "audit", event = "vault_plugin_written", %sub, vault = %a.vault,
+                plugin = kura_core::config::vault_code(path.as_str()).unwrap_or_default(),
+                path = %path, blob = %blob,
+            ),
+            Operation::Delete { entry, .. } => tracing::info!(
+                target: "audit", event = "vault_plugin_removed", %sub, vault = %a.vault, entry = %entry,
+            ),
+            Operation::Folder { .. } => {}
+        }
+    }
 }
 
 /// A token's commit: every path inside its scope and every blob already uploaded.
@@ -1836,8 +1865,15 @@ pub async fn restore_revision(
             .fetch_optional(&mut *tx)
             .await?
             .ok_or(ApiError::of(ProblemType::NotFound))?;
-    // A device rewrites its own profile's configuration only (RFC 0008 §4.3).
-    if namespace != "notes" && namespace != format!("config:{}", caller.profile) {
+    // A device rewrites its own profile's configuration only (RFC 0008
+    // §4.3), its owner's shared copy, and the vault's plugins if it manages
+    // the vault (RFC 0010 §6.2).
+    let allowed = match namespace.as_str() {
+        "notes" | "config:shared" => true,
+        "config:vault" => super::space::manages(&a),
+        ns => ns == format!("config:{}", caller.profile),
+    };
+    if !allowed {
         return Err(ApiError::with_detail(
             ProblemType::InsufficientRole,
             "a device restores its own profile's configuration only",
@@ -1880,9 +1916,9 @@ pub async fn restore_revision(
         super::space::Space::notes()
     } else {
         super::space::Space {
+            owner: (namespace != "config:vault").then(|| p.sub.clone()),
             namespace,
-            owner: Some(p.sub.clone()),
-            categories: a.config.clone(),
+            homes: super::space::homes(&state.db, &a, &p.sub).await?,
         }
     };
     let req = CommitRequest {
@@ -1895,7 +1931,7 @@ pub async fn restore_revision(
             size,
         }],
         epoch: None,
-        space: space.is_config().then(|| "config".to_owned()),
+        space: space.asked().map(str::to_owned),
     };
     let canonical = serde_json::to_vec(&req).map_err(|e| ApiError::Unavailable(e.to_string()))?;
     let cx = Cx {
@@ -1917,6 +1953,45 @@ pub async fn restore_revision(
             })
         }
         Decided::HeadMoved => Err(ApiError::Unavailable("restore raced a merge".into())),
+    }
+}
+
+/// One commit the server writes for a device, in a configuration space
+/// (RFC 0010 §4.4, the install route): the last write wins, nothing merges.
+pub(super) async fn commit_for(
+    state: &SharedState,
+    a: &VaultAccess,
+    device: Uuid,
+    sub: &str,
+    space: &super::space::Space,
+    operations: Vec<Operation>,
+) -> Result<CommitResponse, ApiError> {
+    let req = CommitRequest {
+        idempotency_key: format!("server-{}", Uuid::new_v4()),
+        operations,
+        epoch: None,
+        space: space.asked().map(str::to_owned),
+    };
+    let canonical = serde_json::to_vec(&req).map_err(|e| ApiError::Unavailable(e.to_string()))?;
+    let cx = Cx {
+        state,
+        a,
+        v: a.vault,
+        device,
+        key: None,
+        sub,
+        req: &req,
+        request_hash: ChunkHash::of(&canonical),
+        space,
+    };
+    match decide(&cx, &HashMap::new(), false).await? {
+        Decided::Done(r) => {
+            if space.namespace == "config:vault" {
+                audit_vault_plugins(a, sub, &req);
+            }
+            Ok(r)
+        }
+        Decided::HeadMoved => Err(ApiError::Unavailable("a configuration commit raced".into())),
     }
 }
 

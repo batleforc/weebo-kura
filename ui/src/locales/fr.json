@@ -536,7 +536,9 @@
     "profiles": "Profil d'appareil",
     "profile": {
       "desktop": "Ordinateur",
-      "mobile": "Mobile"
+      "mobile": "Mobile",
+      "shared": "Partagé",
+      "vault": "Plugins du coffre"
     },
     "syncedHere": "Synchronisé ici : {list}",
     "notSyncedHere": "Non synchronisé sur ce coffre : {list}",
@@ -546,7 +548,6 @@
       "plugins": "Plugins",
       "hotkeys": "Raccourcis"
     },
-    "empty": "Rien n'a encore été synchronisé depuis ce profil. Ouvrez le coffre dans Obsidian avec le plugin Kura sur un ordinateur (Ordinateur) ou un téléphone ou une tablette (Mobile) pour synchroniser ses réglages.",
     "failed": "Impossible de charger votre configuration",
     "notShown": {
       "code": "code, non affiché",
@@ -571,6 +572,46 @@
     "lastEdited": "Modifié le {date}",
     "lastEditedBy": "Modifié le {date} par {who}",
     "notSynced": "Ce coffre ne synchronise pas encore les réglages Obsidian. Ses gestionnaires l'activent avec configSync dans le document KuraVault du coffre.",
-    "notForYou": "Cette page ne vous est pas accessible."
+    "notForYou": "Cette page ne vous est pas accessible.",
+    "views": "Vues de la configuration",
+    "emptyOf": {
+      "desktop": "Rien n'a encore été synchronisé depuis ce profil. Ouvrez le coffre dans Obsidian avec le plugin Kura sur un ordinateur (Ordinateur) ou un téléphone ou une tablette (Mobile) pour synchroniser ses réglages.",
+      "mobile": "Rien n'a encore été synchronisé depuis ce profil. Ouvrez le coffre dans Obsidian avec le plugin Kura sur un ordinateur (Ordinateur) ou un téléphone ou une tablette (Mobile) pour synchroniser ses réglages.",
+      "shared": "Rien de partagé entre vos appareils n'est encore synchronisé.",
+      "vault": "Aucun plugin n'est installé sur ce coffre. Ses gestionnaires en installent un depuis Obsidian : réglages de Kura › Installer sur ce coffre."
+    },
+    "vaultFailed": "Impossible de charger les plugins du coffre.",
+    "shared": {
+      "list": "Partagé entre vos appareils de bureau et mobiles : {list}",
+      "none": "Rien n'est partagé entre vos appareils de bureau et mobiles.",
+      "not": "Non partagé : {list}",
+      "change": "Modifier",
+      "legend": "Partager entre mon ordinateur et mon mobile",
+      "default": "par défaut sur ce coffre",
+      "defaultOff": "vous avez désactivé le défaut du coffre"
+    },
+    "install": {
+      "title": "Installer un plugin pour vous",
+      "zip": "Zip de la version :",
+      "found": "Trouvé : {name} {version} ({id}) — {files}",
+      "for": "Pour :",
+      "target": {
+        "shared": "mes appareils de bureau et mobiles",
+        "desktop": "mes appareils de bureau",
+        "mobile": "mes appareils mobiles"
+      },
+      "disabled": "Il arrivera désactivé ; activez-le sur chaque appareil.",
+      "go": "Installer",
+      "done": "{name} est installé. Il arrivera désactivé ; activez-le sur chaque appareil.",
+      "problem": {
+        "noPlugin": "Ce zip ne contient aucun plugin Obsidian (pas de manifest.json avec un id).",
+        "unreadable": "Ce fichier n'a pas pu être lu comme un zip.",
+        "tooMany": "Ce zip a trop d'entrées (64 au plus).",
+        "tooLarge": "Ce zip est trop gros (64 Mio au plus, décompressé).",
+        "ratio": "Ce zip est compressé de façon suspecte : refusé.",
+        "kura": "C'est le plugin Kura lui-même : il se met à jour depuis ses propres réglages.",
+        "noMain": "Ce zip contient un manifest.json mais pas de main.js."
+      }
+    }
   }
 }

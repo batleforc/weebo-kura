@@ -192,6 +192,9 @@ importers:
       dompurify:
         specifier: ^3.4.18
         version: 3.4.18
+      fflate:
+        specifier: 0.8.3
+        version: 0.8.3
       markdown-it:
         specifier: ^15.0.3
         version: 15.0.3
@@ -1365,6 +1368,9 @@ packages:
     peerDependenciesMeta:
       picomatch:
         optional: true
+
+  fflate@0.8.3:
+    resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
 
   follow-redirects@1.16.3:
     resolution: {integrity: sha512-toOSoqN6d51Wjf1aOFJYcoVv1aND9rj/CwjLU0Vz40oDuSpWDayCeKe4JpL5NL0WdFvoOOCI3BRo69HahjbR1A==}
@@ -3251,6 +3257,8 @@ snapshots:
   fdir@6.5.0(picomatch@4.0.7):
     optionalDependencies:
       picomatch: 4.0.7
+
+  fflate@0.8.3: {}
 
   follow-redirects@1.16.3(debug@4.4.3):
     optionalDependencies:

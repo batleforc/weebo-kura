@@ -81,7 +81,7 @@ async fn open(
         sqlx::Transaction<'static, sqlx::Postgres>,
         Head,
         Vec<String>,
-        String,
+        super::space::Space,
         Uuid,
     ),
     ApiError,
@@ -92,7 +92,7 @@ async fn open(
         .device()
         .zip(reader.profile())
         .map(|((sub, _), p)| (sub, p));
-    let space = super::space::resolve(space, &ra.access, caller, usage)?;
+    let space = super::space::resolve_loaded(&state.db, space, &ra.access, caller, usage).await?;
     let mut tx = db::begin_tenant_snapshot(&state.db, ra.access.tenant, &reader.subject()).await?;
     let row = sqlx::query("SELECT epoch, head_seq, horizon_seq FROM vault WHERE id = $1")
         .bind(v)
@@ -103,13 +103,7 @@ async fn open(
         head_seq: row.try_get("head_seq")?,
         horizon_seq: row.try_get("horizon_seq")?,
     };
-    Ok((
-        tx,
-        head,
-        ra.scope.like_patterns(),
-        space.namespace,
-        ra.access.tenant,
-    ))
+    Ok((tx, head, ra.scope.like_patterns(), space, ra.access.tenant))
 }
 
 fn response(
@@ -155,8 +149,9 @@ pub async fn get_changes(
 ) -> Result<Json<ChangesResponse>, ApiError> {
     let q = query(q)?;
     let since = i64::try_from(q.since).map_err(|_| ApiError::of(ProblemType::HistoryRewound))?;
-    let (mut tx, head, under, ns, tenant) =
+    let (mut tx, head, under, space, tenant) =
         open(&state, &reader, v, q.space.as_deref(), Use::Changes).await?;
+    let ns = &space.namespace;
     // The server lost history this device has seen (§6.3, decision 32).
     if q.epoch.is_some_and(|e| e != head.epoch) || since > head.head_seq {
         return Err(ApiError::of(ProblemType::HistoryRewound));
@@ -183,12 +178,15 @@ pub async fn get_changes(
     .bind(since)
     .bind(PAGE.saturating_add(1))
     .bind(&under)
-    .bind(&ns)
+    .bind(ns)
     .bind(q.folders)
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
-    let page = response(&head, &rows, |h| h.seq.to_string())?;
+    let mut page = response(&head, &rows, |h| h.seq.to_string())?;
+    // RFC 0010: a path whose home is another space is not served here; the
+    // cursor still moves past it.
+    page.items.retain(|i| space.allows(i.path.as_str()));
     // The last page of a pass of the notes: the device now holds the head
     // (RFC 0006 §4.2). A token or the configuration space records nothing.
     if page.next.is_none()
@@ -222,7 +220,7 @@ pub async fn get_entries(
     q: Result<Query<EntriesQuery>, QueryRejection>,
 ) -> Result<Json<ChangesResponse>, ApiError> {
     let q = query(q)?;
-    let (mut tx, head, under, ns, _) = open(
+    let (mut tx, head, under, space, _) = open(
         &state,
         &reader,
         v,
@@ -232,6 +230,7 @@ pub async fn get_entries(
         },
     )
     .await?;
+    let ns = &space.namespace;
     let rows = sqlx::query(concat!(
         head_select!(),
         " WHERE e.vault_id = $1 AND NOT e.deleted AND ($2::uuid IS NULL OR e.id > $2) AND (e.path_key LIKE ANY($4) OR (r.blob_hash IS NULL AND NOT e.deleted AND e.path_key || '/' LIKE ANY($4))) AND ($6 OR r.blob_hash IS NOT NULL OR e.deleted) AND e.namespace = $5 ORDER BY e.id LIMIT $3"
@@ -240,12 +239,13 @@ pub async fn get_entries(
     .bind(q.after)
     .bind(PAGE.saturating_add(1))
     .bind(&under)
-    .bind(&ns)
+    .bind(ns)
     .bind(q.folders)
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
     let mut page = response(&head, &rows, |h| h.id.to_string())?;
+    page.items.retain(|i| space.allows(i.path.as_str()));
     // RFC 0008 §5.2: the console is not told a hidden file's hash.
     if reader.profile() == Some("web") {
         for item in &mut page.items {

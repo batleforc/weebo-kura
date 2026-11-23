@@ -38,6 +38,49 @@ pub fn plugin_of(path: &str) -> Option<(String, bool)> {
     Some((id.to_owned(), file == "main.js"))
 }
 
+/// The item a synced path belongs to (RFC 0010 §4.1): `plugin:<id>` for a
+/// plugin's folder (its id folded to lower case), else its category.
+pub fn item_of(path: &str) -> Option<String> {
+    match category(path)? {
+        "plugins" => plugin_of(path).map(|(id, _)| format!("plugin:{id}")),
+        c => Some(c.to_owned()),
+    }
+}
+
+/// The plugin whose code this path is, when it is one of the three files a
+/// vault may carry (RFC 0010 §4.2): `plugins/<id>/manifest.json`, `main.js`
+/// or `styles.css`, in any case. Never `data.json` or anything deeper.
+pub fn vault_code(path: &str) -> Option<String> {
+    category(path)?;
+    let lower = path.to_lowercase();
+    let rest = lower.strip_prefix("plugins/")?;
+    let (id, file) = rest.split_once('/')?;
+    matches!(file, "manifest.json" | "main.js" | "styles.css").then(|| id.to_owned())
+}
+
+/// Where a synced path lives (RFC 0010 §4.2): `vault` for the code of a
+/// plugin installed on the vault, `shared` for an item the member shares,
+/// else `profile`. `None`: it does not sync at all.
+pub fn home(
+    path: &str,
+    categories: &[String],
+    shared: &[String],
+    vault_plugins: &[String],
+) -> Option<&'static str> {
+    if !synced(path, categories) {
+        return None;
+    }
+    if vault_code(path).is_some_and(|id| vault_plugins.contains(&id)) {
+        return Some("vault");
+    }
+    let item = item_of(path)?;
+    Some(if shared.contains(&item) {
+        "shared"
+    } else {
+        "profile"
+    })
+}
+
 /// Whether a browser may be shown this file (RFC 0008 §4.2): a synced file
 /// that cannot hold a secret. A plugin's settings (`data.json`) and code
 /// (`main.js`), and anything not named here, are hidden.
@@ -102,6 +145,37 @@ mod tests {
         );
         assert!(!synced("plugins/WEEBO-KURA/data.json", &all));
         assert_eq!(plugin_of("snippets/a.css"), None);
+    }
+
+    #[test]
+    fn items_and_homes() {
+        assert_eq!(
+            item_of("plugins/DV/data.json").as_deref(),
+            Some("plugin:dv")
+        );
+        assert_eq!(item_of("snippets/a.css").as_deref(), Some("snippets"));
+        assert_eq!(item_of("hotkeys.json").as_deref(), Some("hotkeys"));
+        assert_eq!(item_of("plugins/weebo-kura/main.js"), None);
+        assert_eq!(vault_code("plugins/ex/MAIN.JS").as_deref(), Some("ex"));
+        assert_eq!(vault_code("plugins/ex/styles.css").as_deref(), Some("ex"));
+        for no in [
+            "plugins/ex/data.json",
+            "plugins/ex/a/main.js",
+            "snippets/main.js",
+        ] {
+            assert_eq!(vault_code(no), None, "{no}");
+        }
+        let all = ["plugins", "snippets", "themes", "hotkeys"].map(String::from);
+        let shared = ["plugin:dv".to_owned(), "snippets".to_owned()];
+        let vault = ["ex".to_owned()];
+        let h = |p| home(p, &all, &shared, &vault);
+        assert_eq!(h("plugins/ex/main.js"), Some("vault"));
+        assert_eq!(h("plugins/ex/data.json"), Some("profile"));
+        assert_eq!(h("plugins/dv/main.js"), Some("shared"));
+        assert_eq!(h("snippets/a.css"), Some("shared"));
+        assert_eq!(h("hotkeys.json"), Some("profile"));
+        assert_eq!(h("workspace.json"), None);
+        assert_eq!(home("hotkeys.json", &["plugins".into()], &[], &[]), None);
     }
 
     #[test]

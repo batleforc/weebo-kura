@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { Api, CLIENT, withDevice } from "../src/remote";
 import type { Fetch } from "../src/remote";
@@ -71,7 +72,7 @@ describe("the API client", () => {
       { id: "v2", name: "x", role: "viewer", chunking: { min: "a" } },
     ];
     expect(await api(() => Promise.resolve(json(200, vaults))).a.vaults()).toEqual([
-      { id: "v1", name: "notes", role: "editor", chunking: { min: 1, avg: 2, max: 3 }, configSync: ["plugins"] },
+      { id: "v1", name: "notes", role: "editor", chunking: { min: 1, avg: 2, max: 3 }, configSync: ["plugins"], configShared: [], vaultPlugins: false },
     ]);
     expect(await api(() => Promise.resolve(json(200, { x: 1 }))).a.vaults()).toEqual([]);
     expect(await api(() => Promise.resolve(json(200, { ticket: "abc" }))).a.ticket("v1")).toBe("abc");
@@ -141,5 +142,47 @@ describe("the API client", () => {
     const revoked = api(() => Promise.resolve(problem("device_revoked")));
     await expect(withDevice(() => revoked.a.vaults(), register("fresh"))).rejects.toMatchObject({ kind: "device_revoked" });
     expect(registered).toBe(2);
+  });
+});
+
+describe("RFC 0010 in the API client", () => {
+  it("names this build's manifest version, and records the server's", async () => {
+    const pkg: unknown = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
+    expect(CLIENT).toBe(`kura-plugin/${typeof pkg === "object" && pkg !== null && "version" in pkg ? String(pkg.version) : ""}`);
+    const { a } = api(() => Promise.resolve(json(200, [{ id: "v", name: "n", role: "manager", chunking: { min: 1, avg: 2, max: 3 }, configSync: ["plugins"], configShared: ["snippets", 3], vaultPlugins: true }], { "x-kura-server": "kura-server/0.4.0" })));
+    expect(a.serverVersion).toBeNull();
+    expect(await a.vaults()).toEqual([{ id: "v", name: "n", role: "manager", chunking: { min: 1, avg: 2, max: 3 }, configSync: ["plugins"], configShared: ["snippets"], vaultPlugins: true }]);
+    expect(a.serverVersion).toBe("kura-server/0.4.0");
+  });
+
+  it("reads and sets the member's shares, and installs a plugin's three files as base64 JSON", async () => {
+    const calls: { url: string; method: string | undefined; body: unknown }[] = [];
+    const doc = { defaults: ["snippets"], choices: { "plugin:cal": true, bad: "x" }, shared: ["snippets", "plugin:cal"], vaultPlugins: ["tasks"] };
+    const { a } = api((u, init) => {
+      calls.push({ url: u, method: init.method, body: typeof init.body === "string" ? JSON.parse(init.body) : init.body });
+      return Promise.resolve(json(200, u.includes("/plugins/") ? { id: "tasks" } : doc));
+    });
+    expect(await a.shares("v1")).toEqual({ ...doc, choices: { "plugin:cal": true } });
+    await a.setShare("v1", "plugin:cal", false);
+    await a.clearShare("v1", "themes");
+    await a.installPlugin("v1", "tasks", "vault", { manifest: new TextEncoder().encode("{}"), main: new Uint8Array([0, 255]) });
+    expect(calls).toEqual([
+      { url: "https://kura.test/v1/vaults/v1/config/shares", method: "GET", body: undefined },
+      { url: "https://kura.test/v1/vaults/v1/config/shares/plugin%3Acal", method: "PUT", body: { shared: false } },
+      { url: "https://kura.test/v1/vaults/v1/config/shares/themes", method: "DELETE", body: undefined },
+      { url: "https://kura.test/v1/vaults/v1/config/plugins/tasks?target=vault", method: "PUT", body: { manifest: "e30=", main: "AP8=" } },
+    ]);
+    await expect(api(() => Promise.resolve(json(200, []))).a.shares("v1")).rejects.toThrow("unexpected shares");
+  });
+
+  it("names the space, hides skipped paths, and refuses every upload when read-only", async () => {
+    const urls: string[] = [];
+    const { a } = api((u) => { urls.push(u); return Promise.resolve(json(200, { items: [{ path: "plugins/x/main.js" }, { path: "plugins/y/main.js" }] })); });
+    const r = a.remote("v1", "config-vault", { readOnly: true, skip: (p) => p.startsWith("plugins/x/") });
+    expect(await r.changes(0, null, 0)).toEqual({ items: [{ path: "plugins/y/main.js" }] });
+    expect(urls).toEqual(["https://kura.test/v1/vaults/v1/changes?since=0&start=0&space=config-vault"]);
+    await expect(r.missing(["h"])).rejects.toMatchObject({ status: 403, kind: "insufficient_role" });
+    await expect(r.commit({})).rejects.toMatchObject({ status: 403 });
+    expect(urls).toHaveLength(1);
   });
 });

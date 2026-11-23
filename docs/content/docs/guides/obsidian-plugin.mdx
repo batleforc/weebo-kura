@@ -76,7 +76,7 @@ The plugin asks for `openid profile email offline_access`. It keeps only the ref
 | Synchronisation | Sync now | Runs a sync. The line shows the last sync ("2 sent, 3 received") and how many local changes wait. |
 | Problems | (list) | Shown only when there are conflicts, unsyncable files, or files that could not be written. |
 | Advanced | Skip files larger than (MiB) | Default 200. On this device only. Larger files are listed as unsyncable. |
-| Advanced | Synced settings | Which parts of `.obsidian` the vault shares (set by its managers, read-only here). |
+| Advanced | Synced settings | Which parts of `.obsidian` may sync (set by the vault's managers), what you share between your desktop and mobile devices (your own toggles), and the plugins installed on the vault. |
 
 The **Set up by hand** block folds away once the server and identity provider are set.
 
@@ -155,6 +155,24 @@ A plugin runs code with access to your vault. So a plugin received from another 
 3. Your answer is remembered on this device, for that exact code. You are asked again only when the code changes. A plugin you turned off yourself stays off.
 
 Snippets and themes are CSS and need no consent.
+
+### Sharing between your desktop and mobile devices
+
+Under **Synced settings**, each plugin, and the snippets, themes and hotkeys as a whole, has a toggle **Share between my desktop and mobile**. A shared item syncs in a third copy, still yours only, read and written by all your Obsidian devices; an item not shared stays per profile, as above. The vault's managers can share some items by default (the line under the toggle says so); your toggle overrides the default for you only.
+
+When you share an item, the first of your devices to sync afterwards fills the shared copy with its files; your other devices then take that copy and move their own files of that item to `.trash`. The per-profile copies are kept on the server: turning sharing off finds them again. A shared plugin's code reaching a device still needs your consent there.
+
+### Plugins installed on the vault
+
+When the vault allows it (`vaultPlugins`), its managers can install a plugin on the vault: in **Synced settings**, a manager sees **Install on this vault** beside each of their plugins, and **Update on this vault** / **Remove from this vault** for the vault's. Only the plugin's code goes to the vault (`manifest.json`, `main.js`, `styles.css`); its settings stay each member's own.
+
+Every member's devices receive the code **disabled**, and ask once per code version: the window names the vault and the code's hash. **Keep disabled** is the default. When the managers update a plugin you enabled, your device keeps running the version you agreed to until you choose **Use** the new one. **Never on this device** keeps the plugin off that device for good (its files are not written there again); lift it in **Synced settings**. When a plugin is removed from the vault, your devices move its code to `.trash`, unless you have the same plugin as your own.
+
+A manager without an Obsidian device running the plugin can install it from its release zip with the CLI: `kura vault plugin install <vault> <file.zip>`. From the console, you can install a plugin **for yourself** only (Configuration › Install a plugin for yourself).
+
+## Version and updates
+
+The settings tab shows this plugin's version beside the server's (`Kura Sync 0.3.0 · server 0.3.1`). When the plugin is behind, **Update to *version*** downloads the build the server carries (from its console, `/app/plugin.json`), shows the version, the source and each file's SHA-256, and writes nothing until you confirm and all three files match. When GitHub is reachable, the hashes are also checked against the release's signed `checksums.txt` (**verified against the release**); otherwise the window says **not verified**, and you decide. The current files are kept: **Go back to *version*** restores them. On desktop the plugin reloads itself; on mobile, restart Obsidian. When the server is older than the plugin, a line says so; its operators update it. A server without its console shows the release page instead of the button.
 
 ## On mobile
 

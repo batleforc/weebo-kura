@@ -8,6 +8,7 @@ import {
   group,
   hiddenReason,
   isHidden,
+  itemOf,
   manifestProblem,
   readManifest,
   shortName,
@@ -40,6 +41,14 @@ describe("synced configuration", () => {
       "app.json",
     ])
       expect(categoryOf(no), no).toBeNull();
+  });
+
+  it("names the item of a path as kura-core does", () => {
+    expect(itemOf("plugins/DV/data.json")).toBe("plugin:dv");
+    expect(itemOf("snippets/a.css")).toBe("snippets");
+    expect(itemOf("hotkeys.json")).toBe("hotkeys");
+    expect(itemOf("plugins/weebo-kura/main.js")).toBeNull();
+    expect(itemOf("app.json")).toBeNull();
   });
 
   it("groups plugins by id, with their manifest, and says why a file is hidden", () => {

@@ -36,6 +36,9 @@ export interface HostOptions {
   keep?: (path: string) => boolean;
   stateName?: string;
   beforeWrite?: (path: string) => Promise<void>;
+  /** Where a core path is under the root, when not at itself: a vault
+   * plugin's new code waiting in `.kura-pending/` (RFC 0010 decision 10). */
+  place?: (path: string) => string;
 }
 
 function parent(path: string): string {
@@ -58,7 +61,8 @@ export class ObsidianHost implements KuraHost {
 
   /** The adapter's path of a path the core names. */
   private full(path: string): string {
-    return this.o.root === undefined ? path : `${this.o.root}/${path}`;
+    const at = this.o.place?.(path) ?? path;
+    return this.o.root === undefined ? at : `${this.o.root}/${at}`;
   }
 
   async loadState(): Promise<string> {

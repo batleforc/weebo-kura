@@ -206,6 +206,31 @@ fn check_vaults(config: &Config, previous: &PreviousState, errors: &mut Vec<Conf
                 ));
             }
         }
+        if let Some(c) = &spec.config_sync {
+            for (i, item) in c.shared_by_default.iter().enumerate() {
+                let path = format!("spec.configSync.sharedByDefault[{i}]");
+                match crate::spec::ConfigSync::item_category(item) {
+                    None => errors.push(err(
+                        &v.source,
+                        &path,
+                        format!("`{item}` is neither plugin:<id> nor snippets, themes, hotkeys"),
+                    )),
+                    Some(cat) if !c.categories.contains(&cat) => errors.push(err(
+                        &v.source,
+                        &path,
+                        format!("`{item}` belongs to a category not in categories"),
+                    )),
+                    Some(_) => {}
+                }
+            }
+            if c.vault_plugins && !c.categories.contains(&crate::spec::ConfigCategory::Plugins) {
+                errors.push(err(
+                    &v.source,
+                    "spec.configSync.vaultPlugins",
+                    "vault plugins need plugins in categories",
+                ));
+            }
+        }
         for (i, b) in spec.bindings.iter().enumerate() {
             let path = format!("spec.bindings[{i}]");
             match (&b.claim_value, &b.subject) {

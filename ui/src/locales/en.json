@@ -536,7 +536,9 @@
     "profiles": "Device profile",
     "profile": {
       "desktop": "Desktop",
-      "mobile": "Mobile"
+      "mobile": "Mobile",
+      "shared": "Shared",
+      "vault": "Vault plugins"
     },
     "syncedHere": "Synced here: {list}",
     "notSyncedHere": "Not synced on this vault: {list}",
@@ -546,7 +548,6 @@
       "plugins": "Plugins",
       "hotkeys": "Hotkeys"
     },
-    "empty": "Nothing synced from this profile yet. Open the vault in Obsidian with the Kura plugin on a computer (Desktop) or a phone or tablet (Mobile) to sync its settings.",
     "failed": "Could not load your configuration",
     "notShown": {
       "code": "code, not shown",
@@ -571,6 +572,46 @@
     "lastEdited": "Last edited {date}",
     "lastEditedBy": "Last edited {date} by {who}",
     "notSynced": "This vault does not sync Obsidian settings yet. Its managers turn it on with configSync in the vault's KuraVault document.",
-    "notForYou": "This page is not available to you."
+    "notForYou": "This page is not available to you.",
+    "views": "Configuration views",
+    "emptyOf": {
+      "desktop": "Nothing synced from this profile yet. Open the vault in Obsidian with the Kura plugin on a computer (Desktop) or a phone or tablet (Mobile) to sync its settings.",
+      "mobile": "Nothing synced from this profile yet. Open the vault in Obsidian with the Kura plugin on a computer (Desktop) or a phone or tablet (Mobile) to sync its settings.",
+      "shared": "Nothing shared between your devices is synced yet.",
+      "vault": "No plugin is installed on this vault. Its managers install one from Obsidian: Kura settings › Install on this vault."
+    },
+    "vaultFailed": "Could not load the vault's plugins.",
+    "shared": {
+      "list": "Shared between your desktop and mobile devices: {list}",
+      "none": "Nothing is shared between your desktop and mobile devices.",
+      "not": "Not shared: {list}",
+      "change": "Change",
+      "legend": "Share between my desktop and mobile",
+      "default": "default of the vault",
+      "defaultOff": "you turned off the vault's default"
+    },
+    "install": {
+      "title": "Install a plugin for yourself",
+      "zip": "Release zip:",
+      "found": "Found: {name} {version} ({id}) — {files}",
+      "for": "For:",
+      "target": {
+        "shared": "my desktop and mobile devices",
+        "desktop": "my desktop devices",
+        "mobile": "my mobile devices"
+      },
+      "disabled": "It will arrive disabled; enable it on each device.",
+      "go": "Install",
+      "done": "{name} is installed. It will arrive disabled; enable it on each device.",
+      "problem": {
+        "noPlugin": "This zip holds no Obsidian plugin (no manifest.json with an id).",
+        "unreadable": "This file could not be read as a zip.",
+        "tooMany": "This zip has too many entries (64 at most).",
+        "tooLarge": "This zip is too large (64 MiB at most, uncompressed).",
+        "ratio": "This zip is compressed suspiciously well: refused.",
+        "kura": "This is the Kura plugin itself: it updates from its own settings.",
+        "noMain": "This zip holds a manifest.json but no main.js."
+      }
+    }
   }
 }

@@ -84,6 +84,10 @@ giving the seconds to wait.
 | `GET` | `/v1/vaults/{v}/tokens` | 60 |
 | `DELETE` | `/v1/vaults/{v}/tokens/{t}` | 10 |
 | `GET` | `/v1/vaults/{v}/events` | 60 |
+| `GET` | `/v1/vaults/{v}/config/shares` | 60 |
+| `PUT` | `/v1/vaults/{v}/config/shares/{item}` | 30 |
+| `DELETE` | `/v1/vaults/{v}/config/shares/{item}` | 30 |
+| `PUT` | `/v1/vaults/{v}/config/plugins/{id}` | 10 |
 
 Chunk and manifest uploads and downloads allow 600 calls a minute: they
 are bounded mainly by their body size (see

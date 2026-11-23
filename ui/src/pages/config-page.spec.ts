@@ -1,4 +1,5 @@
 import { flushPromises, mount } from "@vue/test-utils";
+import { strToU8, zipSync } from "fflate";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryHistory, createRouter } from "vue-router";
@@ -26,6 +27,10 @@ vi.mock("@/api/generated/sdk.gen", () => ({
     },
   })),
   registerDevice: vi.fn(async () => ({ data: { id: "dev" } })),
+  getShares: vi.fn(),
+  putShare: vi.fn(),
+  deleteShare: vi.fn(),
+  installPlugin: vi.fn(async () => ({ data: {} })),
 }));
 vi.mock("@/reader/content", () => ({ fileBytes: vi.fn() }));
 
@@ -174,6 +179,134 @@ describe("the configuration page", () => {
     const { w } = await open("/vaults/v1/config", { paths: ["Shared/"] });
     expect(w.find("[data-test=not-yours]").exists()).toBe(true);
     expect(sdk.getEntries).not.toHaveBeenCalled();
+  });
+});
+
+describe("the shared and vault views (RFC 0010)", () => {
+  const shares = (shared: string[], choices: Record<string, boolean> = {}) => ({
+    data: {
+      defaults: ["snippets", "themes"],
+      choices,
+      shared,
+      vaultPlugins: [],
+    },
+  });
+
+  it("says what is shared in words, and writes a choice through the share routes", async () => {
+    vi.mocked(sdk.getShares).mockResolvedValue(
+      shares(["snippets", "plugin:calendar"], { themes: false }) as never,
+    );
+    vi.mocked(sdk.getEntries).mockImplementation((async (o: {
+      query: { space: string };
+    }) => ({
+      data: {
+        items:
+          o.query.space === "config-shared"
+            ? [e("plugins/calendar/data.json", null)]
+            : [e("plugins/Dataview/main.js", null)],
+        next: null,
+      },
+    })) as never);
+    vi.mocked(sdk.putShare).mockResolvedValue(
+      shares(["snippets", "plugin:calendar", "plugin:dataview"], {
+        themes: false,
+        "plugin:dataview": true,
+      }) as never,
+    );
+    vi.mocked(sdk.deleteShare).mockResolvedValue(
+      shares(["snippets", "themes", "plugin:calendar"]) as never,
+    );
+    const { w } = await open("/vaults/v1/config?profile=shared");
+    const queries = vi
+      .mocked(sdk.getEntries)
+      .mock.calls.map((c) => c[0]?.query);
+    expect(queries).toContainEqual({ space: "config-shared" });
+    const box = w.find("[data-test=shares]");
+    expect(box.text()).toContain(
+      "Shared between your desktop and mobile devices: Snippets (default of the vault), calendar",
+    );
+    expect(box.text()).toContain("Not shared: Themes, dataview");
+    // Vault plugins is offered only on a vault that takes plugins.
+    expect(w.find("[data-test=profile-vault]").exists()).toBe(false);
+    await w.find("[data-test=change]").trigger("click");
+    expect(w.find("[data-test=shares]").text()).toContain(
+      "Themes · you turned off the vault's default",
+    );
+    await w.find('[data-test="share-plugin:dataview"]').trigger("change");
+    await flushPromises();
+    expect(vi.mocked(sdk.putShare).mock.calls[0]?.[0]).toMatchObject({
+      path: { item: "plugin:dataview" },
+      body: { shared: true },
+    });
+    // Turning a default back on is going back to the default.
+    await w.find("[data-test=share-themes]").trigger("change");
+    await flushPromises();
+    expect(vi.mocked(sdk.deleteShare).mock.calls[0]?.[0]).toMatchObject({
+      path: { item: "themes" },
+    });
+    expect(w.find("[data-test=shares]").text()).toContain(
+      "Themes (default of the vault)",
+    );
+  });
+
+  it("lists the vault's plugins, says when there are none, and retries a failure", async () => {
+    vi.mocked(sdk.getEntries).mockRejectedValueOnce(new Error("down"));
+    const { w } = await open("/vaults/v1/config?profile=vault", {
+      vaultPlugins: true,
+    });
+    expect(w.text()).toContain("Could not load the vault's plugins.");
+    expect(vi.mocked(sdk.getEntries).mock.calls[0]?.[0]?.query).toEqual({
+      space: "config-vault",
+    });
+    vi.mocked(sdk.getEntries).mockResolvedValue({
+      data: { items: [], next: null },
+    } as never);
+    await w.find("[role=alert] button").trigger("click");
+    await flushPromises();
+    expect(w.text()).toContain("No plugin is installed on this vault.");
+    expect(w.find("[data-test=install]").exists()).toBe(false);
+  });
+
+  it("installs a plugin from a release zip for the member's own devices", async () => {
+    const { w } = await open("/vaults/v1/config");
+    const zip = zipSync({
+      "kanban/manifest.json": strToU8(
+        '{"id":"kanban","name":"Kanban","version":"2.0.51"}',
+      ),
+      "kanban/main.js": strToU8("m"),
+    });
+    const input = w.find("[data-test=zip]");
+    Object.defineProperty(input.element, "files", {
+      configurable: true,
+      value: [new File([zip], "kanban.zip")],
+    });
+    await input.trigger("change");
+    for (let i = 0; i < 4; i += 1) await flushPromises();
+    expect(w.find("[data-test=found]").text()).toBe(
+      "Found: Kanban 2.0.51 (kanban) — manifest.json, main.js",
+    );
+    await w.find("[data-test=target-desktop]").setValue();
+    await w.find("form").trigger("submit");
+    await flushPromises();
+    expect(vi.mocked(sdk.installPlugin).mock.calls[0]?.[0]).toMatchObject({
+      path: { v: "v1", id: "kanban" },
+      query: { target: "desktop" },
+      body: {
+        manifest: btoa('{"id":"kanban","name":"Kanban","version":"2.0.51"}'),
+        main: "bQ==",
+      },
+    });
+    expect(w.find("[data-test=installed]").exists()).toBe(true);
+
+    Object.defineProperty(input.element, "files", {
+      configurable: true,
+      value: [new File([zipSync({ "a.jpg": strToU8("x") })], "photos.zip")],
+    });
+    await input.trigger("change");
+    for (let i = 0; i < 4; i += 1) await flushPromises();
+    expect(w.find("[data-test=zip-problem]").text()).toBe(
+      "This zip holds no Obsidian plugin (no manifest.json with an id).",
+    );
   });
 });
 
