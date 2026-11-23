@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.5.0](https://github.com/batleforc/weebo-kura/compare/7f3e989fa6a056ead358acf3d04b40e8a899988c..v0.5.0) - 2026-11-23
+#### Features
+- (**server**) run without Vault nor Kubernetes (localSecrets) - ([764639e](https://github.com/batleforc/weebo-kura/commit/764639e9aef7a5c6175bb6b28b7dff397880fbbd)) - Max Batleforc, Claude Opus 5.5
+- tell platform admins in the console when the server is behind - ([7890bfd](https://github.com/batleforc/weebo-kura/commit/7890bfdfa5a1c54d3f92f0168d37b75987590fcf)) - Max Batleforc, Claude Opus 5.5
+
+- - -
+
 ## [v0.4.0](https://github.com/batleforc/weebo-kura/compare/e274211d4d1e3e6f9973d39c210bdd9206656e4f..v0.4.0) - 2026-11-23
 #### Features
 - configuration across profiles, plugins on a vault, client updates (RFC 0010) - ([eb5f873](https://github.com/batleforc/weebo-kura/commit/eb5f873b50e631dde62cf3f729f5a877e597cc1b)) - Max Batleforc, Claude Opus 5.5
