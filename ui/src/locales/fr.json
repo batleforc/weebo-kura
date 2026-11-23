@@ -613,5 +613,9 @@
         "noMain": "Ce zip contient un manifest.json mais pas de main.js."
       }
     }
+  },
+  "update": {
+    "available": "Kura {latest} est disponible ; ce serveur tourne en {current}. Ses opérateurs le mettent à jour.",
+    "notes": "Notes de version"
   }
 }

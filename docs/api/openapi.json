@@ -3559,7 +3559,9 @@
         "type": "object",
         "required": [
           "objects",
-          "rejection"
+          "rejection",
+          "serverVersion",
+          "updateAvailable"
         ],
         "properties": {
           "generation": {
@@ -3568,6 +3570,13 @@
               "null"
             ],
             "description": "SHA-256 of the stored files, hex; absent before the first reconciliation."
+          },
+          "latestVersion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The latest published release, when `updateCheck` is on and GitHub\nanswered; absent otherwise."
           },
           "objects": {
             "type": "array",
@@ -3582,6 +3591,14 @@
               "type": "string"
             },
             "description": "This replica's last rejected change, `file#index path: message`."
+          },
+          "serverVersion": {
+            "type": "string",
+            "description": "The version this replica runs."
+          },
+          "updateAvailable": {
+            "type": "boolean",
+            "description": "`latestVersion` is newer than `serverVersion`."
           },
           "writerVersion": {
             "type": [

@@ -16,6 +16,7 @@ pub mod problem;
 pub mod reconcile;
 pub mod scalar;
 pub mod store;
+pub mod updates;
 pub mod vault;
 
 use tokio::net::TcpListener;

@@ -318,6 +318,18 @@ async fn admin_status_is_for_platform_admins() {
     assert_eq!(b["objects"].as_array().unwrap().len(), 4);
     assert_eq!(b["objects"][0]["conditions"][0]["reason"], "Reconciled");
     assert_eq!(b["generation"].as_str().unwrap().len(), 64);
+    // The version this replica runs; nothing newer known yet.
+    assert_eq!(b["serverVersion"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(b["updateAvailable"], false);
+    assert!(b.get("latestVersion").is_none());
+    e.state.set_latest_release("999.0.0".into());
+    let (_, b) = e
+        .call("GET", "/v1/admin/status", &root, Some(&dr), None)
+        .await;
+    assert_eq!(
+        (b["latestVersion"].as_str(), b["updateAvailable"].as_bool()),
+        (Some("999.0.0"), Some(true))
+    );
 }
 
 #[tokio::test]

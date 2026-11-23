@@ -13,6 +13,15 @@ vi.mock("@/api/generated/sdk.gen", () => ({
   registerDevice: vi.fn(async () => ({ data: { id: "this-browser" } })),
   signOutDevice: vi.fn(async () => ({ data: undefined })),
   me: vi.fn(),
+  adminStatus: vi.fn(async () => ({
+    data: {
+      serverVersion: "0.4.0",
+      latestVersion: "0.5.0",
+      updateAvailable: true,
+      objects: [],
+      rejection: [],
+    },
+  })),
 }));
 
 import App from "@/App.vue";
@@ -257,6 +266,31 @@ describe("shell", () => {
     await flushPromises();
     return { wrapper, router, session };
   }
+
+  it("tells a platform admin, only, that the server is behind", async () => {
+    const member = await shell({
+      subject: "s",
+      tenants: [{ slug: "jdr", role: "member" }],
+      platformAdmin: false,
+    });
+    expect(member.wrapper.find("[data-test=update-available]").exists()).toBe(
+      false,
+    );
+    member.wrapper.unmount();
+    setActivePinia(createPinia());
+    const admin = await shell({
+      subject: "root",
+      tenants: [{ slug: "jdr", role: "owner" }],
+      platformAdmin: true,
+    });
+    const notice = admin.wrapper.find("[data-test=update-available]");
+    expect(notice.text()).toContain(
+      "Kura 0.5.0 is available; this server runs 0.4.0",
+    );
+    expect(notice.find("a").attributes("href")).toBe(
+      "https://github.com/batleforc/weebo-kura/releases/tag/v0.5.0",
+    );
+  });
 
   it("shows the member's pages, and signs out", async () => {
     const { wrapper, router, session } = await shell({

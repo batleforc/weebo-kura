@@ -106,6 +106,8 @@ pub struct AppState {
     snapshot: RwLock<Option<Arc<Snapshot>>>,
     /// This replica's last rejected configuration, for `GET /v1/admin/status`.
     rejection: Mutex<Option<Vec<kura_api::ConfigError>>>,
+    /// The latest published release, once `updates::run` has read it.
+    latest_release: RwLock<Option<String>>,
 }
 
 impl AppState {
@@ -126,7 +128,22 @@ impl AppState {
             batches: tokio::sync::Semaphore::new(chunks::BATCHES_IN_FLIGHT),
             snapshot: RwLock::new(None),
             rejection: Mutex::new(None),
+            latest_release: RwLock::new(None),
         }
+    }
+
+    pub fn latest_release(&self) -> Option<String> {
+        self.latest_release
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub fn set_latest_release(&self, version: String) {
+        *self
+            .latest_release
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(version);
     }
 
     pub fn set_ready(&self, ready: bool) {
@@ -517,7 +534,7 @@ const MIN_CLIENT_VERSIONS: &[(&str, (u64, u64, u64))] =
 
 pub const CLIENT_HEADER: &str = "x-kura-client";
 
-fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
+pub(crate) fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
     // Pre-release and build suffixes compare as their release.
     let core = v.split(['-', '+']).next()?;
     let mut parts = core.split('.').map(str::parse::<u64>);

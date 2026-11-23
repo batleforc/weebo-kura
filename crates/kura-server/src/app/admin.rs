@@ -24,7 +24,17 @@ pub struct AdminStatus {
     pub objects: Vec<ObjectStatus>,
     /// This replica's last rejected change, `file#index path: message`.
     pub rejection: Vec<String>,
+    /// The version this replica runs.
+    pub server_version: String,
+    /// The latest published release, when `updateCheck` is on and GitHub
+    /// answered; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_version: Option<String>,
+    /// `latestVersion` is newer than `serverVersion`.
+    pub update_available: bool,
 }
+
+const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Status of the reconciled configuration.
 #[utoipa::path(
@@ -58,6 +68,10 @@ pub async fn current(state: &SharedState) -> Result<AdminStatus, ApiError> {
         .iter()
         .map(ToString::to_string)
         .collect();
+    let latest = state.latest_release();
+    let update_available = latest
+        .as_deref()
+        .is_some_and(|l| crate::updates::newer(l, SERVER_VERSION));
     Ok(match snapshot {
         Some(s) => AdminStatus {
             generation: Some(s.generation.iter().map(|b| format!("{b:02x}")).collect()),
@@ -68,6 +82,9 @@ pub async fn current(state: &SharedState) -> Result<AdminStatus, ApiError> {
                 .ok(),
             objects: with_quota_conditions(state, &s).await?,
             rejection,
+            server_version: SERVER_VERSION.into(),
+            latest_version: latest.clone(),
+            update_available,
         },
         None => AdminStatus {
             generation: None,
@@ -75,6 +92,9 @@ pub async fn current(state: &SharedState) -> Result<AdminStatus, ApiError> {
             written_at: None,
             objects: Vec::new(),
             rejection,
+            server_version: SERVER_VERSION.into(),
+            latest_version: latest,
+            update_available,
         },
     })
 }
